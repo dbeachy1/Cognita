@@ -99,6 +99,21 @@ Test-Case 'Setup relay: known Linux stages show localized titles with English di
     } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
 }
 
+Test-Case 'Setup helper: successful progress titles use existing stage names and retain English fields' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'es-ES'
+        Set-HelperLocale
+        Write-ProgressLine -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'start'
+        Write-ProgressLine -Stage 'check.disk' -Title 'Free disk space' -State 'done'
+        $p = Get-ProgressObjects
+        Assert-Equal 'import' $p[0].stage 'existing stable helper stage is preserved'
+        Assert-Equal 'Setting up Cognita''s Linux' $p[0].title 'English diagnostic title remains available'
+        Assert-Equal 'Configurando el entorno Linux de Cognita' $p[0].title_display 'successful helper start is localized'
+        Assert-Equal 'Comprobando este equipo' $p[1].title_display 'existing per-check substage uses the stable check title'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
 Test-Case 'folder validation: known bounded reasons get localized display and preserve English reason' {
     $oldLocale = $env:COGNITA_LANG
     try {

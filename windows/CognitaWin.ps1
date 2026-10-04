@@ -213,6 +213,20 @@ function Format-ProgressJson {
         if ($localized.Title) { [void]$parts.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
         if ($localized.Message) { [void]$parts.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
         if ($localized.Fix) { [void]$parts.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+    } elseif ($script:Locale -ne 'en-US') {
+        $localizedTitle = Get-LocalizedStageTitle -Stage $Stage -Title $Title
+        if ($localizedTitle) {
+            [void]$parts.Add('"title_display": ' + (ConvertTo-JsonString $localizedTitle))
+        } elseif ($Title) {
+            $generic = Get-LocalizedProgressText -Id 'setup.generic.warning' -Title '' -Message '' -Fix '' `
+                -Values @{ detail = $Title }
+            [void]$parts.Add('"title_display": ' + (ConvertTo-JsonString $generic.Title))
+            [void]$parts.Add('"message_display": ' + (ConvertTo-JsonString $generic.Message))
+        }
+        if ($localizedTitle -and $State -eq 'progress' -and $Message) {
+            $status = Get-LocalizedProgressText -Id 'setup.progress.status' -Title '' -Message '' -Fix ''
+            [void]$parts.Add('"message_display": ' + (ConvertTo-JsonString $status.Message))
+        }
     }
     return ('{' + ($parts -join ', ') + '}')
 }
@@ -340,6 +354,7 @@ function Get-LocalizedStageTitle {
     param([string]$Stage, [string]$Title)
     if (-not $script:LocaleCatalog -or -not $script:LocaleCatalog.PSObject.Properties['setup.progress_titles']) { return '' }
     $titles = $script:LocaleCatalog.'setup.progress_titles'
+    if (-not $titles.PSObject.Properties[$Stage] -and $Stage -match '^check\.') { $Stage = 'check' }
     if (-not $titles.PSObject.Properties[$Stage]) { return '' }
     $translated = [string]$titles.$Stage
     if ($Stage -eq 'acceleration') {
