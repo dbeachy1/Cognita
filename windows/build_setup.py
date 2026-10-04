@@ -344,18 +344,35 @@ def validate_setup_catalogs(windows_dir: Path, iss_path: Path) -> None:
         if not isinstance(data, dict) or not data:
             raise BuildError(f"Windows Setup locale catalog must be a nonempty JSON object: {path}")
         for message_id, entry in data.items():
+            if message_id == "setup.progress_titles":
+                if not isinstance(entry, dict) or not entry or any(
+                    not isinstance(title, str) or not title for title in entry.values()
+                ):
+                    raise BuildError(f"{path}: setup.progress_titles must be a nonempty map of title strings")
+                continue
             if not isinstance(entry, dict) or not all(isinstance(entry.get(field), str) and entry[field]
                                                        for field in ("title", "message", "fix")):
                 raise BuildError(f"{path}: {message_id!r} needs nonempty title, message, and fix text")
         catalogs[locale] = data
     english_keys = set(catalogs["en-US"])
+    if "setup.progress_titles" not in english_keys:
+        raise BuildError("Windows Setup catalogs must define setup.progress_titles for every supported stage")
     def placeholders(value: str) -> set[str]:
         return set(re.findall(r"\{([A-Za-z][A-Za-z0-9_]*)\}", value))
 
     for locale, data in catalogs.items():
         if set(data) != english_keys:
             raise BuildError(f"Windows Setup catalog {locale} has a different message ID set from en-US")
+        base_titles = catalogs["en-US"]["setup.progress_titles"]
+        translated_titles = data["setup.progress_titles"]
+        if set(translated_titles) != set(base_titles):
+            raise BuildError(f"Windows Setup catalog {locale} has a different progress stage title set from en-US")
+        for stage, title in base_titles.items():
+            if placeholders(str(translated_titles[stage])) != placeholders(str(title)):
+                raise BuildError(f"Windows Setup catalog {locale} has a different placeholder set for progress title {stage}")
         for message_id in sorted(english_keys):
+            if message_id == "setup.progress_titles":
+                continue
             base = catalogs["en-US"][message_id]
             translated = data[message_id]
             for field in ("title", "message", "fix"):
@@ -466,7 +483,8 @@ def build(
     windows_dir = repo_root / "windows"
     iss = windows_dir / "setup" / "Cognita.iss"
     launcher_source = windows_dir / "launcher" / "cognita.cs"
-    for needed in (iss, launcher_source):
+    icon_asset = repo_root / "src" / "cognita" / "web" / "cognita-icon-512.png"
+    for needed in (iss, launcher_source, icon_asset):
         if not needed.is_file():
             raise BuildError(f"{needed} does not exist")
     validate_setup_catalogs(windows_dir, iss)

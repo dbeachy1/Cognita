@@ -36,5 +36,111 @@
     "title": "Aceleração",
     "message": "Não foi possível verificar a GPU {vendor}. O Cognita usará a CPU.",
     "fix": "O Cognita pode continuar usando a CPU."
+  },
+  "setup.progress_titles": {
+    "checks": "Verificando este computador",
+    "prerequisites": "Verificando os pré-requisitos",
+    "plan": "Planejando a instalação",
+    "layout": "Preparando o Cognita",
+    "images": "Baixando o Cognita",
+    "password": "Definindo a senha de administrador",
+    "models": "Baixando os modelos de pesquisa",
+    "ocr_weights": "Baixando os arquivos de OCR",
+    "linger": "Iniciando o Cognita ao entrar no Windows",
+    "start": "Iniciando o Cognita",
+    "acceleration": "Verificando a GPU {vendor}",
+    "proof": "Verificando a instalação com testes",
+    "proof_skipped": "Testes ignorados",
+    "remote_access": "Configurando o acesso remoto",
+    "finish": "Concluindo a instalação",
+    "update": "Atualizando o Cognita",
+    "rollback": "Restaurando a versão anterior",
+    "add_folder": "Adicionando uma pasta de projetos",
+    "password_change": "Alterando a senha de administrador"
+  },
+  "setup.folder.choose": {
+    "title": "Pasta de projetos",
+    "message": "Escolha uma pasta para continuar.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.control_character": {
+    "title": "Pasta de projetos",
+    "message": "O caminho da pasta contém uma quebra de linha, tabulação ou caractere de controle. Escolha outra pasta ou renomeie-a.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.full_path": {
+    "title": "Pasta de projetos",
+    "message": "Digite um caminho completo neste computador, como C:\\Users\\me\\Documents.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.local_drive": {
+    "title": "Pasta de projetos",
+    "message": "Escolha uma pasta em uma unidade local deste computador.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.hash_name": {
+    "title": "Pasta de projetos",
+    "message": "O Cognita não pode usar uma pasta cujo nome começa com #. Escolha outra pasta ou renomeie-a.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.drive_root": {
+    "title": "Pasta de projetos",
+    "message": "Escolha uma pasta, não uma unidade inteira.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.missing": {
+    "title": "Pasta de projetos",
+    "message": "Essa pasta não existe. Escolha outra.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Pasta de projetos",
+    "message": "Essa pasta aponta para um local que o Cognita não pode usar. Escolha outra.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.network_drive": {
+    "title": "Pasta de projetos",
+    "message": "Escolha uma pasta em uma unidade local; unidades de rede mapeadas não são aceitas.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.too_long": {
+    "title": "Pasta de projetos",
+    "message": "O caminho excede os 400 caracteres que o Cognita pode armazenar. Escolha um caminho mais curto.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Pasta de projetos",
+    "message": "O caminho contém $, aspas duplas ou um # após um espaço. Escolha outra pasta ou renomeie-a.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Pasta de projetos",
+    "message": "O caminho começa ou termina com um espaço. Escolha outra pasta ou renomeie-a.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Pasta de projetos",
+    "message": "Escolha uma pasta fora das pastas de dados do Cognita.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Pasta de projetos",
+    "message": "Essa pasta se sobrepõe a outra pasta de projetos usada pelo Cognita. Escolha uma pasta que não contenha nem esteja dentro da outra.",
+    "fix": "Escolha outra pasta."
+  },
+  "setup.progress.status": {
+    "title": "Andamento da instalação",
+    "message": "O Cognita está executando esta etapa.",
+    "fix": "Nenhuma ação é necessária."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Testes ignorados",
+    "message": "Você interrompeu os testes. Execute o programa de instalação novamente mais tarde para realizá-los.",
+    "fix": "Nenhuma ação é necessária."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Pasta de projetos",
+    "message": "Não foi possível ler o caminho da pasta. Verifique-o e escolha a pasta novamente.",
+    "fix": "Escolha outra pasta."
   }
 }

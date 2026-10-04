@@ -85,7 +85,10 @@ def workspace(tmp_path):
     (repo / "windows" / "launcher").mkdir(parents=True)
     (repo / "windows" / "locales").mkdir(parents=True)
     (repo / "windows" / "setup" / "Cognita.iss").write_text("; iss", encoding="utf-8")
-    locale_entry = {"wsl.warning": {"title": "Title", "message": "Message", "fix": "Fix"}}
+    locale_entry = {
+        "setup.progress_titles": {"fixture_stage": "Fixture stage"},
+        "wsl.warning": {"title": "Title", "message": "Message", "fix": "Fix"},
+    }
     for locale in bs.SETUP_LOCALES:
         (repo / "windows" / "locales" / f"windows-setup.{locale}.json").write_text(
             json.dumps(locale_entry), encoding="utf-8"
@@ -101,6 +104,9 @@ def workspace(tmp_path):
         iss_lines.extend((name, name))
     (repo / "windows" / "setup" / "Cognita.iss").write_text("\n".join(iss_lines), encoding="utf-8")
     (repo / "windows" / "launcher" / "cognita.cs").write_text("// cs", encoding="utf-8")
+    icon = repo / "src" / "cognita" / "web" / "cognita-icon-512.png"
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(b"PNG fixture")
     csc = tmp_path / "windir" / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe"
     csc.parent.mkdir(parents=True)
     csc.write_bytes(b"")
@@ -129,11 +135,28 @@ def test_setup_catalog_validator_requires_all_six_and_matching_message_ids(works
         bs.validate_setup_catalogs(windows_dir, iss)
 
 
+def test_setup_catalog_validator_requires_matching_progress_titles_in_all_locales(workspace):
+    windows_dir = workspace["repo"] / "windows"
+    iss = windows_dir / "setup" / "Cognita.iss"
+    french = windows_dir / "locales" / "windows-setup.fr-FR.json"
+    data = json.loads(french.read_text(encoding="utf-8"))
+    del data["setup.progress_titles"]
+    french.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(bs.BuildError, match="different message ID set"):
+        bs.validate_setup_catalogs(windows_dir, iss)
+
+
 def test_setup_catalog_validator_rejects_placeholder_drift(workspace):
     windows_dir = workspace["repo"] / "windows"
     iss = windows_dir / "setup" / "Cognita.iss"
-    english = {"wsl.warning": {"title": "Title", "message": "Code {exit_code}", "fix": "Fix"}}
-    translated = {"wsl.warning": {"title": "Título", "message": "Código", "fix": "Solución"}}
+    english = {
+        "setup.progress_titles": {"fixture_stage": "Fixture stage"},
+        "wsl.warning": {"title": "Title", "message": "Code {exit_code}", "fix": "Fix"},
+    }
+    translated = {
+        "setup.progress_titles": {"fixture_stage": "Etapa"},
+        "wsl.warning": {"title": "Título", "message": "Código", "fix": "Solución"},
+    }
     (windows_dir / "locales" / "windows-setup.en-US.json").write_text(json.dumps(english), encoding="utf-8")
     for locale in bs.SETUP_LOCALES[1:]:
         data = translated if locale == "es-ES" else english

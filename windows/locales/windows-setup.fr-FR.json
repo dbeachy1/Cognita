@@ -36,5 +36,111 @@
     "title": "Accélération",
     "message": "Le GPU {vendor} n’a pas pu être vérifié. Cognita utilisera le processeur.",
     "fix": "Cognita peut continuer à utiliser le processeur."
+  },
+  "setup.progress_titles": {
+    "checks": "Vérification de cet ordinateur",
+    "prerequisites": "Vérification des prérequis",
+    "plan": "Préparation du plan d’installation",
+    "layout": "Préparation de Cognita",
+    "images": "Téléchargement de Cognita",
+    "password": "Définition du mot de passe administrateur",
+    "models": "Téléchargement des modèles de recherche",
+    "ocr_weights": "Téléchargement des fichiers OCR",
+    "linger": "Démarrage de Cognita à la connexion",
+    "start": "Démarrage de Cognita",
+    "acceleration": "Vérification du GPU {vendor}",
+    "proof": "Vérification de l’installation par des tests",
+    "proof_skipped": "Tests ignorés",
+    "remote_access": "Configuration de l’accès à distance",
+    "finish": "Finalisation de l’installation",
+    "update": "Mise à jour de Cognita",
+    "rollback": "Restauration de la version précédente",
+    "add_folder": "Ajout d’un dossier de projets",
+    "password_change": "Modification du mot de passe administrateur"
+  },
+  "setup.folder.choose": {
+    "title": "Dossier de projets",
+    "message": "Choisissez un dossier pour continuer.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.control_character": {
+    "title": "Dossier de projets",
+    "message": "Le chemin contient un saut de ligne, une tabulation ou un caractère de contrôle. Choisissez un autre dossier ou renommez-le.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.full_path": {
+    "title": "Dossier de projets",
+    "message": "Saisissez un chemin complet sur cet ordinateur, par exemple C:\\Users\\me\\Documents.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.local_drive": {
+    "title": "Dossier de projets",
+    "message": "Choisissez un dossier sur un disque local de cet ordinateur.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.hash_name": {
+    "title": "Dossier de projets",
+    "message": "Cognita ne peut pas utiliser un dossier dont le nom commence par #. Choisissez un autre dossier ou renommez-le.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.drive_root": {
+    "title": "Dossier de projets",
+    "message": "Choisissez un dossier, et non un disque entier.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.missing": {
+    "title": "Dossier de projets",
+    "message": "Ce dossier n’existe pas. Choisissez-en un autre.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Dossier de projets",
+    "message": "Ce dossier pointe vers un emplacement inutilisable par Cognita. Choisissez-en un autre.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.network_drive": {
+    "title": "Dossier de projets",
+    "message": "Choisissez un dossier sur un disque local ; les lecteurs réseau mappés ne sont pas pris en charge.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.too_long": {
+    "title": "Dossier de projets",
+    "message": "Le chemin dépasse la limite de 400 caractères enregistrée par Cognita. Choisissez un chemin plus court.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Dossier de projets",
+    "message": "Le chemin contient $, un guillemet double ou un # après un espace. Choisissez un autre dossier ou renommez-le.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Dossier de projets",
+    "message": "Le chemin commence ou se termine par un espace. Choisissez un autre dossier ou renommez-le.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Dossier de projets",
+    "message": "Choisissez un dossier situé en dehors des dossiers de données de Cognita.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Dossier de projets",
+    "message": "Ce dossier chevauche un autre dossier de projets utilisé par Cognita. Choisissez un dossier qui ne le contient pas et qui n’est pas situé dedans.",
+    "fix": "Choisissez un autre dossier."
+  },
+  "setup.progress.status": {
+    "title": "Progression de l’installation",
+    "message": "Cognita exécute cette étape.",
+    "fix": "Aucune action n’est nécessaire."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Tests ignorés",
+    "message": "Vous avez arrêté les tests. Relancez le programme d’installation plus tard pour les exécuter.",
+    "fix": "Aucune action n’est nécessaire."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Dossier de projets",
+    "message": "Le chemin du dossier est illisible. Vérifiez-le et choisissez à nouveau le dossier.",
+    "fix": "Choisissez un autre dossier."
   }
 }

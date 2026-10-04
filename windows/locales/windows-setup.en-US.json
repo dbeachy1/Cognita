@@ -36,5 +36,111 @@
     "title": "Acceleration",
     "message": "The {vendor} GPU could not be verified. Cognita will use the CPU.",
     "fix": "Cognita can continue using the CPU."
+  },
+  "setup.progress_titles": {
+    "checks": "Checking this machine",
+    "prerequisites": "Checking prerequisites",
+    "plan": "Planning installation",
+    "layout": "Preparing Cognita",
+    "images": "Downloading Cognita",
+    "password": "Setting the Admin password",
+    "models": "Downloading the search models",
+    "ocr_weights": "Downloading OCR files",
+    "linger": "Setting Cognita to start at sign-in",
+    "start": "Starting Cognita",
+    "acceleration": "Checking the {vendor} GPU",
+    "proof": "Running self-tests to verify the installation",
+    "proof_skipped": "Self-tests skipped",
+    "remote_access": "Setting up remote access",
+    "finish": "Finishing setup",
+    "update": "Updating Cognita",
+    "rollback": "Restoring the previous release",
+    "add_folder": "Adding a projects folder",
+    "password_change": "Changing the Admin password"
+  },
+  "setup.folder.choose": {
+    "title": "Projects folder",
+    "message": "Choose a folder to continue.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.control_character": {
+    "title": "Projects folder",
+    "message": "The folder path contains a line break, tab, or control character. Choose or rename the folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.full_path": {
+    "title": "Projects folder",
+    "message": "Enter a full path on this PC, such as C:\\Users\\me\\Documents.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.local_drive": {
+    "title": "Projects folder",
+    "message": "Choose a folder on a local drive on this PC.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.hash_name": {
+    "title": "Projects folder",
+    "message": "Cognita cannot use a folder whose name starts with #. Choose or rename the folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.drive_root": {
+    "title": "Projects folder",
+    "message": "Choose a folder, not an entire drive.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.missing": {
+    "title": "Projects folder",
+    "message": "That folder does not exist. Choose another folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Projects folder",
+    "message": "That folder points to a location Cognita cannot use. Choose another folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.network_drive": {
+    "title": "Projects folder",
+    "message": "Choose a folder on a local drive; mapped network drives are not supported.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.too_long": {
+    "title": "Projects folder",
+    "message": "The folder path is longer than Cognita can store (400 characters). Choose a shorter path.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Projects folder",
+    "message": "The folder path contains $, a double quote, or a # after a space. Choose or rename the folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Projects folder",
+    "message": "The folder path starts or ends with a space. Choose or rename the folder.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Projects folder",
+    "message": "Choose a folder outside Cognita’s own data folders.",
+    "fix": "Choose a different folder."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Projects folder",
+    "message": "This folder overlaps another projects folder Cognita uses. Choose a folder that neither contains nor sits inside it.",
+    "fix": "Choose a different folder."
+  },
+  "setup.progress.status": {
+    "title": "Setup progress",
+    "message": "Cognita is working on this step.",
+    "fix": "No action is needed."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Self-tests skipped",
+    "message": "You stopped the self-tests. Run Setup again later to run them.",
+    "fix": "No action is needed."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Projects folder",
+    "message": "The folder path could not be read. Check it and choose the folder again.",
+    "fix": "Choose a different folder."
   }
 }

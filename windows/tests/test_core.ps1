@@ -75,6 +75,56 @@ Test-Case 'Setup relay: unknown failure gets a localized summary and an English 
         Assert-Equal 'mount failed (exit 7)' $p.message 'diagnostic detail remains English'
         Assert-Equal ('"D\u00e9tail technique en anglais : mount failed (exit 7)"' | ConvertFrom-Json) $p.message_display 'localized generic failure includes labeled detail'
         Assert-Match $p.title_display 'pas pu terminer cette .tape' 'localized summary'
+        Write-RelayedLine '{"schema":1,"stage":"checks","state":"warning","title":"Unrecognized warning","message":"The optional component was skipped."}'
+        $p = (Get-ProgressObjects)[1]
+        Assert-Equal ('"D\u00e9tail technique en anglais : The optional component was skipped."' | ConvertFrom-Json) $p.message_display 'unknown warning detail is also explicitly labeled'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'Setup relay: known Linux stages show localized titles with English diagnostics intact' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'es-ES'
+        Set-HelperLocale
+        Write-RelayedLine '{"schema":1,"stage":"images","state":"progress","title":"Downloading Cognita","message":"Pulling image"}'
+        $p = (Get-ProgressObjects)[0]
+        Assert-Equal 'Downloading Cognita' $p.title 'English machine title remains available'
+        Assert-Equal 'Descargando Cognita' $p.title_display 'Setup stage title is localized'
+        Assert-Equal 'Pulling image' $p.message 'technical progress text remains intact'
+        Assert-Equal ('"Cognita est\u00e1 trabajando en este paso."' | ConvertFrom-Json) $p.message_display 'technical progress detail is summarized in Spanish'
+        Write-RelayedLine '{"schema":1,"stage":"proof","state":"done","title":"Self-tests skipped","message":"The self-tests were stopped at your request. Run Setup again later."}'
+        $p = (Get-ProgressObjects)[1]
+        Assert-Equal 'Pruebas omitidas' $p.title_display 'known title override is localized'
+        Assert-Equal ('"Detuvo las pruebas. Vuelva a ejecutar el programa de instalaci\u00f3n m\u00e1s tarde para realizarlas."' | ConvertFrom-Json) $p.message_display 'self-test outcome and next step are localized'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'folder validation: known bounded reasons get localized display and preserve English reason' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'es-ES'
+        Set-HelperLocale
+        $empty = Test-RootPath -Path '' -Settings $null
+        Assert-Equal 'setup.folder.choose' $empty.ReasonId 'empty path has stable presentation ID'
+        $lineBreak = Test-RootPath -Path "C:\\bad`nfolder" -Settings $null
+        Assert-Equal 'setup.folder.control_character' $lineBreak.ReasonId 'control character has stable presentation ID'
+        $display = Get-LocalizedFolderReason -PresentationId $lineBreak.ReasonId -Reason $lineBreak.Reason
+        Assert-Equal ('"La ruta de la carpeta contiene un salto de l\u00ednea, una tabulaci\u00f3n o un car\u00e1cter de control. Elija otra carpeta o cambie su nombre."' | ConvertFrom-Json) $display 'specific Spanish guidance'
+        $line = Format-ResultLine 'ok' ([ordered]@{ ok = 0; reason = $lineBreak.Reason; presentation_id = $lineBreak.ReasonId; reason_display = $display })
+        Assert-Match $line '^result=ok;' 'machine result stays stable'
+        Assert-True ($line.Contains('reason=' + $lineBreak.Reason)) 'English diagnostic reason stays stable'
+        Assert-True ($line.Contains('presentation_id=' + $lineBreak.ReasonId)) 'presentation ID is carried'
+        Assert-True ($line.Contains('reason_display=' + $display)) 'localized text is available to Setup'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'folder validation: unknown reason uses localized generic text with labeled English detail' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'fr-FR'
+        Set-HelperLocale
+        $display = Get-LocalizedFolderReason -PresentationId 'setup.generic.failure' -Reason 'unexpected path parser detail'
+        Assert-True ($display.Contains('en anglais : unexpected path parser detail')) 'unknown detail has an explicit localized label'
     } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
 }
 

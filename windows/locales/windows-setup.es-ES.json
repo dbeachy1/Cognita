@@ -36,5 +36,111 @@
     "title": "Aceleración",
     "message": "No se pudo verificar la GPU {vendor}. Cognita usará la CPU.",
     "fix": "Cognita puede continuar usando la CPU."
+  },
+  "setup.progress_titles": {
+    "checks": "Comprobando este equipo",
+    "prerequisites": "Comprobando los requisitos",
+    "plan": "Planificando la instalación",
+    "layout": "Preparando Cognita",
+    "images": "Descargando Cognita",
+    "password": "Configurando la contraseña de administrador",
+    "models": "Descargando los modelos de búsqueda",
+    "ocr_weights": "Descargando los archivos de OCR",
+    "linger": "Configurando Cognita para que se inicie al iniciar sesión",
+    "start": "Iniciando Cognita",
+    "acceleration": "Comprobando la GPU {vendor}",
+    "proof": "Ejecutando pruebas para verificar la instalación",
+    "proof_skipped": "Pruebas omitidas",
+    "remote_access": "Configurando el acceso remoto",
+    "finish": "Finalizando la instalación",
+    "update": "Actualizando Cognita",
+    "rollback": "Restaurando la versión anterior",
+    "add_folder": "Añadiendo una carpeta de proyectos",
+    "password_change": "Cambiando la contraseña de administrador"
+  },
+  "setup.folder.choose": {
+    "title": "Carpeta de proyectos",
+    "message": "Elija una carpeta para continuar.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.control_character": {
+    "title": "Carpeta de proyectos",
+    "message": "La ruta de la carpeta contiene un salto de línea, una tabulación o un carácter de control. Elija otra carpeta o cambie su nombre.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.full_path": {
+    "title": "Carpeta de proyectos",
+    "message": "Escriba una ruta completa de este equipo, como C:\\Users\\me\\Documents.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.local_drive": {
+    "title": "Carpeta de proyectos",
+    "message": "Elija una carpeta de una unidad local de este equipo.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.hash_name": {
+    "title": "Carpeta de proyectos",
+    "message": "Cognita no puede usar una carpeta cuyo nombre empiece por #. Elija otra carpeta o cambie su nombre.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.drive_root": {
+    "title": "Carpeta de proyectos",
+    "message": "Elija una carpeta, no una unidad completa.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.missing": {
+    "title": "Carpeta de proyectos",
+    "message": "La carpeta no existe. Elija otra carpeta.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Carpeta de proyectos",
+    "message": "La carpeta apunta a una ubicación que Cognita no puede usar. Elija otra carpeta.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.network_drive": {
+    "title": "Carpeta de proyectos",
+    "message": "Elija una carpeta de una unidad local; no se admiten unidades de red asignadas.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.too_long": {
+    "title": "Carpeta de proyectos",
+    "message": "La ruta supera los 400 caracteres que Cognita puede guardar. Elija una ruta más corta.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Carpeta de proyectos",
+    "message": "La ruta contiene $, comillas dobles o un # después de un espacio. Elija otra carpeta o cambie su nombre.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Carpeta de proyectos",
+    "message": "La ruta empieza o termina con un espacio. Elija otra carpeta o cambie su nombre.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Carpeta de proyectos",
+    "message": "Elija una carpeta fuera de las carpetas de datos de Cognita.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Carpeta de proyectos",
+    "message": "Esta carpeta se solapa con otra carpeta de proyectos que Cognita ya usa. Elija una carpeta que no la contenga ni esté dentro de ella.",
+    "fix": "Elija otra carpeta."
+  },
+  "setup.progress.status": {
+    "title": "Progreso de la instalación",
+    "message": "Cognita está trabajando en este paso.",
+    "fix": "No es necesario hacer nada."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Pruebas omitidas",
+    "message": "Detuvo las pruebas. Vuelva a ejecutar el programa de instalación más tarde para realizarlas.",
+    "fix": "No es necesario hacer nada."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Carpeta de proyectos",
+    "message": "No se pudo leer la ruta de la carpeta. Compruébela y vuelva a elegirla.",
+    "fix": "Elija otra carpeta."
   }
 }

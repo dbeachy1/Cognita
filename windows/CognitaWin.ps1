@@ -287,14 +287,43 @@ function Add-LocalizedRelayFields {
         $o.PSObject.Properties['fix_display']) { return $JsonLine }
     $id = [string]$o.presentation_id
     $values = $o.presentation_values
-    if (-not $id -and [string]$o.state -eq 'failed') {
-        $id = 'setup.generic.failure'
+    if (-not $id -and [string]$o.state -in @('failed', 'warning')) {
+        $id = if ([string]$o.state -eq 'warning') { 'setup.generic.warning' } else { 'setup.generic.failure' }
         $values = @{ detail = [string]$o.message }
-    } elseif ($id -and -not (Test-SetupMessageId -Id $id) -and [string]$o.state -eq 'failed') {
-        $id = 'setup.generic.failure'
+    } elseif ($id -and -not (Test-SetupMessageId -Id $id) -and [string]$o.state -in @('failed', 'warning')) {
+        $id = if ([string]$o.state -eq 'warning') { 'setup.generic.warning' } else { 'setup.generic.failure' }
         $values = @{ detail = [string]$o.message }
     }
-    if (-not $id) { return $JsonLine }
+    if (-not $id) {
+        $stage = [string]$o.stage
+        $stageKey = $stage
+        $title = ''
+        $extra = New-Object System.Collections.ArrayList
+        if ($script:Locale -ne 'en-US' -and $stage -eq 'proof' -and [string]$o.title -eq 'Self-tests skipped') {
+            $localized = Get-LocalizedProgressText -Id 'setup.progress.proof_skipped' -Title ([string]$o.title) `
+                -Message ([string]$o.message) -Fix ([string]$o.fix)
+            if ($localized.Title) { [void]$extra.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
+            if ($localized.Message) { [void]$extra.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
+            if ($localized.Fix) { [void]$extra.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+        } elseif ($script:Locale -ne 'en-US') {
+            $title = Get-LocalizedStageTitle -Stage $stageKey -Title ([string]$o.title)
+            if ($title) {
+                [void]$extra.Add('"title_display": ' + (ConvertTo-JsonString $title))
+            } elseif ([string]$o.title) {
+                $generic = Get-LocalizedProgressText -Id 'setup.generic.warning' -Title '' -Message '' -Fix '' `
+                    -Values @{ detail = [string]$o.title }
+                [void]$extra.Add('"title_display": ' + (ConvertTo-JsonString $generic.Title))
+                [void]$extra.Add('"message_display": ' + (ConvertTo-JsonString $generic.Message))
+            }
+            if ($title -and [string]$o.state -eq 'progress' -and [string]$o.message) {
+                $status = Get-LocalizedProgressText -Id 'setup.progress.status' -Title '' -Message '' -Fix ''
+                [void]$extra.Add('"message_display": ' + (ConvertTo-JsonString $status.Message))
+            }
+        }
+        if ($extra.Count -eq 0 -or -not $JsonLine.TrimEnd().EndsWith('}')) { return $JsonLine }
+        $trimmedLine = $JsonLine.TrimEnd()
+        return ($trimmedLine.Substring(0, $trimmedLine.Length - 1) + ', ' + ($extra -join ', ') + '}')
+    }
     $localized = Get-LocalizedProgressText -Id $id -Title ([string]$o.title) -Message ([string]$o.message) `
         -Fix ([string]$o.fix) -Values $values
     if (-not $localized.Title -and -not $localized.Message -and -not $localized.Fix) { return $JsonLine }
@@ -305,6 +334,31 @@ function Add-LocalizedRelayFields {
     if ($extra.Count -eq 0 -or -not $JsonLine.TrimEnd().EndsWith('}')) { return $JsonLine }
     $trimmedLine = $JsonLine.TrimEnd()
     return ($trimmedLine.Substring(0, $trimmedLine.Length - 1) + ', ' + ($extra -join ', ') + '}')
+}
+
+function Get-LocalizedStageTitle {
+    param([string]$Stage, [string]$Title)
+    if (-not $script:LocaleCatalog -or -not $script:LocaleCatalog.PSObject.Properties['setup.progress_titles']) { return '' }
+    $titles = $script:LocaleCatalog.'setup.progress_titles'
+    if (-not $titles.PSObject.Properties[$Stage]) { return '' }
+    $translated = [string]$titles.$Stage
+    if ($Stage -eq 'acceleration') {
+        $vendor = if ($Title -match '(?i)NVIDIA') { 'NVIDIA' } elseif ($Title -match '(?i)AMD') { 'AMD' } else { '' }
+        if (-not $vendor) { return $translated.Replace(' {vendor}', '') }
+        return $translated.Replace('{vendor}', $vendor)
+    }
+    return $translated
+}
+
+function Get-LocalizedFolderReason {
+    param([string]$PresentationId, [string]$Reason)
+    if ($PresentationId -and $PresentationId -ne 'setup.generic.failure' -and
+        $script:LocaleCatalog -and $script:LocaleCatalog.PSObject.Properties[$PresentationId]) {
+        $text = Get-LocalizedProgressText -Id $PresentationId -Title '' -Message '' -Fix ''
+        return $text.Message
+    }
+    $text = Get-LocalizedProgressText -Id 'setup.generic.failure' -Title '' -Message '' -Fix '' -Values @{ detail = $Reason }
+    return ($text.Title + ': ' + $text.Message)
 }
 
 function Write-HumanProgress {
@@ -1250,16 +1304,16 @@ function Update-FstabText {
 function Test-DisplayText {
     # The Linux CLI's display-text rule (its design 19.2): 1-400 printable characters, starts
     # with a letter, backslash or slash, no leading or trailing whitespace, no $, no double
-    # quote, no # after whitespace. Returns $null when acceptable, else the reason.
+    # quote, no # after whitespace. Returns $null when acceptable, else a reason and presentation ID.
     param([string]$Text)
-    if ([string]::IsNullOrEmpty($Text)) { return 'Choose a folder.' }
-    if ($Text.Length -gt 400) { return 'This folder path is longer than Cognita can store (400 characters). Choose a folder with a shorter path.' }
-    if ($Text -match '[\x00-\x1f\x7f]') { return 'Cognita cannot use a folder whose path contains a control character or a line break. Choose or rename the folder.' }
+    if ([string]::IsNullOrEmpty($Text)) { return [pscustomobject]@{ Reason = 'Choose a folder.'; ReasonId = 'setup.folder.choose' } }
+    if ($Text.Length -gt 400) { return [pscustomobject]@{ Reason = 'This folder path is longer than Cognita can store (400 characters). Choose a folder with a shorter path.'; ReasonId = 'setup.folder.too_long' } }
+    if ($Text -match '[\x00-\x1f\x7f]') { return [pscustomobject]@{ Reason = 'Cognita cannot use a folder whose path contains a control character or a line break. Choose or rename the folder.'; ReasonId = 'setup.folder.control_character' } }
     if ($Text.Contains('$') -or $Text.Contains('"') -or $Text -match '\s#') {
-        return 'Cognita cannot use a folder whose path contains $, a double quote, or a # after a space. Choose or rename the folder.'
+        return [pscustomobject]@{ Reason = 'Cognita cannot use a folder whose path contains $, a double quote, or a # after a space. Choose or rename the folder.'; ReasonId = 'setup.folder.unsupported_characters' }
     }
-    if ($Text -ne $Text.Trim()) { return 'Cognita cannot use a folder whose path starts or ends with a space. Choose or rename the folder.' }
-    if ($Text -notmatch '^[A-Za-z\\/]') { return 'Choose a folder on one of this PC''s drives, for example C:\Users\me\Documents.' }
+    if ($Text -ne $Text.Trim()) { return [pscustomobject]@{ Reason = 'Cognita cannot use a folder whose path starts or ends with a space. Choose or rename the folder.'; ReasonId = 'setup.folder.edge_spaces' } }
+    if ($Text -notmatch '^[A-Za-z\\/]') { return [pscustomobject]@{ Reason = 'Choose a folder on one of this PC''s drives, for example C:\Users\me\Documents.'; ReasonId = 'setup.folder.full_path' } }
     return $null
 }
 
@@ -1273,59 +1327,59 @@ function Get-OwnFolders {
 
 function Test-RootPath {
     <#
-    Design 5.5 rule 1. Returns [pscustomobject]@{ Ok; Reason; Path; Existing } where Path is the
+    Design 5.5 rule 1. Returns [pscustomobject]@{ Ok; Reason; ReasonId; Path; Existing } where Path is the
     resolved folder (a junction or symbolic link is validated and mounted as its target) and
     Existing is the root number when the same folder is already a root.
     #>
     param([string]$Path, $Settings, [string]$ExtraOwnFolder = '')
-    $bad = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why; Path = $Path; Existing = 0 } }
+    $bad = { param($why, $reasonId = '') [pscustomobject]@{ Ok = $false; Reason = $why; ReasonId = $reasonId; Path = $Path; Existing = 0 } }
     Write-Log ("root validate: input=[{0}]" -f $Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) { return (& $bad 'Choose a folder.') }
-    if ($Path -match "[\r\n\t]") { return (& $bad 'Cognita cannot use a folder whose path contains a line break or a tab. Choose or rename the folder.') }
-    if ($Path.StartsWith('\\')) { return (& $bad 'Cognita supports folders on this PC''s own drives.') }
-    if ($Path -notmatch '^[A-Za-z]:[\\/]') { return (& $bad 'Choose a folder on one of this PC''s drives, for example C:\Users\me\Documents.') }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return (& $bad 'Choose a folder.' 'setup.folder.choose') }
+    if ($Path -match "[\r\n\t]") { return (& $bad 'Cognita cannot use a folder whose path contains a line break or a tab. Choose or rename the folder.' 'setup.folder.control_character') }
+    if ($Path.StartsWith('\\')) { return (& $bad 'Cognita supports folders on this PC''s own drives.' 'setup.folder.local_drive') }
+    if ($Path -notmatch '^[A-Za-z]:[\\/]') { return (& $bad 'Choose a folder on one of this PC''s drives, for example C:\Users\me\Documents.' 'setup.folder.full_path') }
     $resolved = $null
-    try { $resolved = Get-NormalizedPath $Path } catch { return (& $bad ('That is not a usable folder path: ' + $_.Exception.Message)) }
+    try { $resolved = Get-NormalizedPath $Path } catch { return (& $bad ('That is not a usable folder path: ' + $_.Exception.Message) 'setup.folder.invalid_path') }
     # A component that starts with # cannot be written to fstab (it would read as a comment).
     $comps = ($resolved.Substring(2) -split '\\') | Where-Object { $_ -ne '' }
     foreach ($c in $comps) {
-        if ($c.StartsWith('#')) { return (& $bad 'Cognita cannot use a folder with a name that starts with #. Choose or rename the folder.') }
+        if ($c.StartsWith('#')) { return (& $bad 'Cognita cannot use a folder with a name that starts with #. Choose or rename the folder.' 'setup.folder.hash_name') }
     }
-    if ($resolved -match '^[A-Za-z]:\\?$') { return (& $bad 'Choose a folder, not a whole drive.') }
-    if (-not (Test-DirectoryExists $resolved)) { return (& $bad 'That folder does not exist.') }
+    if ($resolved -match '^[A-Za-z]:\\?$') { return (& $bad 'Choose a folder, not a whole drive.' 'setup.folder.drive_root') }
+    if (-not (Test-DirectoryExists $resolved)) { return (& $bad 'That folder does not exist.' 'setup.folder.missing') }
     # Junction or symbolic link: validate and mount the target.
     for ($hop = 0; $hop -lt 8; $hop++) {
         $t = Get-ReparseTarget $resolved
         if (-not $t) { break }
         Write-Log ("root validate: {0} is a link, target {1}" -f $resolved, $t)
-        if ($t.StartsWith('\\')) { return (& $bad 'Cognita supports folders on this PC''s own drives.') }
-        try { $resolved = Get-NormalizedPath $t } catch { return (& $bad 'That folder is a link to a place Cognita cannot use.') }
-        if ($resolved -notmatch '^[A-Za-z]:\\') { return (& $bad 'That folder is a link to a place Cognita cannot use.') }
+        if ($t.StartsWith('\\')) { return (& $bad 'Cognita supports folders on this PC''s own drives.' 'setup.folder.local_drive') }
+        try { $resolved = Get-NormalizedPath $t } catch { return (& $bad 'That folder is a link to a place Cognita cannot use.' 'setup.folder.link_unusable') }
+        if ($resolved -notmatch '^[A-Za-z]:\\') { return (& $bad 'That folder is a link to a place Cognita cannot use.' 'setup.folder.link_unusable') }
     }
-    if ($resolved -match '^[A-Za-z]:\\?$') { return (& $bad 'Choose a folder, not a whole drive.') }
-    if (-not (Test-DirectoryExists $resolved)) { return (& $bad 'That folder does not exist.') }
+    if ($resolved -match '^[A-Za-z]:\\?$') { return (& $bad 'Choose a folder, not a whole drive.' 'setup.folder.drive_root') }
+    if (-not (Test-DirectoryExists $resolved)) { return (& $bad 'That folder does not exist.' 'setup.folder.missing') }
     $dt = Get-DriveTypeName $resolved.Substring(0, 1)
     Write-Log ("root validate: drive {0} type={1}" -f $resolved.Substring(0, 1), $dt)
-    if ($dt -eq 'Network') { return (& $bad 'Cognita supports folders on this PC''s own drives, not mapped network drives.') }
-    if ($dt -ne 'Fixed' -and $dt -ne 'Removable') { return (& $bad 'Cognita supports folders on this PC''s own drives.') }
+    if ($dt -eq 'Network') { return (& $bad 'Cognita supports folders on this PC''s own drives, not mapped network drives.' 'setup.folder.network_drive') }
+    if ($dt -ne 'Fixed' -and $dt -ne 'Removable') { return (& $bad 'Cognita supports folders on this PC''s own drives.' 'setup.folder.local_drive') }
     $displayWhy = Test-DisplayText $resolved
-    if ($displayWhy) { return (& $bad $displayWhy) }
+    if ($displayWhy) { return (& $bad $displayWhy.Reason $displayWhy.ReasonId) }
     $own = @(Get-OwnFolders $Settings)
     if ($ExtraOwnFolder) { $own += $ExtraOwnFolder }
     foreach ($o in $own) {
         if ($o -and (Test-PathNests $resolved $o)) {
-            return (& $bad ("Choose a folder outside Cognita's own data folders ({0})." -f $o))
+            return (& $bad ("Choose a folder outside Cognita's own data folders ({0})." -f $o) 'setup.folder.data_overlap')
         }
     }
     $existing = 0
     foreach ($r in (Get-SettingsRoots $Settings)) {
         if ($resolved -ieq (Get-NormalizedPath ([string]$r.windows))) { $existing = [int]$r.n; continue }
         if (Test-PathNests $resolved ([string]$r.windows)) {
-            return (& $bad ("This folder overlaps another projects folder Cognita already uses ({0}). Choose a folder that neither contains nor sits inside it." -f $r.windows))
+            return (& $bad ("This folder overlaps another projects folder Cognita already uses ({0}). Choose a folder that neither contains nor sits inside it." -f $r.windows) 'setup.folder.projects_overlap')
         }
     }
     Write-Log ("root validate: OK resolved=[{0}] existing={1}" -f $resolved, $existing)
-    return [pscustomobject]@{ Ok = $true; Reason = ''; Path = $resolved; Existing = $existing }
+    return [pscustomobject]@{ Ok = $true; Reason = ''; ReasonId = ''; Path = $resolved; Existing = $existing }
 }
 
 # ---------------------------------------------------------------------------------------
@@ -3674,7 +3728,10 @@ function Invoke-RootsVerb {
     # Design 18.5: an invalid folder is a normal ANSWER to the question asked, so the verb succeeded
     # (result=ok, exit 0) with ok=0 and the reason. `failed` is kept for an internal error or bad usage.
     Write-Log ("roots --validate: folder rejected, answer ok=0 reason=[{0}]" -f $v.Reason)
-    return (New-VerbResult 'ok' ([ordered]@{ ok = 0; reason = $v.Reason }))
+    $presentationId = [string]$v.ReasonId
+    if (-not $presentationId) { $presentationId = 'setup.generic.failure' }
+    $reasonDisplay = Get-LocalizedFolderReason -PresentationId $presentationId -Reason ([string]$v.Reason)
+    return (New-VerbResult 'ok' ([ordered]@{ ok = 0; reason = $v.Reason; presentation_id = $presentationId; reason_display = $reasonDisplay }))
 }
 
 $script:StoppedMessage = 'Cognita is stopped. Start it with: cognita start'

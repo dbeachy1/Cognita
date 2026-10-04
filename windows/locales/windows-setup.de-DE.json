@@ -36,5 +36,111 @@
     "title": "Beschleunigung",
     "message": "Die {vendor}-GPU konnte nicht überprüft werden. Cognita verwendet die CPU.",
     "fix": "Cognita kann mit der CPU fortfahren."
+  },
+  "setup.progress_titles": {
+    "checks": "Computer wird überprüft",
+    "prerequisites": "Voraussetzungen werden überprüft",
+    "plan": "Installation wird geplant",
+    "layout": "Cognita wird vorbereitet",
+    "images": "Cognita wird heruntergeladen",
+    "password": "Administratorkennwort wird festgelegt",
+    "models": "Suchmodelle werden heruntergeladen",
+    "ocr_weights": "OCR-Dateien werden heruntergeladen",
+    "linger": "Cognita wird beim Anmelden gestartet",
+    "start": "Cognita wird gestartet",
+    "acceleration": "GPU {vendor} wird überprüft",
+    "proof": "Installation wird mit Selbsttests überprüft",
+    "proof_skipped": "Selbsttests übersprungen",
+    "remote_access": "Fernzugriff wird eingerichtet",
+    "finish": "Setup wird abgeschlossen",
+    "update": "Cognita wird aktualisiert",
+    "rollback": "Vorherige Version wird wiederhergestellt",
+    "add_folder": "Projektordner wird hinzugefügt",
+    "password_change": "Administratorkennwort wird geändert"
+  },
+  "setup.folder.choose": {
+    "title": "Projektordner",
+    "message": "Wählen Sie einen Ordner aus, um fortzufahren.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.control_character": {
+    "title": "Projektordner",
+    "message": "Der Ordnerpfad enthält einen Zeilenumbruch, Tabulator oder ein Steuerzeichen. Wählen Sie einen anderen Ordner oder benennen Sie ihn um.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.full_path": {
+    "title": "Projektordner",
+    "message": "Geben Sie einen vollständigen Pfad auf diesem PC ein, zum Beispiel C:\\Users\\me\\Documents.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.local_drive": {
+    "title": "Projektordner",
+    "message": "Wählen Sie einen Ordner auf einem lokalen Laufwerk dieses PCs.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.hash_name": {
+    "title": "Projektordner",
+    "message": "Cognita kann keinen Ordner verwenden, dessen Name mit # beginnt. Wählen Sie einen anderen Ordner oder benennen Sie ihn um.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.drive_root": {
+    "title": "Projektordner",
+    "message": "Wählen Sie einen Ordner statt eines ganzen Laufwerks.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.missing": {
+    "title": "Projektordner",
+    "message": "Dieser Ordner ist nicht vorhanden. Wählen Sie einen anderen.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Projektordner",
+    "message": "Dieser Ordner verweist auf einen für Cognita ungeeigneten Speicherort. Wählen Sie einen anderen.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.network_drive": {
+    "title": "Projektordner",
+    "message": "Wählen Sie einen Ordner auf einem lokalen Laufwerk; verbundene Netzlaufwerke werden nicht unterstützt.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.too_long": {
+    "title": "Projektordner",
+    "message": "Der Ordnerpfad ist länger als die von Cognita speicherbaren 400 Zeichen. Wählen Sie einen kürzeren Pfad.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Projektordner",
+    "message": "Der Pfad enthält $, ein doppeltes Anführungszeichen oder ein # nach einem Leerzeichen. Wählen Sie einen anderen Ordner oder benennen Sie ihn um.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Projektordner",
+    "message": "Der Pfad beginnt oder endet mit einem Leerzeichen. Wählen Sie einen anderen Ordner oder benennen Sie ihn um.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Projektordner",
+    "message": "Wählen Sie einen Ordner außerhalb der Cognita-eigenen Datenordner.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Projektordner",
+    "message": "Dieser Ordner überschneidet sich mit einem anderen von Cognita verwendeten Projektordner. Wählen Sie einen Ordner, der ihn weder enthält noch darin liegt.",
+    "fix": "Wählen Sie einen anderen Ordner."
+  },
+  "setup.progress.status": {
+    "title": "Setup-Fortschritt",
+    "message": "Cognita führt diesen Schritt aus.",
+    "fix": "Es ist keine Aktion erforderlich."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Selbsttests übersprungen",
+    "message": "Sie haben die Selbsttests angehalten. Führen Sie Setup später erneut aus, um sie auszuführen.",
+    "fix": "Es ist keine Aktion erforderlich."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Projektordner",
+    "message": "Der Ordnerpfad konnte nicht gelesen werden. Prüfen Sie ihn und wählen Sie den Ordner erneut aus.",
+    "fix": "Wählen Sie einen anderen Ordner."
   }
 }

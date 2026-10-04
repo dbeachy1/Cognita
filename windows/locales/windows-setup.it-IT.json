@@ -36,5 +36,111 @@
     "title": "Accelerazione",
     "message": "Impossibile verificare la GPU {vendor}. Cognita userà la CPU.",
     "fix": "Cognita può continuare usando la CPU."
+  },
+  "setup.progress_titles": {
+    "checks": "Controllo di questo computer",
+    "prerequisites": "Controllo dei prerequisiti",
+    "plan": "Pianificazione dell’installazione",
+    "layout": "Preparazione di Cognita",
+    "images": "Download di Cognita",
+    "password": "Impostazione della password amministratore",
+    "models": "Download dei modelli di ricerca",
+    "ocr_weights": "Download dei file OCR",
+    "linger": "Avvio di Cognita all’accesso",
+    "start": "Avvio di Cognita",
+    "acceleration": "Controllo della GPU {vendor}",
+    "proof": "Verifica dell’installazione con i test",
+    "proof_skipped": "Test ignorati",
+    "remote_access": "Configurazione dell’accesso remoto",
+    "finish": "Completamento dell’installazione",
+    "update": "Aggiornamento di Cognita",
+    "rollback": "Ripristino della versione precedente",
+    "add_folder": "Aggiunta di una cartella di progetti",
+    "password_change": "Modifica della password amministratore"
+  },
+  "setup.folder.choose": {
+    "title": "Cartella dei progetti",
+    "message": "Scegliere una cartella per continuare.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.control_character": {
+    "title": "Cartella dei progetti",
+    "message": "Il percorso contiene un’interruzione di riga, una tabulazione o un carattere di controllo. Scegliere un’altra cartella o rinominarla.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.full_path": {
+    "title": "Cartella dei progetti",
+    "message": "Inserire un percorso completo su questo computer, ad esempio C:\\Users\\me\\Documents.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.local_drive": {
+    "title": "Cartella dei progetti",
+    "message": "Scegliere una cartella su un’unità locale di questo computer.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.hash_name": {
+    "title": "Cartella dei progetti",
+    "message": "Cognita non può usare una cartella il cui nome inizia con #. Scegliere un’altra cartella o rinominarla.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.drive_root": {
+    "title": "Cartella dei progetti",
+    "message": "Scegliere una cartella, non un’intera unità.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.missing": {
+    "title": "Cartella dei progetti",
+    "message": "La cartella non esiste. Sceglierne un’altra.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.link_unusable": {
+    "title": "Cartella dei progetti",
+    "message": "La cartella punta a un percorso che Cognita non può usare. Sceglierne un’altra.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.network_drive": {
+    "title": "Cartella dei progetti",
+    "message": "Scegliere una cartella su un’unità locale; le unità di rete mappate non sono supportate.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.too_long": {
+    "title": "Cartella dei progetti",
+    "message": "Il percorso supera i 400 caratteri che Cognita può salvare. Scegliere un percorso più breve.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.unsupported_characters": {
+    "title": "Cartella dei progetti",
+    "message": "Il percorso contiene $, virgolette doppie o un # dopo uno spazio. Scegliere un’altra cartella o rinominarla.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.edge_spaces": {
+    "title": "Cartella dei progetti",
+    "message": "Il percorso inizia o termina con uno spazio. Scegliere un’altra cartella o rinominarla.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.data_overlap": {
+    "title": "Cartella dei progetti",
+    "message": "Scegliere una cartella esterna alle cartelle dati di Cognita.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.folder.projects_overlap": {
+    "title": "Cartella dei progetti",
+    "message": "Questa cartella si sovrappone a un’altra cartella di progetti usata da Cognita. Scegliere una cartella che non la contenga e non sia al suo interno.",
+    "fix": "Scegliere un’altra cartella."
+  },
+  "setup.progress.status": {
+    "title": "Avanzamento installazione",
+    "message": "Cognita sta eseguendo questo passaggio.",
+    "fix": "Non è necessario intervenire."
+  },
+  "setup.progress.proof_skipped": {
+    "title": "Test ignorati",
+    "message": "I test sono stati interrotti. Eseguire di nuovo il programma di installazione più tardi per avviarli.",
+    "fix": "Non è necessario intervenire."
+  },
+  "setup.folder.invalid_path": {
+    "title": "Cartella dei progetti",
+    "message": "Impossibile leggere il percorso della cartella. Controllarlo e scegliere di nuovo la cartella.",
+    "fix": "Scegliere un’altra cartella."
   }
 }

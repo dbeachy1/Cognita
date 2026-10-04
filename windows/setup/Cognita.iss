@@ -193,6 +193,8 @@ OutputBaseFilename=Cognita-Setup-{#Version}-r{#Revision}
 Compression=lzma2
 SolidCompression=no
 WizardStyle=modern
+; The source image is the same Cognita mark used by the web UI; Inno scales it into the wizard header.
+WizardSmallImageFile=..\..\src\cognita\web\cognita-icon-512.png
 UninstallDisplayName=Cognita
 ; Design 19.1 item 5: one Setup at a time. A second copy (the RunOnce resume plus a double-click, say)
 ; gets Inno's own "already running" message instead of two installs racing each other.
@@ -2539,9 +2541,11 @@ end;
   folder and the folders Cognita already uses) runs last, because it starts PowerShell. }
 function DataFolderProblem(const Dir: String): String;
 var
-  Reason: String;
+  Reason, DisplayReason: String;
+  HelperRejected: Boolean;
 begin
   Result := '';
+  HelperRejected := False;
   if HasBadArgChar(Dir) then
     Result := CustomMessage('dataFolderInvalid')
   else if IsDriveRoot(Dir) then
@@ -2563,12 +2567,20 @@ begin
     Reason := ResultValue(LastResult, 'reason');
     if Reason = '' then
       Reason := CustomMessage('dataFolderUnsupported');
-    Result := Reason;
+    DisplayReason := ResultValue(LastResult, 'reason_display');
+    if DisplayReason = '' then
+      DisplayReason := Reason;
+    Result := DisplayReason;
+    HelperRejected := True;
+    Log('advanced: data_dir=' + Dir + ' refused: ' + Reason);
   end;
-  if Result <> '' then
-    Log('advanced: data_dir=' + Dir + ' refused: ' + Result)
-  else
-    Log('advanced: data_dir=' + Dir + ' accepted');
+  if not HelperRejected then
+  begin
+    if Result <> '' then
+      Log('advanced: data_dir=' + Dir + ' refused: ' + Result)
+    else
+      Log('advanced: data_dir=' + Dir + ' accepted');
+  end;
 end;
 
 { Defined below, with the Ready page's other code; AdvancedClick rebuilds the summary with it. }
@@ -4010,7 +4022,7 @@ end;
 
 function FolderPageNext: Boolean;
 var
-  Path, Reason: String;
+  Path, Reason, DisplayReason: String;
 begin
   Result := False;
   FolderReason.Caption := '';
@@ -4049,8 +4061,11 @@ begin
     if Reason = '' then
       Reason := 'The folder cannot be used.';
     Log('folder page: ' + Path + ' refused: ' + Reason);
-    FolderReason.Caption := CustomMessage('folderUnavailable') + ': ' + Reason;
-    MsgBox(CustomMessage('folderUnavailable') + #13#10#13#10 + Reason, mbError, MB_OK);
+    DisplayReason := ResultValue(LastResult, 'reason_display');
+    if DisplayReason = '' then
+      DisplayReason := Reason;
+    FolderReason.Caption := CustomMessage('folderUnavailable') + ': ' + DisplayReason;
+    MsgBox(CustomMessage('folderUnavailable') + #13#10#13#10 + DisplayReason, mbError, MB_OK);
     Exit;
   end;
   Log('folder page: ' + Path + ' accepted');
