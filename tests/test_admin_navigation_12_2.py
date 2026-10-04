@@ -55,7 +55,7 @@ def test_discrete_tabs_have_theme_responsive_accessible_states():
 
 
 def test_connection_instructions_are_credential_scoped_and_transient():
-    assert "Connection instructions" in JS
+    assert 't("admin.credential.setup.heading")' in JS
     assert "connection-instructions" in JS
     assert "current_password: proof" in JS
     assert "localStorage" in JS

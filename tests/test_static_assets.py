@@ -85,8 +85,12 @@ async def test_admin_javascript_wires_authentication_policy(app):
 async def test_admin_credential_delete_explains_normal_retention_reset(app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         js = (await c.get("/static/app.js")).text
-    assert "clear any Pin and start a fresh 30-day clock from credential deletion" in js
-    assert "Clears any Pin and starts a fresh 30-day Workspace retention clock" in js
+    assert 't("admin.credential.delete.normal")' in js
+    assert 't("admin.credential.consequence.normal")' in js
+    from cognita.localization import load_catalog
+    english = load_catalog("en-US")
+    assert "clear any Pin and start a fresh 30-day clock from credential deletion" in english["admin.credential.delete.normal"]
+    assert "Clears any Pin and starts a fresh 30-day Workspace retention clock" in english["admin.credential.consequence.normal"]
 
 
 async def test_admin_javascript_wires_connector_policy_boundary(app):

@@ -315,7 +315,7 @@ function credentialPanelOf(element) {
 async function askAdminPassword(title, body, confirmLabel) {
   const form = await uiForm({
     title, body, confirmLabel,
-    fields: [{ name: "current_password", label: "Your administrator password", type: "password", maxlength: 512 }],
+    fields: [{ name: "current_password", label: t("admin.credential.field.admin_password"), type: "password", maxlength: 512 }],
   });
   return form.ok ? (form.values.current_password || "") : "";
 }
@@ -1025,14 +1025,18 @@ async function renderCredentialList(surfaceKind, surfaceId, container) {
     const { panel, list } = credentialPanelOf(container);
     panel.dataset.credentialRevision = Number.isInteger(data.revision) ? String(data.revision) : "0";
     container = list;
-    container.innerHTML = '<div class="credential-toolbar"><button type="button" class="secondary outline" data-credential-add="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '">Add key</button></div>' +
+    container.innerHTML = '<div class="credential-toolbar"><button type="button" class="secondary outline" data-credential-add="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '">' + esc(t("admin.credential.action.add")) + '</button></div>' +
       (credentials.length ? credentials.map((item) => {
         const target = workspaceTargetForCredential(item);
-        return '<div class="credential-row" data-credential-id="' + esc(item.credential_id || "") + '" data-workspace-id="' + esc(target.id || "") + '" data-workspace-state="' + esc(target.state || "") + '" data-workspace-owner="' + esc(target.ownerStatus || "") + '"><strong>' + esc(item.label || item.name || "Unnamed") + '</strong> <small class="muted">' + esc(item.status || (item.revoked ? "revoked" : "active")) + '</small><br><small class="muted">Credential UUID: <code>' + esc(item.credential_id || item.key_id || "—") + '</code></small>' +
-          '<span class="credential-actions">' + (surfaceKind === "workspace" ? '<button type="button" class="secondary outline" data-credential-action="setup" data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + esc(item.credential_id || "") + '">Connection instructions</button> ' : '') + '<button type="button" class="secondary outline" data-credential-action="reveal" data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + esc(item.credential_id || "") + '">Reveal</button> <button type="button" class="secondary outline" data-credential-action="rotate" data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + esc(item.credential_id || "") + '">Rotate</button> <button type="button" class="secondary outline" data-credential-action="revoke" data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + esc(item.credential_id || "") + '">Revoke</button> <button type="button" class="contrast outline" data-credential-action="delete" data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + esc(item.credential_id || "") + '">Delete</button></span><div class="connection-instructions" hidden></div></div>';
-      }).join("") : '<p class="muted">No Private Bearer Token keys.</p>');
+        const status = item.status || (item.revoked ? "revoked" : "active");
+        const statusLabel = ({ active: t("admin.option.active"), revoked: t("admin.option.revoked") })[status] || status;
+        const id = esc(item.credential_id || "");
+        const surface = ' data-surface-kind="' + esc(surfaceKind) + '" data-surface-id="' + esc(surfaceId) + '" data-credential-id="' + id + '"';
+        return '<div class="credential-row" data-credential-id="' + id + '" data-workspace-id="' + esc(target.id || "") + '" data-workspace-state="' + esc(target.state || "") + '" data-workspace-owner="' + esc(target.ownerStatus || "") + '"><strong>' + esc(item.label || item.name || t("admin.credential.unnamed")) + '</strong> <small class="muted">' + esc(statusLabel) + '</small><br><small class="muted">' + esc(t("admin.credential.field.uuid")) + ': <code>' + esc(item.credential_id || item.key_id || "—") + '</code></small>' +
+          '<span class="credential-actions">' + (surfaceKind === "workspace" ? '<button type="button" class="secondary outline" data-credential-action="setup"' + surface + '>' + esc(t("admin.credential.action.setup")) + '</button> ' : '') + '<button type="button" class="secondary outline" data-credential-action="reveal"' + surface + '>' + esc(t("admin.credential.action.reveal")) + '</button> <button type="button" class="secondary outline" data-credential-action="rotate"' + surface + '>' + esc(t("admin.credential.action.rotate")) + '</button> <button type="button" class="secondary outline" data-credential-action="revoke"' + surface + '>' + esc(t("admin.credential.action.revoke")) + '</button> <button type="button" class="contrast outline" data-credential-action="delete"' + surface + '>' + esc(t("admin.credential.action.delete")) + '</button></span><div class="connection-instructions" hidden></div></div>';
+      }).join("") : '<p class="muted">' + esc(t("admin.credential.empty")) + '</p>');
   } catch (err) {
-    container.innerHTML = '<p role="alert">Credential policy unavailable: ' + esc(err.message) + '</p>';
+    container.innerHTML = '<p role="alert">' + esc(t("admin.credential.policy_unavailable")) + ': ' + esc(err.message) + '</p>';
   }
 }
 
@@ -1040,9 +1044,9 @@ function showCredentialSecret(payload, title) {
   // Secrets remain transient and are never added to adminState, localStorage,
   // or URL fragments.
   const secret = payload && payload.secret;
-  if (!secret) return uiNotice({ title: title || "Credential updated", body: "The server did not return a secret." });
+  if (!secret) return uiNotice({ title: title || t("admin.action.completed"), body: t("admin.credential.secret.missing") });
   const dialog = $("#credential-secret-dialog");
-  $("#credential-secret-title").textContent = title || "Credential secret — shown once";
+  $("#credential-secret-title").textContent = title || t("admin.credential.secret.title");
   $("#credential-secret-value").textContent = secret;
   dialog.showModal();
   return Promise.resolve({ ok: true });
@@ -1816,19 +1820,19 @@ document.addEventListener("click", async (event) => {
   const add = event.target.closest("button[data-credential-add]");
   if (add) {
     const form = await uiForm({
-      title: "Add Private Bearer Token key",
-      body: "The key is shown once, right after it is created. Each key is its own identity and owns its own Workspace.",
-      confirmLabel: "Create key",
+      title: t("admin.credential.add.title"),
+      body: t("admin.credential.add.body"),
+      confirmLabel: t("admin.credential.add.confirm"),
       fields: [
-        { name: "label", label: "Key label (1–120 characters)", type: "text", maxlength: 120 },
-        { name: "current_password", label: "Your administrator password", type: "password", maxlength: 512 },
+        { name: "label", label: t("admin.credential.field.label"), type: "text", maxlength: 120 },
+        { name: "current_password", label: t("admin.credential.field.admin_password"), type: "password", maxlength: 512 },
       ],
     });
     if (!form.ok) return;
     const label = String(form.values.label || "").trim();
     const currentPassword = String(form.values.current_password || "");
     if (!label || !currentPassword) {
-      await uiNotice({ title: "Key not created", body: "Both a label and your administrator password are required." });
+      await uiNotice({ title: t("admin.credential.missing.title"), body: t("admin.credential.missing.body") });
       return;
     }
     const kind = add.dataset.credentialAdd;
@@ -1838,9 +1842,9 @@ document.addEventListener("click", async (event) => {
       const { panel, list } = credentialPanelOf(add);
       const expectedRevision = Number(panel.dataset.credentialRevision || 0);
       const result = await api(prefix + encodeURIComponent(surfaceId) + "/credentials", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: expectedRevision, label, current_password: currentPassword }) });
-      await showCredentialSecret(result, "Key created");
+      await showCredentialSecret(result, t("admin.credential.created"));
       await renderCredentialList(kind, surfaceId, list);
-    } catch (err) { await uiNotice({ title: "Key creation failed", body: err.message }); }
+    } catch (err) { await uiNotice({ title: t("admin.credential.create_failed"), body: err.message }); }
     return;
   }
   const action = event.target.closest("button[data-credential-action]");
@@ -1851,14 +1855,14 @@ document.addEventListener("click", async (event) => {
   const path = credentialPath + "/" + action.dataset.credentialAction;
   try {
     if (action.dataset.credentialAction === "setup") {
-      const proof = await askAdminPassword("Reveal connection instructions", "Re-enter your administrator password to reveal this key's setup material.", "Reveal");
+      const proof = await askAdminPassword(t("admin.credential.setup.title"), t("admin.credential.setup.password_body"), t("admin.credential.action.reveal"));
       if (!proof) return;
       const result = await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ route_strategy: "stable", provider: "provider-neutral", current_password: proof }) });
       const setup = action.closest(".credential-row")?.querySelector(".connection-instructions");
       if (!setup) return;
       const setupJson = JSON.stringify(result.sillytavern || result.sillytavern_json || result, null, 2);
       setup.hidden = false;
-      setup.innerHTML = '<p><strong>Connection instructions</strong></p><p><strong>Provider-neutral URL:</strong> <code>' + esc(result.url || "") + '</code> <button type="button" class="secondary outline" data-copy-setup-url>Copy URL</button></p><pre><code>' + esc(setupJson) + '</code></pre><button type="button" class="secondary outline" data-copy-setup>Copy SillyTavern JSON</button>';
+      setup.innerHTML = '<p><strong>' + esc(t("admin.credential.setup.heading")) + '</strong></p><p><strong>' + esc(t("admin.credential.setup.url")) + '</strong> <code>' + esc(result.url || "") + '</code> <button type="button" class="secondary outline" data-copy-setup-url>' + esc(t("admin.credential.setup.copy_url")) + '</button></p><pre><code>' + esc(setupJson) + '</code></pre><button type="button" class="secondary outline" data-copy-setup>' + esc(t("admin.credential.setup.copy_config")) + '</button>';
       setup.querySelector("[data-copy-setup]").addEventListener("click", (copyEvent) => copyText(setupJson, copyEvent.currentTarget));
       setup.querySelector("[data-copy-setup-url]").addEventListener("click", (copyEvent) => copyText(result.url || "", copyEvent.currentTarget));
       window.adminNavigate("#workspaces/connectors");
@@ -1880,7 +1884,7 @@ document.addEventListener("click", async (event) => {
           // not an error to read -- redraw the list from the server, which
           // drops it, and say so.
           await renderCredentialList(kind, action.dataset.surfaceId, credentialList);
-          await uiNotice({ title: "Key list refreshed", body: "That key is not in the server's list any more, so the row was out of date. The list has been redrawn from the server." });
+          await uiNotice({ title: t("admin.credential.list_refreshed.title"), body: t("admin.credential.list_refreshed.body") });
           return;
         }
         if (!Number.isInteger(credentialIndex && credentialIndex.revision)) {
@@ -1890,22 +1894,22 @@ document.addEventListener("click", async (event) => {
         const authoritative = await fetchCredentialWorkspaceTarget(action.dataset.credentialId);
         const liveWorkspace = authoritative.workspace;
         const retentionForm = await uiForm({
-          title: "Delete key: what happens to its Workspace?",
-          body: "The Workspace this key owns is retained according to the choice below.",
-          confirmLabel: "Continue",
+          title: t("admin.credential.delete.title"),
+          body: t("admin.credential.delete.body"),
+          confirmLabel: t("admin.credential.delete.continue"),
           fields: [{
-            name: "retention", label: "Workspace retention", type: "select", value: "normal",
+            name: "retention", label: t("admin.credential.delete.retention"), type: "select", value: "normal",
             options: [
-              { value: "normal", label: "normal — clear any Pin and start a fresh 30-day clock from credential deletion" },
-              { value: "keep", label: "keep — retain indefinitely" },
-              { value: "delete_now", label: "delete_now — delete after leases settle" },
+              { value: "normal", label: t("admin.credential.delete.normal") },
+              { value: "keep", label: t("admin.credential.delete.keep") },
+              { value: "delete_now", label: t("admin.credential.delete.now") },
             ],
           }],
         });
         if (!retentionForm.ok) return;
         const retention = retentionForm.values.retention;
         if (!["keep", "delete_now", "normal"].includes(retention)) {
-          await uiNotice({ title: "Key deletion canceled", body: "Choose exactly keep, delete_now, or normal." });
+          await uiNotice({ title: t("admin.credential.delete.invalid.title"), body: t("admin.credential.delete.invalid.body") });
           return;
         }
         const workspaceId = liveWorkspace && (liveWorkspace.workspace_id || liveWorkspace.id);
@@ -1915,15 +1919,15 @@ document.addEventListener("click", async (event) => {
         if (liveWorkspace && !Number.isInteger(workspaceRevision)) {
           throw new Error("Workspace revision is unavailable; refresh the Workspace inventory");
         }
-        const target = workspaceId || "No Workspace created (lazy creation)";
-        const stateText = workspaceState || "Not created";
-        const ownerText = workspaceOwner || "Not applicable";
+        const target = workspaceId || t("admin.credential.target.lazy");
+        const stateText = workspaceState || t("admin.credential.target.not_created");
+        const ownerText = workspaceOwner || t("admin.credential.target.not_applicable");
         const retentionConsequence = retention === "normal"
-          ? "Clears any Pin and starts a fresh 30-day Workspace retention clock from credential deletion."
+          ? t("admin.credential.consequence.normal")
           : retention === "keep"
-            ? "Retains the Workspace indefinitely."
-            : "Queues Workspace deletion after leases settle.";
-        const confirmation = await uiConfirm({ title: "Delete credential", body: `Credential target: ${action.dataset.credentialId}\nWorkspace target: ${target}\nWorkspace state: ${stateText}\nWorkspace owner: ${ownerText}\nWorkspace inventory revision: ${authoritative.revision ?? "Not reported"}\nRetention decision: ${retention}\nRetention consequence: ${retentionConsequence}\n\nRevoke the credential and record this Workspace retention decision?`, confirmLabel: "Delete credential", danger: true });
+            ? t("admin.credential.consequence.keep")
+            : t("admin.credential.consequence.delete_now");
+        const confirmation = await uiConfirm({ title: t("admin.credential.delete.confirm.title"), body: t("admin.credential.delete.confirm.body", { credential: action.dataset.credentialId, target, state: stateText, owner: ownerText, revision: authoritative.revision ?? t("admin.credential.target.not_reported"), retention: t("admin.credential.delete." + retention), consequence: retentionConsequence }), confirmLabel: t("admin.credential.action.delete"), danger: true });
         if (!confirmation.ok) return;
         requestMethod = "DELETE";
         requestBody.confirm = true;
@@ -1932,19 +1936,21 @@ document.addEventListener("click", async (event) => {
         requestBody.workspace_revision = liveWorkspace ? workspaceRevision : null;
       }
       if (["reveal", "rotate"].includes(action.dataset.credentialAction)) {
+        const revealing = action.dataset.credentialAction === "reveal";
+        const verb = t(revealing ? "admin.credential.action.reveal" : "admin.credential.action.rotate");
         requestBody.current_password = await askAdminPassword(
-          (action.dataset.credentialAction === "reveal" ? "Reveal" : "Rotate") + " Private Bearer Token key",
-          "Re-enter your administrator password to " + action.dataset.credentialAction + " this key.",
-          action.dataset.credentialAction === "reveal" ? "Reveal" : "Rotate",
+          t(revealing ? "admin.credential.reveal.title" : "admin.credential.rotate.title"),
+          t(revealing ? "admin.credential.reveal.password_body" : "admin.credential.rotate.password_body"),
+          verb,
         );
         if (!requestBody.current_password) return;
       }
       const requestPath = action.dataset.credentialAction === "delete" ? credentialPath : path;
       const result = await api(requestPath, { method: requestMethod, headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) });
-      if (result.secret) await showCredentialSecret(result, "Credential secret");
+      if (result.secret) await showCredentialSecret(result, t("admin.credential.secret.title"));
       await renderCredentialList(kind, action.dataset.surfaceId, credentialList);
     }
-  } catch (err) { await uiNotice({ title: "Credential action failed", body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.credential.action_failed"), body: err.message }); }
 });
 
 const addForm = $("#add-form");
