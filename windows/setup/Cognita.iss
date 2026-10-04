@@ -256,6 +256,30 @@ french.verifyPasswordCaption=Saisissez une seule fois votre mot de passe Admin a
 german.verifyPasswordCaption=Geben Sie Ihr aktuelles Admin-Kennwort einmal ein. Führen Sie zum Ändern cognita password in einem Terminal aus.
 italian.verifyPasswordCaption=Inserisci una sola volta la password Admin attuale. Per cambiarla, esegui cognita password in un terminale.
 brazilianportuguese.verifyPasswordCaption=Digite sua senha Admin atual uma vez. Para alterá-la, execute cognita password em um terminal.
+english.adminPasswordInvalid=That is not the current Admin password. Check it and try again.
+spanish.adminPasswordInvalid=Esa no es la contraseña actual de Admin. Compruébela e inténtelo de nuevo.
+french.adminPasswordInvalid=Ce n’est pas le mot de passe Admin actuel. Vérifiez-le et réessayez.
+german.adminPasswordInvalid=Das ist nicht das aktuelle Admin-Kennwort. Prüfen Sie es und versuchen Sie es erneut.
+italian.adminPasswordInvalid=Questa non è la password Admin attuale. Controllala e riprova.
+brazilianportuguese.adminPasswordInvalid=Essa não é a senha Admin atual. Confira e tente novamente.
+english.adminPasswordLocked=Admin is temporarily refusing sign-ins after too many attempts. Wait a few minutes, then try again.
+spanish.adminPasswordLocked=Admin está rechazando temporalmente los inicios de sesión tras demasiados intentos. Espere unos minutos e inténtelo de nuevo.
+french.adminPasswordLocked=Admin refuse temporairement les connexions après trop de tentatives. Attendez quelques minutes, puis réessayez.
+german.adminPasswordLocked=Admin lehnt Anmeldungen nach zu vielen Versuchen vorübergehend ab. Warten Sie einige Minuten und versuchen Sie es erneut.
+italian.adminPasswordLocked=Admin rifiuta temporaneamente gli accessi dopo troppi tentativi. Attendi qualche minuto, poi riprova.
+brazilianportuguese.adminPasswordLocked=O Admin está recusando logins temporariamente após muitas tentativas. Aguarde alguns minutos e tente novamente.
+english.adminPasswordUnavailable=Setup could not reach the installed Cognita Admin or verify its recorded user. Make sure Admin is running, then try again.
+spanish.adminPasswordUnavailable=El programa de instalación no pudo acceder al administrador de Cognita instalado ni verificar el usuario registrado. Asegúrese de que Admin esté en ejecución e inténtelo de nuevo.
+french.adminPasswordUnavailable=Le programme d’installation n’a pas pu joindre l’Admin Cognita installé ni vérifier l’utilisateur enregistré. Vérifiez qu’Admin est démarré, puis réessayez.
+german.adminPasswordUnavailable=Setup konnte den installierten Cognita Admin nicht erreichen oder den gespeicherten Benutzer nicht überprüfen. Stellen Sie sicher, dass Admin läuft, und versuchen Sie es erneut.
+italian.adminPasswordUnavailable=Il programma di installazione non è riuscito a raggiungere Cognita Admin installato o a verificare l’utente registrato. Controlla che Admin sia in esecuzione e riprova.
+brazilianportuguese.adminPasswordUnavailable=A instalação não conseguiu acessar o Cognita Admin instalado ou verificar o usuário registrado. Confira se o Admin está em execução e tente novamente.
+english.busyVerifyingPassword=Checking the current Admin password
+spanish.busyVerifyingPassword=Comprobando la contraseña actual de administrador
+french.busyVerifyingPassword=Vérification du mot de passe Admin actuel
+german.busyVerifyingPassword=Aktuelles Admin-Kennwort wird überprüft
+italian.busyVerifyingPassword=Verifica della password Admin attuale
+brazilianportuguese.busyVerifyingPassword=Verificando a senha Admin atual
 english.downgradeText=Cognita %1 is installed; this Setup is older (%2). Use a newer Setup, or "cognita rollback" to go back a release.
 spanish.downgradeText=Está instalada la versión %1 de Cognita; este programa de instalación es anterior (%2). Use uno más reciente o ejecute "cognita rollback" para volver a una versión anterior.
 french.downgradeText=Cognita %1 est installée ; ce programme d’installation est plus ancien (%2). Utilisez un programme plus récent ou exécutez "cognita rollback" pour revenir à une version antérieure.
@@ -3257,6 +3281,9 @@ var
   Idx: Integer;
 begin
   WizardUp := True;
+  { Leave a little breathing room around the high-resolution Cognita mark in the header. }
+  WizardForm.WizardSmallBitmapImage.Left := WizardForm.WizardSmallBitmapImage.Left - ScaleX(8);
+  WizardForm.WizardSmallBitmapImage.Top := WizardForm.WizardSmallBitmapImage.Top + ScaleY(4);
   CloseQuietly := False;
   BusyPage := CreateOutputMarqueeProgressPage('Working', 'One moment...');
   ProgressPage := CreateOutputProgressPage('Installing Cognita',
@@ -4374,7 +4401,7 @@ end;
 
 function AdminPageNext: Boolean;
 var
-  Pw, Pw2: String;
+  Pw, Pw2, PipeB, VerifyMessage: String;
 begin
   Result := False;
   Pw := PageAdmin.Values[1];
@@ -4410,6 +4437,34 @@ begin
   begin
     MsgBox(CustomMessage('passwordMismatch'), mbError, MB_OK);
     Exit;
+  end;
+  if RunsOverInstalled then
+  begin
+    if StAdminUser = '' then
+    begin
+      MsgBox(CustomMessage('adminPasswordUnavailable'), mbError, MB_OK);
+      Log('admin page: installed Admin username is unknown; verification refused');
+      Exit;
+    end;
+    AdminPassword := Pw;
+    if not HandOverPassword(PipeB) then
+    begin
+      AdminPassword := '';
+      MsgBox(CustomMessage('adminPasswordUnavailable'), mbError, MB_OK);
+      Exit;
+    end;
+    if not RunHelperBusy(CustomMessage('busyVerifyingPassword'), 'verify-admin-password', '--password-pipe ' + PipeB) then
+    begin
+      AdminPassword := '';
+      VerifyMessage := 'adminPasswordUnavailable';
+      if ResultValue(LastResult, 'reason') = 'invalid' then
+        VerifyMessage := 'adminPasswordInvalid'
+      else if ResultValue(LastResult, 'reason') = 'locked' then
+        VerifyMessage := 'adminPasswordLocked';
+      MsgBox(CustomMessage(VerifyMessage), mbError, MB_OK);
+      Exit;
+    end;
+    Log('admin page: current password verified by installed Admin');
   end;
   AdminPassword := Pw;
   Log('admin page: user=[' + AdminUser + '] locked=' + IntToStr(Ord(UserLocked)) + ' password accepted (the password itself is never logged)');

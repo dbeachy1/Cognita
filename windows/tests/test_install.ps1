@@ -3,6 +3,26 @@
 . (Join-Path $PSScriptRoot '_harness.ps1')
 
 $script:Pw = 'p' + (Get-Utf8 0xE4) + 'ssw' + (Get-Utf8 0xF6) + 'rd' + (Get-Utf8 0x20AC)
+$script:AdminCredentialStatus = 'ok'
+$script:AdminCredentialChecks = 0
+$script:RealTestCurrentAdminCredential = (Get-Command Test-CurrentAdminCredential -CommandType Function).ScriptBlock
+$script:AdminRequestFixtures = @()
+$script:AdminRequestCalls = New-Object System.Collections.ArrayList
+function Test-CurrentAdminCredential {
+    param($Settings, [string]$Username, [string]$Password)
+    $script:AdminCredentialChecks++
+    return $script:AdminCredentialStatus
+}
+function Invoke-AdminCredentialRequest {
+    param([string]$Url, [string]$Method, [string]$Username = '', [string]$Password = '')
+    [void]$script:AdminRequestCalls.Add([pscustomobject]@{ Url = $Url; Method = $Method; Username = $Username; Password = $Password })
+    if ($script:AdminRequestFixtures.Count -gt 0) {
+        $next = $script:AdminRequestFixtures[0]
+        $script:AdminRequestFixtures = @($script:AdminRequestFixtures | Select-Object -Skip 1)
+        return $next
+    }
+    return [pscustomobject]@{ Status = 'unavailable'; Payload = $null }
+}
 
 $script:StatusJson = '{"installed": true, "running": true, "version": "14.1.0", "admin_url": "http://127.0.0.1:8676", "mcp_url": "http://127.0.0.1:8675", "public_url": null, "workspace": "on", "acceleration": "cpu"}'
 $script:L1 = '{"schema": 1, "time": "2026-03-01T09:00:01", "stage": "checks", "title": "Checking this machine", "state": "start"}'
@@ -279,6 +299,112 @@ function Get-InstallOpts {
     param([string]$Folder, $Image, [string[]]$Extra = @())
     $a = @('--projects-folder', $Folder, '--admin-user', 'boss', '--image', $Image.Path, '--image-sha256', $Image.Sha, '--data-dir', (Join-Path $script:TestDir 'vhd'), '--setup-version', '14.1.0', '--setup-revision', '2') + $Extra
     return (ConvertFrom-HelperArgs $a).Opts
+}
+
+Test-Case 'Admin password proof: correct is accepted; wrong, locked or unavailable fail closed; unknown username is refused without a request' {
+    $s = New-TestSettings -State 'installed'
+    Set-SettingProp $s 'linux_installed_version' '15.3.0'
+    Set-SettingProp $s 'admin_user' 'boss'
+    Save-Settings $s
+    $script:Interactive = $true; $script:SecretAnswer = 'fixture-password'
+    $script:AdminCredentialStatus = 'ok'
+    $r = Invoke-VerifyAdminPasswordVerb -Opts @{}
+    Assert-Equal 'ok' $r.Status 'correct password'
+    Assert-Equal 'boss' (Read-Settings).admin_user 'uses the recorded username'
+    foreach ($status in @('invalid', 'locked', 'unavailable')) {
+        $script:AdminCredentialStatus = $status
+        $r = Invoke-VerifyAdminPasswordVerb -Opts @{}
+        Assert-Equal 'failed' $r.Status ("{0} password proof" -f $status)
+        Assert-Equal $status $r.Values['reason'] 'nonsensitive reason'
+    }
+    $before = $script:AdminCredentialChecks
+    $s = Read-Settings; Set-SettingProp $s 'admin_user' ''; Save-Settings $s
+    $r = Invoke-VerifyAdminPasswordVerb -Opts @{}
+    Assert-Equal 'failed' $r.Status 'unknown username fails closed'
+    Assert-Equal $before $script:AdminCredentialChecks 'unknown username never reaches Admin'
+    Assert-NotMatch ((Get-LogText) + ($script:Out -join "`n")) 'fixture-password' 'password is absent from logs and output'
+    $script:AdminCredentialStatus = 'ok'
+}
+
+Test-Case 'Admin auth transport: probes HTTPS then HTTP on loopback, requires protected session, and never logs the password' {
+    Assert-Equal 'https://127.0.0.1:8676|http://127.0.0.1:8676' (Get-AdminCredentialBaseUrls -Port 8676) 'transport candidates'
+    Assert-Equal 0 @(Get-AdminCredentialBaseUrls -Port 0).Count 'invalid port has no transport'
+    $script:AdminRequestCalls.Clear()
+    $script:AdminRequestFixtures = @(
+        [pscustomobject]@{ Status = 'unavailable'; Payload = $null },
+        [pscustomobject]@{ Status = 'ok'; Payload = [pscustomobject]@{ auth_required = $false; authenticated = $true; username = $null } }
+    )
+    $status = & $script:RealTestCurrentAdminCredential -Settings ([pscustomobject]@{ admin_port = 8676 }) -Username 'boss' -Password 'secret-fixture'
+    Assert-Equal 'unavailable' $status 'an unprotected local service is not accepted as credential proof'
+    Assert-Equal 2 $script:AdminRequestCalls.Count 'stops at the first responding transport'
+    Assert-Equal 'GET' $script:AdminRequestCalls[1].Method 'unprotected session blocks login POST'
+    Assert-NotMatch (Get-LogText) 'secret-fixture' 'password not in logs'
+    $script:AdminRequestCalls.Clear()
+    $script:AdminRequestFixtures = @(
+        [pscustomobject]@{ Status = 'ok'; Payload = [pscustomobject]@{ auth_required = $true; authenticated = $false; username = $null } },
+        [pscustomobject]@{ Status = 'ok'; Payload = [pscustomobject]@{ ok = $true; username = 'boss' } }
+    )
+    $status = & $script:RealTestCurrentAdminCredential -Settings ([pscustomobject]@{ admin_port = 8676 }) -Username 'boss' -Password 'secret-fixture'
+    Assert-Equal 'ok' $status 'protected Admin accepts the current credential'
+    Assert-Match $script:AdminRequestCalls[0].Url '^https://127\.0\.0\.1:8676/api/session$' 'HTTPS is tried first on loopback'
+    Assert-Match $script:AdminRequestCalls[1].Url '^https://127\.0\.0\.1:8676/api/login$' 'login stays on the verified local transport'
+    Assert-Equal 'boss' $script:AdminRequestCalls[1].Username 'recorded username reaches the request'
+    Assert-Equal 'secret-fixture' $script:AdminRequestCalls[1].Password 'secret only reaches the request body seam'
+    $script:AdminRequestFixtures = @(
+        [pscustomobject]@{ Status = 'ok'; Payload = [pscustomobject]@{ auth_required = $true } },
+        [pscustomobject]@{ Status = 'invalid'; Payload = $null }
+    )
+    $status = & $script:RealTestCurrentAdminCredential -Settings ([pscustomobject]@{ admin_port = 8676 }) -Username 'boss' -Password 'secret-fixture'
+    Assert-Equal 'invalid' $status '401 identifies an incorrect password'
+    $script:AdminRequestFixtures = @(
+        [pscustomobject]@{ Status = 'ok'; Payload = [pscustomobject]@{ auth_required = $true } },
+        [pscustomobject]@{ Status = 'locked'; Payload = $null }
+    )
+    $status = & $script:RealTestCurrentAdminCredential -Settings ([pscustomobject]@{ admin_port = 8676 }) -Username 'boss' -Password 'secret-fixture'
+    Assert-Equal 'locked' $status '429 identifies a temporary login lockout'
+    $script:AdminRequestFixtures = @(
+        [pscustomobject]@{ Status = 'unavailable'; Payload = $null },
+        [pscustomobject]@{ Status = 'unavailable'; Payload = $null }
+    )
+    $status = & $script:RealTestCurrentAdminCredential -Settings ([pscustomobject]@{ admin_port = 8676 }) -Username 'boss' -Password 'secret-fixture'
+    Assert-Equal 'unavailable' $status 'unreachable Admin fails closed'
+    Assert-NotMatch (Get-LogText) 'secret-fixture' 'password never enters logs'
+    $script:AdminRequestFixtures = @()
+}
+
+Test-Case 'repair install: an invalid password returns before external work and preserves installed settings' {
+    $folder = New-Dir 'existing projects'; $vhd = Join-Path $script:TestDir 'vhd'
+    $s = New-TestSettings -State 'installed' -Vhd $vhd -RootPaths @($folder)
+    Set-SettingProp $s 'linux_installed_version' '15.3.0'; Set-SettingProp $s 'admin_user' 'boss'; Save-Settings $s
+    $script:ownerId = $s.installation_id
+    $script:LxssDistros = @([pscustomobject]@{ Guid = '{g}'; Name = 'Cognita'; BasePath = $vhd })
+    $script:AdminCredentialStatus = 'invalid'
+    $script:Interactive = $true; $script:SecretAnswer = 'wrong-fixture'
+    $img = New-FakeImage
+    $r = Invoke-InstallVerb -Opts (Get-InstallOpts -Folder $folder -Image $img)
+    Assert-Equal 'failed' $r.Status 'repair rejected'
+    Assert-Equal 0 $script:ExtCalls.Count 'no WSL, filesystem or service operations'
+    $after = Read-Settings
+    Assert-Equal '15.3.0' $after.linux_installed_version 'installed version preserved'
+    Assert-Equal 'boss' $after.admin_user 'installed username preserved'
+    $script:AdminCredentialStatus = 'ok'
+}
+
+Test-Case 'update: unavailable Admin returns before any installed state or source changes' {
+    $folder = New-Dir 'existing projects'; $vhd = Join-Path $script:TestDir 'vhd'
+    $s = New-TestSettings -State 'installed' -Vhd $vhd -RootPaths @($folder)
+    Set-SettingProp $s 'linux_installed_version' '15.3.0'; Set-SettingProp $s 'admin_user' 'boss'; Save-Settings $s
+    $script:AdminCredentialStatus = 'unavailable'
+    $script:Interactive = $true; $script:SecretAnswer = 'fixture-password'
+    $src = Join-Path $script:TestDir 'source.tar.gz'; [System.IO.File]::WriteAllBytes($src, [byte[]](1..8))
+    $opts = (ConvertFrom-HelperArgs @('--src', $src, '--setup-version', '15.4.0')).Opts
+    $r = Invoke-UpdateVerb -Opts $opts
+    Assert-Equal 'failed' $r.Status 'update rejected'
+    Assert-Equal 0 $script:ExtCalls.Count 'no WSL, settings, tree or service operations'
+    $after = Read-Settings
+    Assert-Equal '15.3.0' $after.linux_installed_version 'installed version preserved'
+    Assert-Equal 'boss' $after.admin_user 'installed username preserved'
+    $script:AdminCredentialStatus = 'ok'
 }
 
 Test-Case 'install: a fresh machine runs import, keepalive, folder, then the Linux CLI with exactly the design arguments; the password only on stdin' {
@@ -674,6 +800,8 @@ Test-Case 'install: settings say installed but the distro is gone (unregistered 
 
 Test-Case 'install (design 19.2 item 4): state=uninstalled + a missing distro + recorded roots/version: the stale records are reset whatever state says, so root 1 is not kept' {
     $img = New-FakeImage
+    $script:AdminCredentialStatus = 'unavailable'
+    $checksBefore = $script:AdminCredentialChecks
     $cases = @(
         @{ What = 'uninstalled with a recorded version and a root'; Version = '14.0.0'; Roots = @('D:\Old'); State = 'uninstalled' },
         @{ What = 'uninstalled with only a root'; Version = ''; Roots = @('D:\Old'); State = 'uninstalled' },
@@ -701,6 +829,8 @@ Test-Case 'install (design 19.2 item 4): state=uninstalled + a missing distro + 
         Assert-Equal 'boss' $after.admin_user ($case.What + ': the new admin user recorded')
         Assert-Match (Get-LogText) 'install: the distro is gone \(state=' ($case.What + ': the reset decision is logged with its values')
     }
+    Assert-Equal $checksBefore $script:AdminCredentialChecks 'a missing owned distro is treated as a fresh install, with no Admin request'
+    $script:AdminCredentialStatus = 'ok'
 }
 
 Test-Case 'install (design 19.2 item 8): a recorded Funnel refuses an --mcp-port that differs from its target, and changes nothing; the same port, or none, is fine' {

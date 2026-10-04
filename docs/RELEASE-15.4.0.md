@@ -4,6 +4,8 @@
 
 - Windows Setup uses a high-resolution Cognita mark in the Welcome panel and its executable
   icon. The title bar and taskbar use that icon as well.
+- The header icon has spacing around it. Upgrades verify the current Admin password against
+  the installed service before advancing past the password page or changing the installation.
 - Setup and uninstall complete the six-language operator text, including progress, failure,
   and recovery guidance. Specific recovery steps remain visible when a technical error is
   otherwise shown under a translated heading.

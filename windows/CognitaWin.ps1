@@ -3142,10 +3142,111 @@ function Get-PortFromUrl {
     try { return ([uri]$Url).Port } catch { return 0 }
 }
 
+function Get-AdminCredentialBaseUrls {
+    # Probe HTTPS first for installs with Admin TLS, then the default HTTP listener. Both candidates
+    # stay pinned to IPv4 loopback and the recorded port; redirects are never followed.
+    param([int]$Port)
+    if ($Port -lt 1 -or $Port -gt 65535) { return @() }
+    return @(('https://127.0.0.1:' + $Port), ('http://127.0.0.1:' + $Port))
+}
+
+function Invoke-AdminCredentialRequest {
+    # A request-scoped callback accepts Cognita's self-signed certificate only on the pinned loopback
+    # host. It does not alter process-wide TLS validation.
+    param([string]$Url, [ValidateSet('GET', 'POST')][string]$Method, [string]$Username = '', [string]$Password = '')
+    $request = $null; $response = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.Method = $Method
+        $request.AllowAutoRedirect = $false
+        $request.Proxy = $null
+        $request.Timeout = 5000
+        $request.ReadWriteTimeout = 5000
+        $request.ServerCertificateValidationCallback = [System.Net.Security.RemoteCertificateValidationCallback]{
+            param($sender, $certificate, $chain, $errors)
+            return ([string]$sender.RequestUri.Host -ceq '127.0.0.1')
+        }
+        if ($Method -eq 'POST') {
+            $request.ContentType = 'application/json; charset=utf-8'
+            $body = [ordered]@{ username = $Username; password = $Password } | ConvertTo-Json -Compress
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+            $request.ContentLength = $bytes.Length
+            $stream = $request.GetRequestStream()
+            try { $stream.Write($bytes, 0, $bytes.Length) }
+            finally { $stream.Dispose(); [Array]::Clear($bytes, 0, $bytes.Length); $body = $null }
+        }
+        try { $response = $request.GetResponse() }
+        catch [System.Net.WebException] {
+            if ($_.Exception.Response) {
+                $code = [int]$_.Exception.Response.StatusCode
+                $_.Exception.Response.Close()
+                if ($code -eq 401) { return [pscustomobject]@{ Status = 'invalid'; Payload = $null } }
+                if ($code -eq 429) { return [pscustomobject]@{ Status = 'locked'; Payload = $null } }
+                if ($code -ge 300 -and $code -lt 400) { return [pscustomobject]@{ Status = 'redirect'; Payload = $null } }
+            }
+            return [pscustomobject]@{ Status = 'unavailable'; Payload = $null }
+        }
+        $code = [int]$response.StatusCode
+        if ($code -ge 300 -and $code -lt 400) { return [pscustomobject]@{ Status = 'redirect'; Payload = $null } }
+        if ($code -ne 200) { return [pscustomobject]@{ Status = 'unavailable'; Payload = $null } }
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        try { $payload = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+        return [pscustomobject]@{ Status = 'ok'; Payload = $payload }
+    } catch {
+        return [pscustomobject]@{ Status = 'unavailable'; Payload = $null }
+    } finally {
+        if ($response) { $response.Close() }
+        if ($request) { $request.Abort() }
+    }
+}
+
+function Test-CurrentAdminCredential {
+    param($Settings, [string]$Username, [string]$Password)
+    if (-not $Settings -or -not $Username -or -not $Password) { return 'unavailable' }
+    $port = 0
+    try { $port = [int]$Settings.admin_port } catch { return 'unavailable' }
+    foreach ($base in (Get-AdminCredentialBaseUrls -Port $port)) {
+        $session = Invoke-AdminCredentialRequest -Url ($base + '/api/session') -Method GET
+        if ($session.Status -eq 'unavailable') { continue }
+        if ($session.Status -ne 'ok' -or -not $session.Payload -or $session.Payload.auth_required -ne $true) {
+            return 'unavailable'
+        }
+        $login = Invoke-AdminCredentialRequest -Url ($base + '/api/login') -Method POST -Username $Username -Password $Password
+        if ($login.Status -eq 'invalid' -or $login.Status -eq 'locked') { return [string]$login.Status }
+        if ($login.Status -ne 'ok' -or -not $login.Payload.ok -or [string]$login.Payload.username -cne $Username) { return 'unavailable' }
+        return 'ok'
+    }
+    return 'unavailable'
+}
+
+function Invoke-VerifyAdminPasswordVerb {
+    param($Opts)
+    $settings = Read-Settings
+    if (-not $settings -or -not [string]$settings.linux_installed_version -or -not [string]$settings.admin_user) {
+        return (New-VerbResult 'failed' ([ordered]@{ reason = 'admin-unavailable' }))
+    }
+    $pw = $null
+    try { $pw = Get-AdminPasswordFromOpts $Opts }
+    catch { return (New-VerbResult 'failed' ([ordered]@{ reason = 'admin-unavailable' })) }
+    try {
+        $check = Test-CurrentAdminCredential -Settings $settings -Username ([string]$settings.admin_user) -Password $pw
+    } finally { $pw = $null }
+    if ($check -eq 'ok') { return (New-VerbResult 'ok') }
+    Write-Log ("Admin credential check failed: status={0}" -f $check)
+    return (New-VerbResult 'failed' ([ordered]@{ reason = $check }))
+}
+
 function Invoke-InstallVerb {
     param($Opts)
     $t0 = Get-ClockNow
     $settings = Read-Settings
+    $verifyExistingInstall = $false
+    if ($settings -and [string]$settings.linux_installed_version) {
+        # Match Setup's installed-state definition without starting WSL. A stale record with a manually
+        # unregistered distro is a fresh install path and has no current Admin to authenticate against.
+        $ownership = Get-DistroOwnership -Settings $settings -SkipMarker
+        $verifyExistingInstall = [bool]($ownership.Exists -and $ownership.Owned)
+    }
     # The password is read first: the broker serves it for at most 10 minutes and a long import must
     # not use that up. It lives in this variable only.
     $pw = $null
@@ -3153,6 +3254,14 @@ function Invoke-InstallVerb {
     catch {
         Write-ProgressLine -Stage 'password' -Title 'Admin password' -State 'failed' -Message $_.Exception.Message -Fix 'Run Setup again.'
         return (New-VerbResult 'failed' ([ordered]@{ reason = 'no-password' }))
+    }
+    if ($verifyExistingInstall) {
+        $check = Test-CurrentAdminCredential -Settings $settings -Username ([string]$settings.admin_user) -Password $pw
+        if ($check -ne 'ok') {
+            $pw = $null
+            Write-ProgressLine -Stage 'password' -Title 'Admin password' -State 'failed' -Message 'The current Admin password could not be verified against the installed Cognita service.' -Fix 'Make sure Cognita Admin is running and the recorded Admin user is available, then run Setup again.'
+            return (New-VerbResult 'failed' ([ordered]@{ reason = 'admin-unverified' }))
+        }
     }
     # Design 22.3: what Setup asked for. Absent means the Linux CLI gets no acceleration flag and keeps what its
     # env file says. Anything but cpu or nvidia is a Setup bug, not a user state.
@@ -3540,6 +3649,12 @@ function Invoke-UpdateVerb {
     catch {
         Write-ProgressLine -Stage 'password' -Title 'Admin password' -State 'failed' -Message $_.Exception.Message -Fix 'Run Setup again.'
         return (New-VerbResult 'failed' ([ordered]@{ reason = 'no-password' }))
+    }
+    $check = Test-CurrentAdminCredential -Settings $settings -Username ([string]$settings.admin_user) -Password $pw
+    if ($check -ne 'ok') {
+        $pw = $null
+        Write-ProgressLine -Stage 'password' -Title 'Admin password' -State 'failed' -Message 'The current Admin password could not be verified against the installed Cognita service.' -Fix 'Make sure Cognita Admin is running and the recorded Admin user is available, then run Setup again.'
+        return (New-VerbResult 'failed' ([ordered]@{ reason = 'admin-unverified' }))
     }
     # Design 22.9: --wsl-memory-reclaim (Setup's ticked box) -> the .wslconfig line, FIRST: before the
     # distro is started or touched, so it is in place the next time WSL starts. Failure is a warning only.
@@ -4864,6 +4979,7 @@ function Invoke-Verb {
         'diagnostics' { return (Invoke-DiagnosticsVerb -Opts $o) }
         'uninstall' { return (Invoke-UninstallVerb -Opts $o) }
         'password-broker' { return (Invoke-PasswordBrokerVerb -Opts $o) }
+        'verify-admin-password' { return (Invoke-VerifyAdminPasswordVerb -Opts $o) }
         'cli' { return (Invoke-CliVerb -Tokens $Tokens) }
         default { return (New-VerbResult 'failed' ([ordered]@{ error = ('unknown verb: ' + $VerbName) })) }
     }

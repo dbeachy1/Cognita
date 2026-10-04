@@ -5,6 +5,8 @@
 - Windows Setup uses high-resolution Cognita artwork in its Welcome panel, title bar, and
   taskbar. Setup and uninstall present remaining progress and recovery guidance in the six
   supported UI languages while retaining English technical details.
+- Windows upgrades verify the current Admin password before leaving the password page and
+  again before changing the installed service or files.
 - The Admin Workspace network editor and configured-key status use the selected language.
   Generic errors keep their specific recovery instructions available.
 - MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.4.0.md`.
