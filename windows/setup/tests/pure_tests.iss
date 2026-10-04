@@ -21,6 +21,22 @@ DisableFinishedPage=yes
 PrivilegesRequired=lowest
 OutputBaseFilename=pure_tests
 
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[CustomMessages]
+english.failedUpdateHeading=Cognita was not updated
+english.failedRepairHeading=Cognita was not repaired
+english.failedReinstallHeading=Cognita was not reinstalled
+english.failedInstallHeading=Cognita was not installed
+english.failedExistingInstallRemains=The Cognita you had is still there.
+english.progressInstalling=Installing Cognita
+english.progressUpdating=Updating Cognita
+english.progressRepairing=Repairing Cognita
+english.progressReinstalling=Reinstalling Cognita
+english.finishedAcceleration=Acceleration:  %1
+english.warningAccelerationFix=To try the GPU again, run Setup again and choose NVIDIA.
+
 [Code]
 #include "..\pure.iss"
 

@@ -252,7 +252,7 @@ async function saveProjectSettings(event) {
     $("#project-settings-dialog").close();
     await refreshAdminMutation("project:update");
   } catch (err) {
-    await uiNotice({ title: t("admin.projects.settings_save_failed"), body: err.message });
+    await uiNotice({ title: t("admin.projects.settings_save_failed"), body: err.message, technicalDetail: err.technicalDetail });
   } finally {
     button.removeAttribute("aria-busy");
     button.disabled = false;
@@ -271,13 +271,13 @@ async function saveProjectSettings(event) {
 
 document.addEventListener("alpine:init", () => {
   Alpine.data("modal", () => ({
-    mode: "notice", title: "", body: "", checkboxLabel: "", confirmLabel: t("admin.action.ok"), cancelLabel: t("admin.action.cancel"),
+    mode: "notice", title: "", body: "", technicalDetail: "", technicalDetailLabel: t("admin.technical_detail"), checkboxLabel: "", confirmLabel: t("admin.action.ok"), cancelLabel: t("admin.action.cancel"),
     danger: false, checked: false, fields: [], values: {}, _resolve: null,
     init() {
       window.uiConfirm = (opts) =>
         this._open({ mode: "confirm", confirmLabel: t("admin.action.confirm"), ...opts });
       window.uiNotice = (opts) =>
-        this._open({ mode: "notice", confirmLabel: t("admin.action.ok"), ...opts });
+        this._open({ mode: "notice", confirmLabel: t("admin.action.ok"), technicalDetailLabel: t("admin.technical_detail"), ...opts });
       window.uiForm = (opts) =>
         this._open({
           mode: "form", confirmLabel: t("admin.action.ok"), ...opts,
@@ -285,7 +285,7 @@ document.addEventListener("alpine:init", () => {
         });
     },
     _open(opts) {
-      Object.assign(this, { checkboxLabel: "", danger: false, checked: false, fields: [], values: {} }, opts);
+      Object.assign(this, { checkboxLabel: "", danger: false, checked: false, technicalDetail: "", technicalDetailLabel: t("admin.technical_detail"), fields: [], values: {} }, opts);
       this.$refs.dlg.showModal();
       this.$nextTick(() => { const first = this.$refs.dlg.querySelector("input:not([type=checkbox]), select"); if (first) first.focus(); });
       return new Promise((resolve) => (this._resolve = resolve));
@@ -326,17 +326,26 @@ function csrfToken() {
   return entry ? decodeURIComponent(entry.slice("cognita_csrf=".length)) : "";
 }
 
-function presentOutcome(payload, outcome = "admin.action.completed") {
+function outcomeParts(payload, outcome = "admin.action.completed") {
   const locale = window.CognitaAdminLocale;
-  if (payload && typeof payload.presentation_id === "string" && locale) {
-    try { return locale.t(payload.presentation_id, payload.presentation_values || {}); }
+  const presentationId = payload && typeof payload.presentation_id === "string"
+    ? payload.presentation_id : "";
+  if (presentationId && locale && locale.has(presentationId)) {
+    try { return { message: locale.t(presentationId, payload.presentation_values || {}), technicalDetail: "" }; }
     catch { /* malformed or older response: retain the documented generic fallback */ }
   }
   const raw = payload && [payload.detail, payload.message, payload.error]
     .find((value) => typeof value === "string" && value.length > 0);
-  return raw && locale
-    ? `${locale.t(outcome)}\n\n${locale.t("admin.technical_detail")}: ${raw}`
-    : (locale ? locale.t(outcome) : (raw || ""));
+  const technical = [presentationId, raw].filter(Boolean).join(" — ");
+  return { message: locale ? locale.t(outcome) : (raw || ""), technicalDetail: technical };
+}
+
+function presentOutcome(payload, outcome = "admin.action.completed") {
+  const locale = window.CognitaAdminLocale;
+  const { message, technicalDetail } = outcomeParts(payload, outcome);
+  return technicalDetail && locale
+    ? `${message}\n\n${locale.t("admin.technical_detail")}: ${technicalDetail}`
+    : message;
 }
 
 function formatBytes(bytes) {
@@ -376,10 +385,12 @@ async function api(path, opts = {}) {
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
     const msg = (data && (data.detail || data.message || data.error)) || res.statusText;
-    const error = new Error(presentOutcome(data || { detail: typeof msg === "string" ? msg : JSON.stringify(msg) }, "admin.action.failed"));
+    const presentation = outcomeParts(data || { detail: typeof msg === "string" ? msg : JSON.stringify(msg) }, "admin.action.failed");
+    const error = new Error(presentation.message);
     error.status = res.status;
     error.reason = data && data.reason;
     error.payload = data;
+    error.technicalDetail = presentation.technicalDetail;
     throw error;
   }
   return data;
@@ -1581,7 +1592,7 @@ async function handleConnectorError(err) {
     }
     return;
   }
-  await uiNotice({ title: t("admin.connectors.change_failed"), body: err.message });
+  await uiNotice({ title: t("admin.connectors.change_failed"), body: err.message, technicalDetail: err.technicalDetail });
 }
 
 function connectionSummary(grant) {
@@ -1787,7 +1798,7 @@ $("#workspace-connector-form").addEventListener("submit", async (event) => {
     });
     event.target.reset();
     await refreshAdminMutation("workspace-connector:create");
-  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.create_failed"), body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.create_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 
 $("#workspace-connectors-body").addEventListener("click", async (event) => {
@@ -1809,7 +1820,7 @@ $("#workspace-connectors-body").addEventListener("click", async (event) => {
   try {
     await api("/api/workspace-connectors/" + encodeURIComponent(id), { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: current && current.revision || state.workspaceConnectorsRevision, confirm: true }) });
     await refreshAdminMutation("workspace-connector:delete");
-  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.disable_failed"), body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.disable_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 
 document.addEventListener("click", async (event) => {
@@ -1840,7 +1851,7 @@ document.addEventListener("click", async (event) => {
       const result = await api(prefix + encodeURIComponent(surfaceId) + "/credentials", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: expectedRevision, label, current_password: currentPassword }) });
       await showCredentialSecret(result, t("admin.credential.created"));
       await renderCredentialList(kind, surfaceId, list);
-    } catch (err) { await uiNotice({ title: t("admin.credential.create_failed"), body: err.message }); }
+    } catch (err) { await uiNotice({ title: t("admin.credential.create_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
     return;
   }
   const action = event.target.closest("button[data-credential-action]");
@@ -1946,7 +1957,7 @@ document.addEventListener("click", async (event) => {
       if (result.secret) await showCredentialSecret(result, t("admin.credential.secret.title"));
       await renderCredentialList(kind, action.dataset.surfaceId, credentialList);
     }
-  } catch (err) { await uiNotice({ title: t("admin.credential.action_failed"), body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.credential.action_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 
 const addForm = $("#add-form");
@@ -2108,7 +2119,7 @@ addForm.addEventListener("submit", async (event) => {
     actions.querySelector("[data-created-auth]").addEventListener("click", () => window.adminNavigate("#authentication/" + encodeURIComponent(createdName)));
     actions.querySelector("[data-created-another]").addEventListener("click", () => { actions.hidden = true; window.adminNavigate("#projects/create"); $("#add-form input[name=name]").focus(); });
   } catch (err) {
-    await uiNotice({ title: t("admin.projects.add_failed"), body: err.message });
+    await uiNotice({ title: t("admin.projects.add_failed"), body: err.message, technicalDetail: err.technicalDetail });
   } finally {
     button.removeAttribute("aria-busy");
     button.disabled = false;
@@ -2152,7 +2163,7 @@ $("#add-form").addEventListener("submit", async (e) => {
     uiNotice({ title: t("admin.projects.added"), body: t("admin.projects.connector_url_copied", { url }) });
     loadProjects();
   } catch (err) {
-    uiNotice({ title: t("admin.projects.add_failed"), body: err.message });
+    uiNotice({ title: t("admin.projects.add_failed"), body: err.message, technicalDetail: err.technicalDetail });
   } finally {
     btn.removeAttribute("aria-busy");
     btn.disabled = false;
@@ -2181,7 +2192,7 @@ $("#projects-body").addEventListener("click", async (e) => {
       await refreshAdminMutation("reindex");
       fillDocCount(name);
     } catch (err) {
-      uiNotice({ title: t("admin.projects.reindex_failed"), body: err.message });
+      uiNotice({ title: t("admin.projects.reindex_failed"), body: err.message, technicalDetail: err.technicalDetail });
     } finally {
       btn.removeAttribute("aria-busy");
     }
@@ -2198,7 +2209,7 @@ $("#projects-body").addEventListener("click", async (e) => {
       await api(`/api/projects/${encodeURIComponent(name)}?deleteData=${checked}`, { method: "DELETE" });
       await refreshAdminMutation("project:delete");
     } catch (err) {
-      uiNotice({ title: t("admin.projects.remove_failed"), body: err.message });
+      uiNotice({ title: t("admin.projects.remove_failed"), body: err.message, technicalDetail: err.technicalDetail });
     }
   }
 });
@@ -2322,10 +2333,10 @@ async function changeStaticKey(scope, name, action) {
     if (action === "generate") { authState.revision = result.revision; authState.global = result.authentication.global; authState.projects = result.authentication.projects; authState.warnings = result.authentication.warnings || {}; renderAuthentication(result.authentication); showAuthKey(result.generated_key, scope, name); }
     else if (action === "revoke") { authState.drafts.delete(name || "__global__"); await refreshAdminMutation("authentication:key-revoke"); }
   } catch (err) {
-    if (err.reason === "lockout_confirmation_required") { const warning = err.payload || {}; const confirm = await uiConfirm({ title: t("admin.authentication.lockout.title"), body: t("admin.authentication.lockout.revoke.body", { projects: (warning.affected_projects || []).join(", ") }), confirmLabel: t("admin.authentication.lockout.revoke"), danger: true }); if (confirm.ok) { try { const path = scope === "global" ? "/api/authentication/global/static-key/revoke" : `/api/authentication/projects/${encodeURIComponent(name)}/static-key/revoke`; await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision, confirm_lockout: true }) }); await refreshAdminMutation("authentication:key-revoke"); } catch (retryErr) { await uiNotice({ title: t("admin.authentication.key_revocation_failed"), body: retryErr.message }); } } }
+    if (err.reason === "lockout_confirmation_required") { const warning = err.payload || {}; const confirm = await uiConfirm({ title: t("admin.authentication.lockout.title"), body: t("admin.authentication.lockout.revoke.body", { projects: (warning.affected_projects || []).join(", ") }), confirmLabel: t("admin.authentication.lockout.revoke"), danger: true }); if (confirm.ok) { try { const path = scope === "global" ? "/api/authentication/global/static-key/revoke" : `/api/authentication/projects/${encodeURIComponent(name)}/static-key/revoke`; await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision, confirm_lockout: true }) }); await refreshAdminMutation("authentication:key-revoke"); } catch (retryErr) { await uiNotice({ title: t("admin.authentication.key_revocation_failed"), body: retryErr.message, technicalDetail: retryErr.technicalDetail }); } } }
     else if (err.reason === "revision_conflict" || err.status === 409) { await loadAuthentication(); await uiNotice({ title: t("admin.authentication.changed_elsewhere.title"), body: t("admin.authentication.changed_elsewhere.body") }); }
     else if (!err.status) { await loadAuthentication(); await uiNotice({ title: t("admin.authentication.key_uncertain.title"), body: t("admin.authentication.key_uncertain.body") }); }
-    else await uiNotice({ title: t("admin.authentication.key_change_failed"), body: err.message });
+    else await uiNotice({ title: t("admin.authentication.key_change_failed"), body: err.message, technicalDetail: err.technicalDetail });
   } finally { authState.busy.delete(key); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); }
 }
 
@@ -2339,7 +2350,7 @@ async function saveAuthentication(scope, name = null) {
     if (preview.would_lock_out) { const result = await uiConfirm({ title: t("admin.authentication.lockout.title"), body: t("admin.authentication.lockout.save.body", { projects: (preview.affected_projects || []).join(", ") }), confirmLabel: t("admin.authentication.lockout.save"), danger: true }); if (!result.ok) return; payload.confirm_lockout = true; }
     const path = isGlobal ? "/api/authentication/global" : `/api/authentication/projects/${encodeURIComponent(name)}`;
     await api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); authState.drafts.delete(name || "__global__"); await refreshAdminMutation("authentication:save");
-  } catch (err) { if (err.reason === "revision_conflict" || err.status === 409) { authState.drafts.delete(name || "__global__"); await loadAuthentication(); } await uiNotice({ title: t("admin.authentication.policy_change_failed"), body: err.message }); }
+  } catch (err) { if (err.reason === "revision_conflict" || err.status === 409) { authState.drafts.delete(name || "__global__"); await loadAuthentication(); } await uiNotice({ title: t("admin.authentication.policy_change_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 }
 
 $("#authentication-card").addEventListener("toggle", (event) => { const details = event.target.closest("details[data-auth-project]"); if (details) { if (details.open) authState.expanded.add(details.dataset.authProject); else authState.expanded.delete(details.dataset.authProject); } }, true);
@@ -2400,7 +2411,7 @@ $("#workspaces-body").addEventListener("click", async (event) => {
         workspace: result && (result.workspace || result.metadata) || null,
         runtime: result && result.runtime || null,
       }, null, 2) });
-    } catch (err) { await uiNotice({ title: t("admin.workspace.diagnostics.failed"), body: err.message }); }
+    } catch (err) { await uiNotice({ title: t("admin.workspace.diagnostics.failed"), body: err.message, technicalDetail: err.technicalDetail }); }
     return;
   }
   if (action === "remove") {
@@ -2431,7 +2442,7 @@ $("#workspaces-body").addEventListener("click", async (event) => {
   try {
     await api(`/api/workspaces/${encodeURIComponent(row.dataset.workspaceId)}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: record.revision, confirm: action === "remove", idempotency_token: crypto.randomUUID() }) });
     await refreshAdminMutation(`workspace:${action}`);
-  } catch (err) { await uiNotice({ title: t("admin.workspace.operation_failed"), body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.operation_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 $("#workspace-bulk-remove").addEventListener("click", async () => {
   const records = state.workspaces.filter((item) => document.querySelector(`[data-workspace-id="${CSS.escape(String(item.workspace_id || item.id))}"] [data-workspace-select]:checked`));
@@ -2440,7 +2451,7 @@ $("#workspace-bulk-remove").addEventListener("click", async () => {
   let preview;
   try {
     preview = await api("/api/workspaces/bulk-delete/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", workspace_ids: records.map((item) => String(item.workspace_id || item.id)), expected_revisions: expectedRevisions }) });
-  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.preview_failed"), body: err.message }); return; }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.preview_failed"), body: err.message, technicalDetail: err.technicalDetail }); return; }
   const previewTargets = Array.isArray(preview && preview.targets) ? preview.targets : null;
   const selectedIds = records.map((item) => String(item.workspace_id || item.id));
   const targetIds = previewTargets && previewTargets.map((item) => item && String(item.workspace_id || item.id || ""));
@@ -2469,7 +2480,7 @@ $("#workspace-bulk-remove").addEventListener("click", async () => {
   try {
     await api("/api/workspaces/bulk-delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", workspace_ids: targetIds, expected_revisions: expectedRevisions, preview_token: preview.preview_token, confirm: true, idempotency_token: crypto.randomUUID() }) });
     await refreshAdminMutation("workspace:remove");
-  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.remove_failed"), body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.remove_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 $("#workspace-network-add-rule").addEventListener("click", () => {
   state.workspaceNetworkEditorRules.push({ domain: "", ports: [80, 443], suffix: false });
@@ -2501,11 +2512,11 @@ $("#workspace-settings-form").addEventListener("submit", async (event) => {
   let networkRules;
   try {
     networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules());
-  } catch (err) { await uiNotice({ title: t("admin.workspace.network.invalid_rules"), body: err.message }); return; }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.network.invalid_rules"), body: err.message, technicalDetail: err.technicalDetail }); return; }
   const body = { expected_revision: settings.revision || 0, retention_days: Number($("#workspace-retention-days").value), quota_bytes: Number($("#workspace-quota-bytes").value), idle_stop_seconds: Number($("#workspace-idle-stop").value), host_reserve_bytes: Number($("#workspace-host-reserve").value), warning_threshold_percent: Number($("#workspace-warning-threshold").value), max_running_workspaces: Number($("#workspace-max-running").value), network_mode: networkMode, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked, idempotency_token: crypto.randomUUID() };
   const key = $("#workspace-brave-key").value; if (key) body.brave_api_key = key;
   try { await api("/api/workspace-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); $("#workspace-brave-key").value = ""; $("#workspace-settings-confirm").checked = false; await refreshAdminMutation("workspace:settings"); }
-  catch (err) { await uiNotice({ title: t("admin.workspace.policy_save_failed"), body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.workspace.policy_save_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 $("#public-url-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2519,16 +2530,16 @@ $("#public-url-form").addEventListener("submit", async (event) => {
     });
     await refreshAdminMutation("public-base-url:update");
   } catch (err) {
-    await uiNotice({ title: t("admin.workspace.public_url_save_failed"), body: err.message });
+    await uiNotice({ title: t("admin.workspace.public_url_save_failed"), body: err.message, technicalDetail: err.technicalDetail });
   } finally {
     if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
   }
 });
 $("#workspace-settings-preview").addEventListener("click", async () => {
   try { const networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules()); const result = await api("/api/workspace-settings/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: (state.workspaceSettings || {}).revision || 0, network_mode: $("#workspace-network-mode").value, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked }) }); await uiNotice({ title: t("admin.workspace.policy_preview"), body: JSON.stringify(result.preview || {}, null, 2) }); }
-  catch (err) { await uiNotice({ title: t("admin.workspace.policy_preview_failed"), body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.workspace.policy_preview_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
-$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: t("admin.workspace.brave_test"), body: `${t(result.ok ? "admin.status.success" : "admin.status.unavailable")}\n\n${t("admin.technical_detail")}: ${result.category}` }); } catch (err) { await uiNotice({ title: t("admin.workspace.brave_test_failed"), body: err.message }); } });
+$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: t("admin.workspace.brave_test"), body: `${t(result.ok ? "admin.status.success" : "admin.status.unavailable")}\n\n${t("admin.technical_detail")}: ${result.category}` }); } catch (err) { await uiNotice({ title: t("admin.workspace.brave_test_failed"), body: err.message, technicalDetail: err.technicalDetail }); } });
 $("#gpu-knowledge-cards").addEventListener("change", (event) => { $("#gpu-knowledge-card-ids-row").hidden = event.target.value !== "specific"; });
 $("#gpu-ocr-device").addEventListener("change", (event) => { $("#gpu-ocr-card-ids-row").hidden = event.target.value !== "gpu"; });
 $("#gpu-acceleration-form").addEventListener("submit", async (event) => {
@@ -2540,16 +2551,16 @@ $("#gpu-acceleration-form").addEventListener("submit", async (event) => {
   const ocrIds = ocrDevice === "gpu" ? $("#gpu-ocr-card-ids").value.split(/\s+/).map((item) => item.trim()).filter(Boolean) : [];
   const payload = { expected_revision: Number(current.revision || 0), idempotency_token: crypto.randomUUID(), knowledge: { gpu_enabled: $("#gpu-knowledge-enabled").checked, gpu_device_ids: knowledgeIds }, ocr: { device: ocrDevice, gpu_device_ids: ocrIds } };
   try { await api("/api/settings/gpu-acceleration", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); await refreshAdminMutation("gpu-acceleration:save"); }
-  catch (err) { await uiNotice({ title: t("admin.gpu.save_failed"), body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.gpu.save_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 $("#gpu-verify").addEventListener("click", async () => {
   try { const result = await api("/api/settings/gpu-acceleration/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const stateId = GPU_VERIFY_STATE_IDS[result.state]; const stateLabel = stateId ? t(stateId) : `${t("admin.technical_detail")}: ${result.state || "unknown"}`; await uiNotice({ title: t("admin.gpu.verification"), body: t("admin.gpu.verification_results", { state: stateLabel, count: Array.isArray(result.cards) ? result.cards.length : 0 }) }); await refreshAdminMutation("gpu-acceleration:verify"); }
-  catch (err) { await uiNotice({ title: t("admin.gpu.verification_failed"), body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.gpu.verification_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
 $("#authentication-search").addEventListener("input", (event) => { authState.search = event.target.value; renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
 $("#authentication-expand-all").addEventListener("click", () => { authState.projects.forEach((p) => authState.expanded.add(p.name)); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
 $("#authentication-collapse-all").addEventListener("click", async () => { const dirty = [...authState.drafts.keys()].filter((n) => n !== "__global__"); if (dirty.length || authDirty()) { const result = await uiConfirm({ title: t("admin.authentication.discard.title"), body: t("admin.authentication.discard.collapse_body"), confirmLabel: t("admin.authentication.discard.confirm"), danger: true }); if (!result.ok) return; authState.drafts.clear(); } authState.expanded.clear(); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
-$("#authentication-repair").addEventListener("click", async (event) => { const button = event.target.closest("[data-auth-repair]"); if (!button) return; try { await api(`/api/authentication/orphans/${encodeURIComponent(button.dataset.authRepair)}/repair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision }) }); await refreshAdminMutation("authentication:orphan-repair"); } catch (err) { await uiNotice({ title: t("admin.authentication.repair_failed"), body: err.message }); } });
+$("#authentication-repair").addEventListener("click", async (event) => { const button = event.target.closest("[data-auth-repair]"); if (!button) return; try { await api(`/api/authentication/orphans/${encodeURIComponent(button.dataset.authRepair)}/repair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision }) }); await refreshAdminMutation("authentication:orphan-repair"); } catch (err) { await uiNotice({ title: t("admin.authentication.repair_failed"), body: err.message, technicalDetail: err.technicalDetail }); } });
 $("#copy-auth-key").addEventListener("click", async (event) => { const ok = await copyText(authState.oneTimeKey, event.target); $("#key-dialog-status").textContent = t(ok ? "admin.action.copied" : "admin.action.copy_failed"); });
 $("#auth-key-done").addEventListener("click", () => $("#key-dialog").close());
 $("#key-dialog").addEventListener("close", () => { clearAuthKey(); if (authState.invokingControl) { authState.invokingControl.focus(); authState.invokingControl = null; } });

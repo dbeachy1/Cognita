@@ -1296,6 +1296,248 @@ french.deleteButton=Supprimer
 german.deleteButton=Löschen
 italian.deleteButton=Elimina
 brazilianportuguese.deleteButton=Excluir
+english.progressBytes=%1 transferred
+spanish.progressBytes=%1 transferidos
+french.progressBytes=%1 transférés
+german.progressBytes=%1 übertragen
+italian.progressBytes=%1 trasferiti
+brazilianportuguese.progressBytes=%1 transferidos
+english.failureNoHelperResult=The Cognita helper stopped without a result (exit code %1).
+spanish.failureNoHelperResult=El asistente de Cognita se detuvo sin devolver un resultado (código de salida %1).
+french.failureNoHelperResult=L’assistant Cognita s’est arrêté sans résultat (code de sortie %1).
+german.failureNoHelperResult=Der Cognita-Helfer wurde ohne Ergebnis beendet (Exitcode %1).
+italian.failureNoHelperResult=L’assistente di Cognita si è fermato senza un risultato (codice di uscita %1).
+brazilianportuguese.failureNoHelperResult=O auxiliar do Cognita parou sem apresentar um resultado (código de saída %1).
+english.failureNoHelperReason=The Cognita helper reported a failure without saying what went wrong (exit code %1).
+spanish.failureNoHelperReason=El asistente de Cognita indicó un error, pero no explicó qué ocurrió (código de salida %1).
+french.failureNoHelperReason=L’assistant Cognita a signalé un échec sans en préciser la cause (code de sortie %1).
+german.failureNoHelperReason=Der Cognita-Helfer meldete einen Fehler, ohne die Ursache anzugeben (Exitcode %1).
+italian.failureNoHelperReason=L’assistente di Cognita ha segnalato un errore senza indicarne la causa (codice di uscita %1).
+brazilianportuguese.failureNoHelperReason=O auxiliar do Cognita informou uma falha sem explicar o que aconteceu (código de saída %1).
+english.failurePowerShellStart=Windows PowerShell could not be started (%1).
+spanish.failurePowerShellStart=No se pudo iniciar Windows PowerShell (%1).
+french.failurePowerShellStart=Impossible de démarrer Windows PowerShell (%1).
+german.failurePowerShellStart=Windows PowerShell konnte nicht gestartet werden (%1).
+italian.failurePowerShellStart=Impossibile avviare Windows PowerShell (%1).
+brazilianportuguese.failurePowerShellStart=Não foi possível iniciar o Windows PowerShell (%1).
+english.failureHelperException=Running the Cognita helper failed: %1
+spanish.failureHelperException=Se produjo un error al ejecutar el asistente de Cognita: %1
+french.failureHelperException=Une erreur s’est produite lors de l’exécution de l’assistant Cognita : %1
+german.failureHelperException=Beim Ausführen des Cognita-Helfers ist ein Fehler aufgetreten: %1
+italian.failureHelperException=Errore durante l’esecuzione dell’assistente di Cognita: %1
+brazilianportuguese.failureHelperException=Ocorreu um erro ao executar o auxiliar do Cognita: %1
+
+; Windows Setup progress and failure text. Helper protocol values remain English.
+english.busySavingDiagnostics=Saving diagnostics
+spanish.busySavingDiagnostics=Guardando los diagnósticos
+french.busySavingDiagnostics=Enregistrement des diagnostics
+german.busySavingDiagnostics=Diagnosedaten werden gespeichert
+italian.busySavingDiagnostics=Salvataggio dei dati diagnostici
+brazilianportuguese.busySavingDiagnostics=Salvando os diagnósticos
+english.busyCheckingFolder=Checking the data folder
+spanish.busyCheckingFolder=Comprobando la carpeta de datos
+french.busyCheckingFolder=Vérification du dossier de données
+german.busyCheckingFolder=Datenordner wird überprüft
+italian.busyCheckingFolder=Verifica della cartella dei dati
+brazilianportuguese.busyCheckingFolder=Verificando a pasta de dados
+english.busyCheckingThisPc=Checking this PC
+spanish.busyCheckingThisPc=Comprobando este equipo
+french.busyCheckingThisPc=Vérification de ce PC
+german.busyCheckingThisPc=Dieser PC wird überprüft
+italian.busyCheckingThisPc=Verifica di questo PC
+brazilianportuguese.busyCheckingThisPc=Verificando este computador
+english.busyTurningOnWsl=Turning on WSL
+spanish.busyTurningOnWsl=Activando WSL
+french.busyTurningOnWsl=Activation de WSL
+german.busyTurningOnWsl=WSL wird aktiviert
+italian.busyTurningOnWsl=Attivazione di WSL
+brazilianportuguese.busyTurningOnWsl=Ativando o WSL
+english.busyRestartingWindows=Restarting Windows
+spanish.busyRestartingWindows=Reiniciando Windows
+french.busyRestartingWindows=Redémarrage de Windows
+german.busyRestartingWindows=Windows wird neu gestartet
+italian.busyRestartingWindows=Riavvio di Windows
+brazilianportuguese.busyRestartingWindows=Reiniciando o Windows
+english.busySavingPlace=Saving your place
+spanish.busySavingPlace=Guardando el punto de continuación
+french.busySavingPlace=Enregistrement du point de reprise
+german.busySavingPlace=Fortsetzungspunkt wird gespeichert
+italian.busySavingPlace=Salvataggio del punto di ripresa
+brazilianportuguese.busySavingPlace=Salvando o ponto de retomada
+english.busyCheckingPorts=Checking ports and disk space
+spanish.busyCheckingPorts=Comprobando los puertos y el espacio en disco
+french.busyCheckingPorts=Vérification des ports et de l’espace disque
+german.busyCheckingPorts=Ports und Speicherplatz werden überprüft
+italian.busyCheckingPorts=Verifica delle porte e dello spazio su disco
+brazilianportuguese.busyCheckingPorts=Verificando as portas e o espaço em disco
+english.wslPageDescription=One-time Windows setup before Cognita can install.
+spanish.wslPageDescription=Configuración única de Windows antes de instalar Cognita.
+french.wslPageDescription=Configuration unique de Windows avant l’installation de Cognita.
+german.wslPageDescription=Einmalige Windows-Einrichtung, bevor Cognita installiert werden kann.
+italian.wslPageDescription=Configurazione iniziale di Windows prima di installare Cognita.
+brazilianportuguese.wslPageDescription=Configuração única do Windows antes de instalar o Cognita.
+english.progressStoppingTests=Stopping the self-tests...
+spanish.progressStoppingTests=Deteniendo las pruebas automáticas...
+french.progressStoppingTests=Arrêt des autotests...
+german.progressStoppingTests=Selbsttests werden angehalten...
+italian.progressStoppingTests=Interruzione dei test automatici...
+brazilianportuguese.progressStoppingTests=Interrompendo os autotestes...
+english.progressBytesOf=%1 of %2
+spanish.progressBytesOf=%1 de %2
+french.progressBytesOf=%1 sur %2
+german.progressBytesOf=%1 von %2
+italian.progressBytesOf=%1 di %2
+brazilianportuguese.progressBytesOf=%1 de %2
+english.progressElapsed=Elapsed %1
+spanish.progressElapsed=Tiempo transcurrido: %1
+french.progressElapsed=Temps écoulé : %1
+german.progressElapsed=Verstrichene Zeit: %1
+italian.progressElapsed=Tempo trascorso: %1
+brazilianportuguese.progressElapsed=Tempo decorrido: %1
+english.remoteProgressCaption=Setting up remote access
+spanish.remoteProgressCaption=Configurando el acceso remoto
+french.remoteProgressCaption=Configuration de l’accès à distance
+german.remoteProgressCaption=Fernzugriff wird eingerichtet
+italian.remoteProgressCaption=Configurazione dell’accesso remoto
+brazilianportuguese.remoteProgressCaption=Configurando o acesso remoto
+english.remoteProgressDescription=Setup is setting up remote access. Keep this window open.
+spanish.remoteProgressDescription=La instalación está configurando el acceso remoto. Mantenga esta ventana abierta.
+french.remoteProgressDescription=Le programme configure l’accès à distance. Gardez cette fenêtre ouverte.
+german.remoteProgressDescription=Das Setup richtet den Fernzugriff ein. Lassen Sie dieses Fenster geöffnet.
+italian.remoteProgressDescription=L’installazione sta configurando l’accesso remoto. Lascia aperta questa finestra.
+brazilianportuguese.remoteProgressDescription=A instalação está configurando o acesso remoto. Mantenha esta janela aberta.
+english.remoteProgressPort=Setting up remote access on port %1
+spanish.remoteProgressPort=Configurando el acceso remoto en el puerto %1
+french.remoteProgressPort=Configuration de l’accès à distance sur le port %1
+german.remoteProgressPort=Fernzugriff über Port %1 wird eingerichtet
+italian.remoteProgressPort=Configurazione dell’accesso remoto sulla porta %1
+brazilianportuguese.remoteProgressPort=Configurando o acesso remoto na porta %1
+english.installDescription=This can take several minutes; keep this window open.
+spanish.installDescription=Esto puede tardar varios minutos; mantenga esta ventana abierta.
+french.installDescription=Cela peut prendre plusieurs minutes ; gardez cette fenêtre ouverte.
+german.installDescription=Dies kann einige Minuten dauern. Lassen Sie dieses Fenster geöffnet.
+italian.installDescription=Potrebbero volerci alcuni minuti; lascia aperta questa finestra.
+brazilianportuguese.installDescription=Isso pode levar alguns minutos; mantenha esta janela aberta.
+english.progressPreparing=Preparing
+spanish.progressPreparing=Preparando
+french.progressPreparing=Préparation
+german.progressPreparing=Vorbereitung
+italian.progressPreparing=Preparazione
+brazilianportuguese.progressPreparing=Preparando
+english.progressUnpacking=Unpacking. This takes a moment.
+spanish.progressUnpacking=Descomprimiendo. Esto tardará un momento.
+french.progressUnpacking=Décompression en cours. Cela prend un instant.
+german.progressUnpacking=Dateien werden entpackt. Dies dauert einen Moment.
+italian.progressUnpacking=Estrazione in corso. Ci vorrà un momento.
+brazilianportuguese.progressUnpacking=Descompactando. Isso levará um instante.
+english.progressPreparingUpdate=Preparing the update
+spanish.progressPreparingUpdate=Preparando la actualización
+french.progressPreparingUpdate=Préparation de la mise à jour
+german.progressPreparingUpdate=Update wird vorbereitet
+italian.progressPreparingUpdate=Preparazione dell’aggiornamento
+brazilianportuguese.progressPreparingUpdate=Preparando a atualização
+english.progressPreparingLinux=Preparing the Linux image
+spanish.progressPreparingLinux=Preparando la imagen de Linux
+french.progressPreparingLinux=Préparation de l’image Linux
+german.progressPreparingLinux=Linux-Image wird vorbereitet
+italian.progressPreparingLinux=Preparazione dell’immagine Linux
+brazilianportuguese.progressPreparingLinux=Preparando a imagem do Linux
+english.progressPreparingFiles=Preparing the Cognita files
+spanish.progressPreparingFiles=Preparando los archivos de Cognita
+french.progressPreparingFiles=Préparation des fichiers Cognita
+german.progressPreparingFiles=Cognita-Dateien werden vorbereitet
+italian.progressPreparingFiles=Preparazione dei file di Cognita
+brazilianportuguese.progressPreparingFiles=Preparando os arquivos do Cognita
+english.failurePasswordHandoff=Setup could not hand the Admin password to its helper: the Setup helper did not start in time.
+spanish.failurePasswordHandoff=La instalación no pudo entregar la contraseña de administrador a su asistente: el asistente no se inició a tiempo.
+french.failurePasswordHandoff=Le programme n’a pas pu transmettre le mot de passe Admin à son assistant, qui n’a pas démarré à temps.
+german.failurePasswordHandoff=Das Setup konnte das Admin-Kennwort nicht an den Helfer übergeben: Der Setup-Helfer startete nicht rechtzeitig.
+italian.failurePasswordHandoff=L’installazione non è riuscita a passare la password Admin all’assistente: l’assistente non si è avviato in tempo.
+brazilianportuguese.failurePasswordHandoff=A instalação não conseguiu passar a senha Admin ao auxiliar: ele não foi iniciado a tempo.
+english.failurePasswordFix=Run Setup again. If it keeps happening, choose Save diagnostics and attach the file to a new issue at %1
+spanish.failurePasswordFix=Vuelva a ejecutar la instalación. Si vuelve a ocurrir, elija Guardar diagnósticos y adjunte el archivo a un nuevo informe en %1
+french.failurePasswordFix=Relancez le programme. Si le problème persiste, choisissez Enregistrer les diagnostics et joignez le fichier à un nouveau signalement sur %1
+german.failurePasswordFix=Führen Sie das Setup erneut aus. Falls das Problem weiterhin auftritt, wählen Sie Diagnosedaten speichern und fügen Sie die Datei einem neuen Bericht unter %1 bei.
+italian.failurePasswordFix=Esegui di nuovo l’installazione. Se il problema continua, scegli Salva dati diagnostici e allega il file a una nuova segnalazione su %1
+brazilianportuguese.failurePasswordFix=Execute a instalação novamente. Se o problema continuar, escolha Salvar diagnósticos e anexe o arquivo a um novo relato em %1
+english.failureUnexpected=Setup stopped unexpectedly: %1
+spanish.failureUnexpected=La instalación se detuvo inesperadamente: %1
+french.failureUnexpected=Le programme s’est arrêté de manière inattendue : %1
+german.failureUnexpected=Das Setup wurde unerwartet beendet: %1
+italian.failureUnexpected=L’installazione si è interrotta inaspettatamente: %1
+brazilianportuguese.failureUnexpected=A instalação parou inesperadamente: %1
+english.failureUnexpectedFix=Choose Save diagnostics. To get help, attach the file to a new issue at %1
+spanish.failureUnexpectedFix=Elija Guardar diagnósticos. Para obtener ayuda, adjunte el archivo a un nuevo informe en %1
+french.failureUnexpectedFix=Choisissez Enregistrer les diagnostics. Pour obtenir de l’aide, joignez le fichier à un nouveau signalement sur %1
+german.failureUnexpectedFix=Wählen Sie Diagnosedaten speichern. Wenn Sie Hilfe benötigen, fügen Sie die Datei einem neuen Bericht unter %1 bei.
+italian.failureUnexpectedFix=Scegli Salva dati diagnostici. Per ricevere assistenza, allega il file a una nuova segnalazione su %1
+brazilianportuguese.failureUnexpectedFix=Escolha Salvar diagnósticos. Para obter ajuda, anexe o arquivo a um novo relato em %1
+english.failedUpdateHeading=Cognita was not updated
+spanish.failedUpdateHeading=Cognita no se actualizó
+french.failedUpdateHeading=Cognita n’a pas été mis à jour
+german.failedUpdateHeading=Cognita wurde nicht aktualisiert
+italian.failedUpdateHeading=Cognita non è stato aggiornato
+brazilianportuguese.failedUpdateHeading=O Cognita não foi atualizado
+english.failedRepairHeading=Cognita was not repaired
+spanish.failedRepairHeading=Cognita no se reparó
+french.failedRepairHeading=Cognita n’a pas été réparé
+german.failedRepairHeading=Cognita wurde nicht repariert
+italian.failedRepairHeading=Cognita non è stato riparato
+brazilianportuguese.failedRepairHeading=O Cognita não foi reparado
+english.failedReinstallHeading=Cognita was not reinstalled
+spanish.failedReinstallHeading=Cognita no se reinstaló
+french.failedReinstallHeading=Cognita n’a pas été réinstallé
+german.failedReinstallHeading=Cognita wurde nicht neu installiert
+italian.failedReinstallHeading=Cognita non è stato reinstallato
+brazilianportuguese.failedReinstallHeading=O Cognita não foi reinstalado
+english.failedInstallHeading=Cognita was not installed
+spanish.failedInstallHeading=Cognita no se instaló
+french.failedInstallHeading=Cognita n’a pas été installé
+german.failedInstallHeading=Cognita wurde nicht installiert
+italian.failedInstallHeading=Cognita non è stato installato
+brazilianportuguese.failedInstallHeading=O Cognita não foi instalado
+english.failedExistingInstallRemains=The Cognita you had is still there.
+spanish.failedExistingInstallRemains=La instalación de Cognita que ya tenía sigue ahí.
+french.failedExistingInstallRemains=Votre installation précédente de Cognita est toujours présente.
+german.failedExistingInstallRemains=Die bisherige Cognita-Installation ist weiterhin vorhanden.
+italian.failedExistingInstallRemains=L’installazione di Cognita esistente è ancora presente.
+brazilianportuguese.failedExistingInstallRemains=A instalação anterior do Cognita continua disponível.
+english.progressInstalling=Installing Cognita
+spanish.progressInstalling=Instalando Cognita
+french.progressInstalling=Installation de Cognita
+german.progressInstalling=Cognita wird installiert
+italian.progressInstalling=Installazione di Cognita
+brazilianportuguese.progressInstalling=Instalando o Cognita
+english.progressUpdating=Updating Cognita
+spanish.progressUpdating=Actualizando Cognita
+french.progressUpdating=Mise à jour de Cognita
+german.progressUpdating=Cognita wird aktualisiert
+italian.progressUpdating=Aggiornamento di Cognita
+brazilianportuguese.progressUpdating=Atualizando o Cognita
+english.progressRepairing=Repairing Cognita
+spanish.progressRepairing=Reparando Cognita
+french.progressRepairing=Réparation de Cognita
+german.progressRepairing=Cognita wird repariert
+italian.progressRepairing=Riparazione di Cognita
+brazilianportuguese.progressRepairing=Reparando o Cognita
+english.progressReinstalling=Reinstalling Cognita
+spanish.progressReinstalling=Reinstalando Cognita
+french.progressReinstalling=Réinstallation de Cognita
+german.progressReinstalling=Cognita wird neu installiert
+italian.progressReinstalling=Reinstallazione di Cognita
+brazilianportuguese.progressReinstalling=Reinstalando o Cognita
+english.finishedAcceleration=Acceleration:  %1
+spanish.finishedAcceleration=Aceleración:  %1
+french.finishedAcceleration=Accélération :  %1
+german.finishedAcceleration=Beschleunigung:  %1
+italian.finishedAcceleration=Accelerazione:  %1
+brazilianportuguese.finishedAcceleration=Aceleração:  %1
+english.warningAccelerationFix=To try the GPU again, run Setup again and choose NVIDIA.
+spanish.warningAccelerationFix=Para volver a probar la GPU, ejecute la instalación de nuevo y elija NVIDIA.
+french.warningAccelerationFix=Pour réessayer le GPU, relancez le programme et choisissez NVIDIA.
+german.warningAccelerationFix=Um die GPU erneut zu testen, führen Sie das Setup erneut aus und wählen Sie NVIDIA.
+italian.warningAccelerationFix=Per provare di nuovo la GPU, esegui l’installazione e scegli NVIDIA.
+brazilianportuguese.warningAccelerationFix=Para testar a GPU novamente, execute a instalação outra vez e escolha NVIDIA.
 
 [Files]
 ; Order matters little here (SolidCompression=no). Temporary copies first: the helper must run
@@ -1744,7 +1986,7 @@ begin
   begin
     SkipPressed := True;
     Log('self-test skip requested: wrote ' + SkipRequestFile);
-    ProgressPage.SetText(CurTitle, 'Stopping the self-tests...');
+    ProgressPage.SetText(CurTitle, CustomMessage('progressStoppingTests'));
   end
   else
   begin
@@ -1763,14 +2005,15 @@ begin
   if Total > 0 then
   begin
     if Line2 <> '' then
-      Line2 := FormatBytes(Done) + ' of ' + FormatBytes(Total) + '  -  ' + Line2
+      Line2 := FmtMessage(CustomMessage('progressBytesOf'), [FormatBytes(Done), FormatBytes(Total)]) + '  -  ' + Line2
     else
-      Line2 := FormatBytes(Done) + ' of ' + FormatBytes(Total);
+      Line2 := FmtMessage(CustomMessage('progressBytes'), [FormatBytes(Done)]);
   end;
   { A link in the message (Tailscale sign-in, section 9 step 3) becomes clickable while it is the
     latest message; the helper repeats it in every heartbeat (design 18.4), so it does not vanish. }
   LinkUrl := UrlInText(Msg);
-  ProgressPage.SetText(Title, Line2 + '     Elapsed ' + FormatElapsed(Int64(GetTickCount - RunStartTick)));
+  ProgressPage.SetText(Title, Line2 + '     ' +
+    FmtMessage(CustomMessage('progressElapsed'), [FormatElapsed(Int64(GetTickCount - RunStartTick))]));
   { A stage with a byte count fills the bar; any other stage (start, self-test, the Linux side's own
     steps) shows a moving marquee, never a still empty bar: a bar that does not move for three minutes
     makes the user think Setup is stuck (2026-09-29). }
@@ -1958,13 +2201,12 @@ begin
     if FailMessage = '' then
     begin
       if LastResult = '' then
-        FailMessage := 'The Cognita helper stopped without a result (exit code ' + IntToStr(HelperExit) + ').'
+        FailMessage := FmtMessage(CustomMessage('failureNoHelperResult'), [IntToStr(HelperExit)])
       else
-        FailMessage := 'The Cognita helper reported a failure without saying what went wrong (exit code ' +
-          IntToStr(HelperExit) + ').';
+        FailMessage := FmtMessage(CustomMessage('failureNoHelperReason'), [IntToStr(HelperExit)]);
     end;
     if FailFix = '' then
-      FailFix := 'Choose Save diagnostics. To get help, attach the file to a new issue at {#SupportUrl}';
+      FailFix := FmtMessage(CustomMessage('failureUnexpectedFix'), ['{#SupportUrl}']);
     FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
   end;
 end;
@@ -1989,11 +2231,11 @@ begin
     if not ExecAndLogOutput(PsExe, Params, '', SW_HIDE, ewWaitUntilTerminated, Code, @OnHelperLine) then
     begin
       Log('helper: powershell could not be started: ' + SysErrorMessage(Code));
-      FailMessage := 'Windows PowerShell could not be started (' + SysErrorMessage(Code) + ').';
+      FailMessage := FmtMessage(CustomMessage('failurePowerShellStart'), [SysErrorMessage(Code)]);
     end;
   except
     Log('helper: exception while running ' + Verb + ': ' + GetExceptionMessage);
-    FailMessage := 'Running the Cognita helper failed: ' + GetExceptionMessage;
+    FailMessage := FmtMessage(CustomMessage('failureHelperException'), [GetExceptionMessage]);
   end;
   HelperExit := Code;
   JudgeResult;
@@ -2354,7 +2596,7 @@ var
   Zip: String;
 begin
   Log('diagnostics: requested by the user (Finished page or a failure dialog)');
-  if RunHelperBusy('Saving diagnostics', 'diagnostics', '--setup-log ' + QuoteArg(ExpandConstant('{log}'))) then
+  if RunHelperBusy(CustomMessage('busySavingDiagnostics'), 'diagnostics', '--setup-log ' + QuoteArg(ExpandConstant('{log}'))) then
   begin
     { The helper has already opened Explorer with the file selected. Nothing is sent: the user
       decides whether to attach it anywhere, so the box says where they can and offers the page. }
@@ -2382,7 +2624,7 @@ begin
   KCount := FailCount;
   Result := '';
   Log('diagnostics: saving automatically after a failure (' + Why + ')');
-  if RunHelperBusy('Saving diagnostics', 'diagnostics', '--no-open --setup-log ' + QuoteArg(ExpandConstant('{log}'))) then
+  if RunHelperBusy(CustomMessage('busySavingDiagnostics'), 'diagnostics', '--no-open --setup-log ' + QuoteArg(ExpandConstant('{log}'))) then
     Result := ResultValue(LastResult, 'zip');
   Log('diagnostics: automatic save zip=[' + Result + ']');
   FailText := KText; FailStage := KStage; FailMessage := KMsg; FailFix := KFix; LastResult := KResult;
@@ -2556,7 +2798,7 @@ begin
     Result := CustomMessage('dataOneDrive')
   else if DirExists(Dir) and (not DirIsEmpty(Dir)) then
     Result := CustomMessage('dataFolderNotEmpty')
-  else if not RunHelperBusy('Checking the data folder', 'roots', '--validate ' + QuoteArg(PageFolder.Values[0]) +
+  else if not RunHelperBusy(CustomMessage('busyCheckingFolder'), 'roots', '--validate ' + QuoteArg(PageFolder.Values[0]) +
     ' --data-dir ' + QuoteArg(Dir)) then
   begin
     Log('advanced: roots --validate failed internally for data_dir=' + Dir);
@@ -2795,8 +3037,8 @@ begin
     Exit;
   { Design 19.4 item 23: the caption of this step is its own (the page was still saying "Installing
     Cognita" while Tailscale was being set up). }
-  ProgressPage.Caption := 'Setting up remote access';
-  ProgressPage.Description := 'Setup is setting up remote access. Keep this window open.';
+  ProgressPage.Caption := CustomMessage('remoteProgressCaption');
+  ProgressPage.Description := CustomMessage('remoteProgressDescription');
   ProgressPage.SetText(Title, '');
   ProgressLinkEdit.Visible := False;
   ProgressCopyButton.Visible := False;
@@ -2870,7 +3112,7 @@ begin
   if RemoteFunnelPort <> '' then
     Extra := ' --funnel-port ' + RemoteFunnelPort;
   Log('remote access: starting; funnel_port=' + RemoteFunnelPort + ' stage=' + IntToStr(RemoteStage));
-  Ok := RemoteAttempt(Extra, 'Setting up remote access', Handed);
+  Ok := RemoteAttempt(Extra, CustomMessage('remoteProgressCaption'), Handed);
   if not Handed then
   begin
     RemoteNote := CustomMessage('remoteUnavailable');
@@ -2890,7 +3132,8 @@ begin
       mbConfirmation, MB_YESNO) = IDYES) then
     begin
       RemoteFunnelPort := AltPort;
-      Ok := RemoteAttempt(' --funnel-port ' + AltPort, 'Setting up remote access on port ' + AltPort, Handed);
+      Ok := RemoteAttempt(' --funnel-port ' + AltPort,
+        FmtMessage(CustomMessage('remoteProgressPort'), [AltPort]), Handed);
       if not Handed then
       begin
         RemoteNote := CustomMessage('remoteUnavailable');
@@ -3004,7 +3247,7 @@ begin
 
   { WSL (shown only when the preflight check says WSL is missing or too old) }
   PageWsl := CreateCustomPage(wpWelcome, CustomMessage('wslTitle'),
-    'One-time Windows setup before Cognita can install.');
+    CustomMessage('wslPageDescription'));
   WslLabel := TNewStaticText.Create(PageWsl);
   WslLabel.Parent := PageWsl.Surface;
   WslLabel.Left := 0;
@@ -3064,8 +3307,7 @@ begin
     Inno places the fields below the caption's height at creation and never moves them, so a caption
     that later grows to two lines runs under the first field. }
   PageAdmin := CreateInputQueryPage(PageFolder.ID, CustomMessage('adminTitle'),
-    CustomMessage('adminDescription'),
-    'Enter your current Admin password once. To change it, run cognita password in a terminal.');
+    CustomMessage('adminDescription'), CustomMessage('verifyPasswordCaption'));
   Idx := PageAdmin.Add(CustomMessage('adminUser'), False);
   PageAdmin.Values[Idx] := 'admin';
   Idx := PageAdmin.Add(CustomMessage('newPassword'), True);
@@ -3923,7 +4165,7 @@ end;
 
 function CheckPreflight: Boolean;
 begin
-  Result := RunHelperBusy('Checking this PC', 'check', '--phase preflight');
+  Result := RunHelperBusy(CustomMessage('busyCheckingThisPc'), 'check', '--phase preflight');
   if not Result then
   begin
     ShowFailuresWithHelp(CustomMessage('failurePreflight'));
@@ -3964,7 +4206,7 @@ begin
   if WslPageStage = 0 then
   begin
     Log('wsl page: running wsl-install');
-    if RunHelperBusy('Turning on WSL', 'wsl-install', '') then
+    if RunHelperBusy(CustomMessage('busyTurningOnWsl'), 'wsl-install', '') then
     begin
       { Turned on and no restart needed: check again and carry on. }
       if CheckPreflight then
@@ -3999,7 +4241,7 @@ begin
     Log('wsl page: restart now chosen; setup pid=' + IntToStr(Integer(GetCurrentProcessId)));
     { Design 19.11 R1: the helper starts a detached waiter that restarts Windows once THIS process has
       exited (a running Setup would answer Windows' "may we shut down?" with No). Setup closes right below. }
-    if not RunHelperBusy('Restarting Windows', 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}')) +
+    if not RunHelperBusy(CustomMessage('busyRestartingWindows'), 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}')) +
       ' --now --after-pid ' + IntToStr(Integer(GetCurrentProcessId))) then
     begin
       ShowFailuresWithHelp(CustomMessage('failureRestart'));
@@ -4009,7 +4251,7 @@ begin
   else
   begin
     Log('wsl page: later chosen');
-    if not RunHelperBusy('Saving your place', 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}'))) then
+    if not RunHelperBusy(CustomMessage('busySavingPlace'), 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}'))) then
     begin
       ShowFailuresWithHelp(CustomMessage('failureResume'));
       Exit;
@@ -4048,7 +4290,7 @@ begin
   PageFolder.Values[0] := Path;
   { An invalid folder is a normal answer, result=ok;ok=0;reason=<text> (design 18.5); `failed` is only
     an internal error. }
-  if not RunHelperBusy('Checking the folder', 'roots', '--validate ' + QuoteArg(Path)) then
+  if not RunHelperBusy(CustomMessage('busyCheckingFolder'), 'roots', '--validate ' + QuoteArg(Path)) then
   begin
     Log('folder page: roots --validate failed internally for ' + Path);
     { Design 19 (18.5 extended): an internal error here offers Save diagnostics like the other failures. }
@@ -4059,7 +4301,7 @@ begin
   begin
     Reason := ResultValue(LastResult, 'reason');
     if Reason = '' then
-      Reason := 'The folder cannot be used.';
+      Reason := CustomMessage('dataFolderUnsupported');
     Log('folder page: ' + Path + ' refused: ' + Reason);
     DisplayReason := ResultValue(LastResult, 'reason_display');
     if DisplayReason = '' then
@@ -4142,7 +4384,7 @@ var
 begin
   { Design 22.9: the check box state is logged when Install is pressed, with what the other new choices were. }
   LogAccelDecision('ready');
-  Result := RunHelperBusy('Checking ports and disk space', 'check', ArgsCheckFinal);
+  Result := RunHelperBusy(CustomMessage('busyCheckingPorts'), 'check', ArgsCheckFinal);
   if not Result then
   begin
     Drive := Copy(ChosenDataDir, 1, 2);
@@ -4205,7 +4447,7 @@ end;
 
 procedure ExtractPayload(const TempName: String; const Title: String);
 begin
-  ProgressPage.SetText(Title, 'Unpacking. This takes a moment.');
+  ProgressPage.SetText(Title, CustomMessage('progressUnpacking'));
   ProgressPage.SetProgress(0, 0);
   Log('payload: extracting ' + TempName + ' to {tmp}');
   ExtractTemporaryFile(TempName);
@@ -4238,10 +4480,9 @@ begin
   { Design 19.4 item 23: the page's caption names the run ("Updating Cognita", "Repairing Cognita" ...),
     not always "Installing". The text under it says the same; the remote-access step sets its own. }
   ProgressPage.Caption := ProgressCaption(InstallMode);
-  ProgressPage.Description := 'Setup is ' + Lowercase(Copy(ProgressCaption(InstallMode), 1, 1)) +
-    Copy(ProgressCaption(InstallMode), 2, 100) + '. This can take several minutes; keep this window open.';
+  ProgressPage.Description := CustomMessage('installDescription');
   Log('install flow: progress caption=[' + ProgressPage.Caption + ']');
-  ProgressPage.SetText('Preparing', '');
+  ProgressPage.SetText(CustomMessage('progressPreparing'), '');
   ProgressLinkEdit.Visible := False;
   ProgressCopyButton.Visible := False;
   ProgressWaitLabel.Visible := False;
@@ -4258,7 +4499,7 @@ begin
       if InstallMode = ModeUpdate then
       begin
         { Update: the source tree only; the helper swaps it in and runs cognita update (section 7.3). }
-        ExtractPayload('cognita-src.tar.gz', 'Preparing the update');
+        ExtractPayload('cognita-src.tar.gz', CustomMessage('progressPreparingUpdate'));
         SrcFile := ExpandConstant('{tmp}\cognita-src.tar.gz');
         Verb := 'update';
       end
@@ -4272,12 +4513,12 @@ begin
         Verb := 'install';
         if (InstallMode = ModeFresh) or (InstallMode = ModeFinish) then
         begin
-          ExtractPayload('cognita-wsl.tar.gz', 'Preparing the Linux image');
+          ExtractPayload('cognita-wsl.tar.gz', CustomMessage('progressPreparingLinux'));
           ImageFile := ExpandConstant('{tmp}\cognita-wsl.tar.gz');
         end
         else
           Log('install: mode ' + IntToStr(InstallMode) + ' runs over the existing Cognita distro; the Linux image is not needed');
-        ExtractPayload('cognita-src.tar.gz', 'Preparing the Cognita files');
+        ExtractPayload('cognita-src.tar.gz', CustomMessage('progressPreparingFiles'));
         SrcFile := ExpandConstant('{tmp}\cognita-src.tar.gz');
       end;
       Log('install flow: mode=' + IntToStr(InstallMode) + ' verb=' + Verb + ' image=' + IntToStr(Ord(ImageFile <> '')) +
@@ -4288,8 +4529,8 @@ begin
         FailCount := 1;
         { Design 19.5 item 15: the broker gets 60 seconds to open its pipe; if it never did, the helper
           itself did not start (a blocked or very slow PowerShell), which is what the text says. }
-        FailMessage := 'Setup could not hand the Admin password to its helper: the Setup helper did not start in time.';
-        FailFix := 'Run Setup again. If it keeps happening, choose Save diagnostics and attach the file to a new issue at {#SupportUrl}';
+        FailMessage := CustomMessage('failurePasswordHandoff');
+        FailFix := FmtMessage(CustomMessage('failurePasswordFix'), ['{#SupportUrl}']);
         FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
         Exit;
       end;
@@ -4336,8 +4577,8 @@ begin
     except
       Log('install flow: exception: ' + GetExceptionMessage);
       FailCount := 1;
-      FailMessage := 'Setup stopped unexpectedly: ' + GetExceptionMessage;
-      FailFix := 'Choose Save diagnostics. To get help, attach the file to a new issue at {#SupportUrl}';
+      FailMessage := FmtMessage(CustomMessage('failureUnexpected'), [GetExceptionMessage]);
+      FailFix := FmtMessage(CustomMessage('failureUnexpectedFix'), ['{#SupportUrl}']);
       FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
     end;
   finally
@@ -4358,7 +4599,7 @@ begin
       returns True, so Inno's own Finished page offers "Restart now / later" and Inno restarts after
       Setup has exited. The Finished page (CurPageChanged) says to save work first. }
     Log('install flow: the helper needs a restart (exit 3010); recording where Setup stopped, no restart from here');
-    InstallResumeSaved := RunHelperBusy('Saving your place', 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}')));
+    InstallResumeSaved := RunHelperBusy(CustomMessage('busySavingPlace'), 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}')));
     Log('install flow: resume recorded=' + IntToStr(Ord(InstallResumeSaved)) + '; NeedRestart will return True');
     { Design 19.11 R3: a failed record step is not silent. }
     if not InstallResumeSaved then
@@ -4614,7 +4855,7 @@ end;
 
 procedure OnUninstallLine(const S: String; const Error, FirstLine: Boolean);
 var
-  L: String;
+  L, DisplayTitle: String;
 begin
   L := Trim(S);
   if L = '' then
@@ -4622,7 +4863,10 @@ begin
   OnHelperLine(S, Error, FirstLine);
   if (L[1] = '{') and (CurTitle <> '') then
   begin
-    UninstallProgressForm.StatusLabel.Caption := CurTitle;
+    DisplayTitle := JsonField(L, 'title_display');
+    if DisplayTitle = '' then
+      DisplayTitle := CurTitle;
+    UninstallProgressForm.StatusLabel.Caption := DisplayTitle;
   end;
 end;
 

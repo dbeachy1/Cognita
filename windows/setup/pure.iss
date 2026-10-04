@@ -501,13 +501,13 @@ end;
 function FailHeading(const Mode: Integer): String;
 begin
   if Mode = ModeUpdate then
-    Result := 'Cognita was not updated'
+    Result := CustomMessage('failedUpdateHeading')
   else if Mode = ModeRepair then
-    Result := 'Cognita was not repaired'
+    Result := CustomMessage('failedRepairHeading')
   else if Mode = ModeReinstall then
-    Result := 'Cognita was not reinstalled'
+    Result := CustomMessage('failedReinstallHeading')
   else
-    Result := 'Cognita was not installed';
+    Result := CustomMessage('failedInstallHeading');
 end;
 
 { Update, repair and reinstall run over a Cognita that was there before: a failure leaves it as it was
@@ -515,7 +515,7 @@ end;
 function StillThereText(const Mode: Integer): String;
 begin
   if (Mode = ModeUpdate) or (Mode = ModeRepair) or (Mode = ModeReinstall) then
-    Result := 'The Cognita you had is still there.'
+    Result := CustomMessage('failedExistingInstallRemains')
   else
     Result := '';
 end;
@@ -524,13 +524,13 @@ end;
 function ProgressCaption(const Mode: Integer): String;
 begin
   if Mode = ModeUpdate then
-    Result := 'Updating Cognita'
+    Result := CustomMessage('progressUpdating')
   else if Mode = ModeRepair then
-    Result := 'Repairing Cognita'
+    Result := CustomMessage('progressRepairing')
   else if Mode = ModeReinstall then
-    Result := 'Reinstalling Cognita'
+    Result := CustomMessage('progressReinstalling')
   else
-    Result := 'Installing Cognita';
+    Result := CustomMessage('progressInstalling');
 end;
 
 { Design 21.4: the Skip self-tests button is shown only while the Linux side is on its `proof` stage and
@@ -837,7 +837,7 @@ begin
   if AccelKnown(ResultAccel) = '' then
     Result := ''
   else
-    Result := 'Acceleration:  ' + AccelLabel(ResultAccel);
+    Result := FmtMessage(CustomMessage('finishedAcceleration'), [AccelLabel(ResultAccel)]);
 end;
 
 { The fix line of a warning (design 22.7 and 22.12 item 2): the helper's own when it sent one; otherwise, for a
@@ -847,7 +847,7 @@ begin
   if Fix <> '' then
     Result := Fix
   else if Stage = 'acceleration' then
-    Result := 'To try the GPU again, run Setup again and choose NVIDIA.'
+    Result := CustomMessage('warningAccelerationFix')
   else
     Result := '';
 end;

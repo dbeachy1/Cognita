@@ -43,6 +43,12 @@
   const api = {
     locale,
     labels,
+    has(id) {
+      return typeof id === "string" && Boolean(
+        (api.catalog && Object.hasOwn(api.catalog, id)) ||
+        (api.english && Object.hasOwn(api.english, id))
+      );
+    },
     t(id, values) {
       const message = (api.catalog && api.catalog[id]) || (api.english && api.english[id]);
       if (message === undefined) return id;

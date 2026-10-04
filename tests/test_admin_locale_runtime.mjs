@@ -5,8 +5,16 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("../src/cognita/web/admin-locale.js", import.meta.url), "utf8");
 const catalogs = {
-  "fr-FR": { "admin.language.label": "Langue", "test.message": "Dossier {folder}" },
-  "en-US": { "admin.language.label": "Language", "test.message": "Folder {folder}" },
+  "fr-FR": {
+    "admin.language.label": "Langue", "admin.action.failed": "Échec de l’action.",
+    "admin.technical_detail": "Détail technique", "test.message": "Dossier {folder}",
+    "test.known": "Le dossier est introuvable.",
+  },
+  "en-US": {
+    "admin.language.label": "Language", "admin.action.failed": "The action could not be completed.",
+    "admin.technical_detail": "Technical detail", "test.message": "Folder {folder}",
+    "test.known": "The folder could not be found.",
+  },
 };
 
 async function runtime({ cookie = "", languages = ["en-US"] } = {}) {
@@ -53,4 +61,44 @@ test("regionless supported tags map exactly; unsupported regions resolve through
   assert.equal(regionless.locale.locale, "fr-FR");
   const unsupported = await runtime({ cookie: "cognita_lang=pt-PT", languages: ["fr-CA", "en-US"] });
   assert.equal(unsupported.locale.locale, "en-US");
+});
+
+test("locale reports whether a presentation ID is mapped", async () => {
+  const result = await runtime({ cookie: "cognita_lang=fr-FR" });
+  assert.equal(result.locale.has("test.known"), true);
+  assert.equal(result.locale.has("test.missing"), false);
+});
+
+test("Admin presents unknown outcomes with a localized heading and labeled technical detail", async () => {
+  const result = await runtime({ cookie: "cognita_lang=fr-FR" });
+  const app = await readFile(new URL("../src/cognita/web/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("function outcomeParts(");
+  const end = app.indexOf("\n}", app.indexOf("function presentOutcome(", start)) + 2;
+  assert.ok(start >= 0 && end > start, "outcome presentation helpers must remain present");
+  const context = { window: { CognitaAdminLocale: result.locale } };
+  vm.runInNewContext(app.slice(start, end), context);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.outcomeParts({ detail: "Project already exists" }, "admin.action.failed"))),
+    { message: "Échec de l’action.", technicalDetail: "Project already exists" },
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.outcomeParts({ presentation_id: "admin.project.future_error", detail: "duplicate" }, "admin.action.failed"))),
+    { message: "Échec de l’action.", technicalDetail: "admin.project.future_error — duplicate" },
+  );
+  assert.equal(
+    context.presentOutcome({ detail: "Project already exists" }, "admin.action.failed"),
+    "Échec de l’action.\n\nDétail technique: Project already exists",
+  );
+  assert.equal(
+    context.presentOutcome({ presentation_id: "admin.project.future_error", detail: "duplicate" }, "admin.action.failed"),
+    "Échec de l’action.\n\nDétail technique: admin.project.future_error — duplicate",
+  );
+  assert.equal(
+    context.presentOutcome({ presentation_id: "test.known", detail: "ignored raw detail" }, "admin.action.failed"),
+    "Le dossier est introuvable.",
+  );
+
+  const html = await readFile(new URL("../src/cognita/web/index.html", import.meta.url), "utf8");
+  assert.match(html, /<details x-show="technicalDetail"><summary x-text="technicalDetailLabel"><\/summary><p x-text="technicalDetail"/);
 });
