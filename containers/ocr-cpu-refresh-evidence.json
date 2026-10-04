@@ -1,11 +1,11 @@
 {
   "consumed_source_sha256": {
-    "/tmp/cognita-cpu-evidence/containers/cognita/Dockerfile": "ae9d7c15b1ccafb8d651a6f4186b74af7e34e383c441ddc82bbb6f275eba007c",
-    "/tmp/cognita-cpu-evidence/containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
-    "/tmp/cognita-cpu-evidence/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
-    "/tmp/cognita-cpu-evidence/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
-    "/tmp/cognita-cpu-evidence/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
-    "/tmp/cognita-cpu-evidence/scripts/refresh_dependency_locks.py": "cf492daf61bafa40fda7004e294c7c866bb5129a704084fdf7272b206c2494e6"
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/cognita/Dockerfile": "e0100767a3bc7ad250a80a577e0bba03c9445b6dab90f4433d63b5ec08a0bae7",
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
+    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/scripts/refresh_dependency_locks.py": "cf492daf61bafa40fda7004e294c7c866bb5129a704084fdf7272b206c2494e6"
   },
   "index_url": "https://pypi.org/simple",
   "interpreters": {
@@ -47,7 +47,7 @@
       }
     }
   },
-  "maintenance_evidence": "/tmp/cognita-cpu-evidence-out/dependency-refresh-evidence.json",
+  "maintenance_evidence": "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-evidence-public/dependency-refresh-evidence.json",
   "operation": "dependency-refresh",
   "platform": {
     "architecture": "x86_64",
@@ -101,7 +101,7 @@
         "docs/easyocr-qualification-dependencies.json"
       ],
       "source_sha256": {
-        "containers/cognita/Dockerfile": "ae9d7c15b1ccafb8d651a6f4186b74af7e34e383c441ddc82bbb6f275eba007c",
+        "containers/cognita/Dockerfile": "e0100767a3bc7ad250a80a577e0bba03c9445b6dab90f4433d63b5ec08a0bae7",
         "containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
         "docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
       }
@@ -112,12 +112,12 @@
     "ocr-cpu"
   ],
   "source": {
-    "branch": "nvidia-acceleration",
-    "commit": "e2a573cbc6fb3b8445c7138720029c387b18e099",
+    "branch": "codex/public-15.2.0",
+    "commit": "f2cfdb3db27415d427f72615d340d746738e9508",
     "remote": "https://github.com/dbeachy1/Cognita.git",
-    "tree": "e0e0f2241fee8fd967c27c8898547522ad9646d9"
+    "tree": "20833eacb7002b6881a96eb163061c4279bbb92b"
   },
-  "source_root": "/tmp/cognita-cpu-evidence",
+  "source_root": "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source",
   "tool": {
     "pip_compile": "container:python -m piptools",
     "versions": {
