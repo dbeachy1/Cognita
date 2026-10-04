@@ -265,3 +265,22 @@ models it uses, and their licenses, are listed in
 Cognita's Windows installer and web UI (Admin and OAuth) support U.S. English,
 Spanish, French, German, Italian, and Brazilian Portuguese. Diagnostic logging
 and console scripts remain in English.
+
+## Word temporary files and watcher retries
+
+While a document is open, Microsoft Word may create an owner/lock file named
+`~$*.docx`. These temporary files are not DOCX documents. If a watcher warning
+says `reason=per-path reconciliation failure` and its associated `paths=` entry
+names one of these files, add `~$*.docx` to `index_exclude_patterns` in your active
+`cognita.yaml`, preserving any existing exclusions. For example:
+
+```yaml
+index_exclude_patterns:
+  - backups
+  - "~$*.docx"
+```
+
+Restart Cognita to apply the setting: run `./cognita restart` on Linux or
+`cognita restart` on Windows. The exclusion applies to watcher events and
+directory scans; normal Word documents remain indexable. A retry warning for
+another path requires checking that path's underlying error.
