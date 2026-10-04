@@ -102,3 +102,35 @@ test("Admin presents unknown outcomes with a localized heading and labeled techn
   const html = await readFile(new URL("../src/cognita/web/index.html", import.meta.url), "utf8");
   assert.match(html, /<details x-show="technicalDetail"><summary x-text="technicalDetailLabel"><\/summary><p x-text="technicalDetail"/);
 });
+
+test("inline project failures preserve escaped unmapped detail and render mapped messages", async () => {
+  const result = await runtime({ cookie: "cognita_lang=fr-FR" });
+  const app = await readFile(new URL("../src/cognita/web/app.js", import.meta.url), "utf8");
+  const functions = ["function outcomeParts(", "function inlineErrorText(",
+    "async function api(", "function esc(", "async function loadProjects("];
+  const source = functions.map((signature) => {
+    const start = app.indexOf(signature);
+    const end = app.indexOf("\n}", start) + 2;
+    assert.ok(start >= 0 && end > start, `${signature} must remain present`);
+    return app.slice(start, end);
+  }).join("\n");
+  const body = { innerHTML: "" };
+  let payload = { detail: "Project metadata <unavailable>" };
+  const context = {
+    window: { CognitaAdminLocale: result.locale },
+    t: (id, values) => result.locale.t(id, values),
+    $: () => body,
+    Headers,
+    fetch: async () => ({ ok: false, status: 500, json: async () => payload }),
+  };
+  vm.runInNewContext(source, context);
+  await context.loadProjects();
+  assert.match(body.innerHTML, /Échec de l’action/);
+  assert.match(body.innerHTML, /Détail technique: Project metadata &lt;unavailable&gt;/);
+  assert.doesNotMatch(body.innerHTML, /<unavailable>/);
+
+  payload = { presentation_id: "test.known", detail: "Raw detail for a mapped error" };
+  await context.loadProjects();
+  assert.match(body.innerHTML, /Le dossier est introuvable/);
+  assert.doesNotMatch(body.innerHTML, /Raw detail|Détail technique/);
+});

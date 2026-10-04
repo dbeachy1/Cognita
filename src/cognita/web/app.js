@@ -348,6 +348,12 @@ function presentOutcome(payload, outcome = "admin.action.completed") {
     : message;
 }
 
+function inlineErrorText(error) {
+  return error.technicalDetail
+    ? `${error.message}\n\n${t("admin.technical_detail")}: ${error.technicalDetail}`
+    : error.message;
+}
+
 function formatBytes(bytes) {
   const locale = window.CognitaAdminLocale;
   const number = (value, options) => locale ? locale.number(value, options) : value.toLocaleString();
@@ -528,7 +534,7 @@ async function loadProjects() {
   try {
     data = await api("/api/projects");
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="6">${esc(t("admin.projects.load_failed"))}: ${esc(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">${esc(t("admin.projects.load_failed"))}: ${esc(inlineErrorText(err))}</td></tr>`;
     return;
   }
   if (!data.projects.length) {
@@ -655,7 +661,7 @@ async function loadProjectsV9(cached = null, preloaded = false) {
     renderConnectorEditorProjects(selectedConnector());
     return data;
   } catch (err) {
-    body.innerHTML = '<tr><td colspan="6">' + esc(t("admin.action.failed")) + ": " + esc(err.message) + "</td></tr>";
+    body.innerHTML = '<tr><td colspan="6">' + esc(t("admin.action.failed")) + ": " + esc(inlineErrorText(err)) + "</td></tr>";
     return null;
   }
 }
@@ -1048,7 +1054,7 @@ async function renderCredentialList(surfaceKind, surfaceId, container) {
           '<span class="credential-actions">' + (surfaceKind === "workspace" ? '<button type="button" class="secondary outline" data-credential-action="setup"' + surface + '>' + esc(t("admin.credential.action.setup")) + '</button> ' : '') + '<button type="button" class="secondary outline" data-credential-action="reveal"' + surface + '>' + esc(t("admin.credential.action.reveal")) + '</button> <button type="button" class="secondary outline" data-credential-action="rotate"' + surface + '>' + esc(t("admin.credential.action.rotate")) + '</button> <button type="button" class="secondary outline" data-credential-action="revoke"' + surface + '>' + esc(t("admin.credential.action.revoke")) + '</button> <button type="button" class="contrast outline" data-credential-action="delete"' + surface + '>' + esc(t("admin.credential.action.delete")) + '</button></span><div class="connection-instructions" hidden></div></div>';
       }).join("") : '<p class="muted">' + esc(t("admin.credential.empty")) + '</p>');
   } catch (err) {
-    container.innerHTML = '<p role="alert">' + esc(t("admin.credential.policy_unavailable")) + ': ' + esc(err.message) + '</p>';
+    container.innerHTML = '<p role="alert">' + esc(t("admin.credential.policy_unavailable")) + ': ' + esc(inlineErrorText(err)) + '</p>';
   }
 }
 
@@ -1083,7 +1089,7 @@ async function loadWorkspaceConnectors(cached = null, preloaded = false) {
     const label = $("#workspace-connectors-revision");
     if (label) label.textContent = t("admin.status.unavailable");
     const body = $("#workspace-connectors-body");
-    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace_connector.policy_unavailable")) + ': ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace_connector.policy_unavailable")) + ': ' + esc(inlineErrorText(err)) + '</p>';
     return null;
   }
 }
@@ -1112,7 +1118,7 @@ async function loadWorkspaces(cached = null, preloaded = false) {
     return data;
   } catch (err) {
     const body = $("#workspaces-body");
-    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace.lifecycle_unavailable")) + ': ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace.lifecycle_unavailable")) + ': ' + esc(inlineErrorText(err)) + '</p>';
     return null;
   }
 }
@@ -1171,7 +1177,7 @@ async function loadGpuAcceleration(cached = null, preloaded = false) {
     const label = $("#gpu-acceleration-status");
     if (label) label.textContent = t("admin.gpu.unavailable");
     const body = $("#gpu-effective-state");
-    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.gpu.status_unavailable")) + ': ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.gpu.status_unavailable")) + ': ' + esc(inlineErrorText(err)) + '</p>';
     return null;
   }
 }
@@ -1497,7 +1503,7 @@ async function loadConnectors(cached = null, preloaded = false) {
   } catch (err) {
     $("#connectors-revision").textContent = t("admin.connectors.unavailable");
     $("#connectors-body").innerHTML = '<p role="alert">' + esc(t("admin.connectors.load_failed")) + ': ' +
-      esc(err.message) + "</p>";
+      esc(inlineErrorText(err)) + "</p>";
     return null;
   }
 }
@@ -1658,7 +1664,7 @@ async function loadOAuthV9(cached = null) {
     $("#revoke-all-grants").disabled = !grants.length;
   } catch (err) {
     status.textContent = t("admin.status.unavailable");
-    body.innerHTML = "<tr><td colspan=\"5\">" + esc(err.message) + "</td></tr>";
+    body.innerHTML = "<tr><td colspan=\"5\">" + esc(inlineErrorText(err)) + "</td></tr>";
   }
 }
 
@@ -1934,7 +1940,7 @@ document.addEventListener("click", async (event) => {
           : retention === "keep"
             ? t("admin.credential.consequence.keep")
             : t("admin.credential.consequence.delete_now");
-        const confirmation = await uiConfirm({ title: t("admin.credential.delete.confirm.title"), body: t("admin.credential.delete.confirm.body", { credential: action.dataset.credentialId, target, state: stateText, owner: ownerText, revision: authoritative.revision ?? t("admin.credential.target.not_reported"), retention: t("admin.credential.delete." + retention), consequence: retentionConsequence }), confirmLabel: t("admin.credential.action.delete"), danger: true });
+        const confirmation = await uiConfirm({ title: t("admin.credential.delete.confirm.title"), body: t("admin.credential.delete.confirm.body", { credential: action.dataset.credentialId, target, state: stateText, owner: ownerText, revision: authoritative.revision ?? t("admin.credential.target.not_reported"), retention: t(retention === "normal" ? "admin.credential.delete.normal" : retention === "keep" ? "admin.credential.delete.keep" : "admin.credential.delete.now"), consequence: retentionConsequence }), confirmLabel: t("admin.credential.action.delete"), danger: true });
         if (!confirmation.ok) return;
         requestMethod = "DELETE";
         requestBody.confirm = true;
@@ -2011,7 +2017,7 @@ async function loadDocumentRoots() {
       : [];
   } catch (err) {
     // Not fatal: the absolute-path field keeps working. Say why in the console.
-    console.warn("Could not load documents roots; using the absolute-path field:", err.message);
+    console.warn("Could not load documents roots; using the absolute-path field:", err.payload?.detail || err.technicalDetail || "request failed");
     documentRoots = [];
   }
   const rootMode = documentRoots.length > 0;
@@ -2071,7 +2077,7 @@ documentsPathButton.addEventListener("click", async () => {
     documentsPathStatus.textContent = presentOutcome(info);
     documentsPathStatus.style.color = "var(--pico-ins-color)";
   } catch (err) {
-    documentsPathStatus.textContent = `${t("admin.projects.path_check_failed")}: ${err.message}`;
+    documentsPathStatus.textContent = `${t("admin.projects.path_check_failed")}: ${inlineErrorText(err)}`;
     documentsPathStatus.style.color = "var(--pico-del-color)";
   } finally {
     documentsPathButton.removeAttribute("aria-busy");
@@ -2292,7 +2298,7 @@ function renderAuthentication(data, reset = false) {
 
 async function loadAuthentication(cached = null, preloaded = false) {
   try { renderAuthentication(preloaded ? cached : (cached || await api("/api/authentication")), false); }
-  catch (err) { $("#authentication-global").innerHTML = `<p role="alert">${esc(t("admin.credential.policy_unavailable"))}: ${esc(err.message)}</p>`; }
+  catch (err) { $("#authentication-global").innerHTML = `<p role="alert">${esc(t("admin.credential.policy_unavailable"))}: ${esc(inlineErrorText(err))}</p>`; }
 }
 
 function showAuthKey(raw, scope, project) {
@@ -2539,7 +2545,7 @@ $("#workspace-settings-preview").addEventListener("click", async () => {
   try { const networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules()); const result = await api("/api/workspace-settings/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: (state.workspaceSettings || {}).revision || 0, network_mode: $("#workspace-network-mode").value, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked }) }); await uiNotice({ title: t("admin.workspace.policy_preview"), body: JSON.stringify(result.preview || {}, null, 2) }); }
   catch (err) { await uiNotice({ title: t("admin.workspace.policy_preview_failed"), body: err.message, technicalDetail: err.technicalDetail }); }
 });
-$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: t("admin.workspace.brave_test"), body: `${t(result.ok ? "admin.status.success" : "admin.status.unavailable")}\n\n${t("admin.technical_detail")}: ${result.category}` }); } catch (err) { await uiNotice({ title: t("admin.workspace.brave_test_failed"), body: err.message, technicalDetail: err.technicalDetail }); } });
+$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: t("admin.workspace.brave_test"), body: `${t(result.ok ? "admin.action.completed" : "admin.status.unavailable")}\n\n${t("admin.technical_detail")}: ${result.category}` }); } catch (err) { await uiNotice({ title: t("admin.workspace.brave_test_failed"), body: err.message, technicalDetail: err.technicalDetail }); } });
 $("#gpu-knowledge-cards").addEventListener("change", (event) => { $("#gpu-knowledge-card-ids-row").hidden = event.target.value !== "specific"; });
 $("#gpu-ocr-device").addEventListener("change", (event) => { $("#gpu-ocr-card-ids-row").hidden = event.target.value !== "gpu"; });
 $("#gpu-acceleration-form").addEventListener("submit", async (event) => {

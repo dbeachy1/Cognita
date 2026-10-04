@@ -260,12 +260,6 @@ Cognita is licensed under the [Apache License 2.0](LICENSE). The third-party com
 models it uses, and their licenses, are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Languages
-
-Cognita's Windows installer and web UI (Admin and OAuth) support U.S. English,
-Spanish, French, German, Italian, and Brazilian Portuguese. Diagnostic logging
-and console scripts remain in English.
-
 ## Word temporary files and watcher retries
 
 While a document is open, Microsoft Word may create an owner/lock file named
@@ -284,3 +278,9 @@ Restart Cognita to apply the setting: run `./cognita restart` on Linux or
 `cognita restart` on Windows. The exclusion applies to watcher events and
 directory scans; normal Word documents remain indexable. A retry warning for
 another path requires checking that path's underlying error.
+
+## Languages
+
+Cognita's Windows installer and web UI (Admin and OAuth) support U.S. English,
+Spanish, French, German, Italian, and Brazilian Portuguese. Diagnostic logging
+and console scripts remain in English.

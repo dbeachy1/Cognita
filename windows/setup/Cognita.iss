@@ -2748,7 +2748,7 @@ begin
   if not TNewRadioButton(Sender).Checked then
   begin
     TNewRadioButton(Sender).Checked := True;
-    Log('keyboard: radio "' + TNewRadioButton(Sender).Caption + '" checked by focus');
+    Log('keyboard: radio checked by focus');
   end;
 end;
 
@@ -2767,8 +2767,8 @@ var
   R: Integer;
   Zip: String;
 begin
-  Log('failure dialog: ' + Heading + ' failures=' + IntToStr(FailCount));
-  Zip := AutoSaveDiagnostics(Heading);
+  Log('failure dialog: failures=' + IntToStr(FailCount));
+  Zip := AutoSaveDiagnostics('a failure dialog was opened');
   Form := CreateCustomForm(ScaleX(480), ScaleY(310), False, False);
   try
     Form.Caption := 'Cognita Setup';
@@ -2895,12 +2895,12 @@ begin
       DisplayReason := Reason;
     Result := DisplayReason;
     HelperRejected := True;
-    Log('advanced: data_dir=' + Dir + ' refused: ' + Reason);
+    Log('advanced: data_dir=' + Dir + ' refused: ' + ResultValue(LastResult, 'reason'));
   end;
   if not HelperRejected then
   begin
     if Result <> '' then
-      Log('advanced: data_dir=' + Dir + ' refused: ' + Result)
+      Log('advanced: data_dir=' + Dir + ' refused by Setup validation')
     else
       Log('advanced: data_dir=' + Dir + ' accepted');
   end;
@@ -3232,7 +3232,7 @@ begin
   if PortBusy then
   begin
     RemoteNote := CustomMessage('remoteSkipped');
-    Log('remote access: skipped; ' + RemoteNote);
+    Log('remote access: skipped; reason=funnel-port-in-use');
     if RemoteStage = 1 then
     begin
       HideRemoteLinkStage;
@@ -3800,7 +3800,7 @@ begin
     FmtMessage(CustomMessage('summaryWorkspace'), [WorkspaceText]) + #13#10 +
     FmtMessage(CustomMessage('summaryAcceleration'), [AccelText]) + #13#10 +
     FmtMessage(CustomMessage('summaryDataLocation'), [ChosenDataDir]) + Gap;
-  Log('ready page: acceleration line=[' + AccelText + '] effective=[' + EffectiveAccel + '] page_mode=' + IntToStr(AccelMode) +
+  Log('ready page: acceleration effective=[' + EffectiveAccel + '] page_mode=' + IntToStr(AccelMode) +
     ' mode=' + IntToStr(InstallMode) + ' touched=' + IntToStr(Ord(AccelTouched)) + ' images_bytes=' + IntToStr(ImagesBytes));
   { Over an installed Cognita the images and models are already here, so only what changed is
     fetched; the compiled-in total would overstate it. }
@@ -3900,7 +3900,7 @@ begin
     AccelText := FmtMessage(CustomMessage('summaryAcceleration'), [AccelProfile]);
   if AccelText <> '' then
     Cap := Cap + #13#10 + AccelText;
-  Log('finished page: acceleration=[' + AccelText + '] from_result=' + IntToStr(Ord(ResultAccel <> '')) +
+  Log('finished page: acceleration from_result=' + IntToStr(Ord(ResultAccel <> '')) +
     ' result_value=[' + ResultAccel + ']');
   if RemoteNote <> '' then
     Cap := Cap + #13#10 + RemoteNote;
@@ -4234,8 +4234,8 @@ begin
         CustomMessage('setupLogLabel') + '  ' + ExpandConstant('{log}') + #13#10#13#10 +
         CustomMessage('failureContinue') + #13#10#13#10 + DiagnosticsSentence(FinDiagZip);
       FinMemo.Visible := True;
-      Log('finished page: failure layout mode=' + IntToStr(InstallMode) + ' heading=[' + FailHeading(InstallMode) +
-        '] still_there=' + IntToStr(Ord(StillThereText(InstallMode) <> '')) + ' memo_h=' + IntToStr(FinMemo.Height) +
+      Log('finished page: failure layout mode=' + IntToStr(InstallMode) +
+        ' still_there=' + IntToStr(Ord(StillThereText(InstallMode) <> '')) + ' memo_h=' + IntToStr(FinMemo.Height) +
         ' fail_chars=' + IntToStr(Length(FailText)) + ' stage=[' + FailStage + ']');
     end;
   end;
@@ -4389,7 +4389,7 @@ begin
     Reason := ResultValue(LastResult, 'reason');
     if Reason = '' then
       Reason := CustomMessage('dataFolderUnsupported');
-    Log('folder page: ' + Path + ' refused: ' + Reason);
+    Log('folder page: ' + Path + ' refused: ' + ResultValue(LastResult, 'reason'));
     DisplayReason := ResultValue(LastResult, 'reason_display');
     if DisplayReason = '' then
       DisplayReason := Reason;
@@ -4597,7 +4597,7 @@ begin
     not always "Installing". The text under it says the same; the remote-access step sets its own. }
   ProgressPage.Caption := ProgressCaption(InstallMode);
   ProgressPage.Description := CustomMessage('installDescription');
-  Log('install flow: progress caption=[' + ProgressPage.Caption + ']');
+  Log('install flow: mode=' + IntToStr(InstallMode));
   ProgressPage.SetText(CustomMessage('progressPreparing'), '');
   ProgressLinkEdit.Visible := False;
   ProgressCopyButton.Visible := False;
@@ -5036,7 +5036,7 @@ begin
           own failure lines are in the log. }
         UninstallDeleteFailed := True;
         Log('uninstall: the data could not be deleted (helper status=' + LastStatus + ' exit=' + IntToStr(HelperExit) +
-          ' logs_copy=[' + UninstLogsCopy + ']); the closing text will say so. ' + FailMessage);
+          ' logs_copy=[' + UninstLogsCopy + ']); the closing text will say so.');
       end
       else
         SuppressibleMsgBox(FmtMessage(CustomMessageWithLines('uninstallCleanupFailed'), [FailText, LogsDir]),

@@ -1,5 +1,16 @@
 # Changelog
 
+## 15.6.0 — Finish localized Admin responses (2026-10-04)
+
+- Admin shows translated completion text after the Brave Search connection test and a translated
+  retention choice when confirming credential deletion.
+- Inline Admin failures retain labeled English technical detail when no translated outcome exists.
+- Windows Setup diagnostic logging uses English identifiers and reasons while keeping the visible
+  six-language guidance.
+- The README's language-support note is again at the end, including the English-only logging
+  and console-script boundary.
+- MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.6.0.md`.
+
 ## 15.5.0 — Clarify password recovery and fix Setup icon clipping (2026-10-04)
 
 - When an upgrade password is wrong, Windows Setup shows the `cognita password` command for

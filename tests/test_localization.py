@@ -58,6 +58,17 @@ def test_tagged_admin_markup_ids_exist_in_every_catalog() -> None:
         assert ids <= set(catalog), f"{locale} is missing {sorted(ids - set(catalog))}"
 
 
+def test_browser_literal_message_ids_exist_in_every_catalog() -> None:
+    web_root = Path(__file__).resolve().parents[1] / "src/cognita/web"
+    ids = set()
+    for filename in ("app.js", "admin-locale.js", "index.html", "login.html"):
+        source = (web_root / filename).read_text(encoding="utf-8")
+        ids.update(re.findall(r'''["']((?:admin|oauth)\.[\w.]+)["']''', source))
+    for locale in SUPPORTED_LOCALES:
+        catalog = load_catalog(locale)
+        assert ids <= set(catalog), f"{locale} is missing {sorted(ids - set(catalog))}"
+
+
 def test_translate_falls_back_only_for_missing_ids(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parents[1] / "src/cognita/web/locales"
     for locale in SUPPORTED_LOCALES:
