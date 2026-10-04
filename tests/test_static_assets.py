@@ -100,8 +100,8 @@ async def test_admin_javascript_wires_connector_policy_boundary(app):
     assert "expected_revision" in js
     assert "revision_conflict" in js
     assert "X-CSRF-Token" in js
-    assert "future enabled projects are included unless excluded from defaults" in js
-    assert "Excluded by project default" in js
+    assert 't("admin.connectors.access_help_all")' in js
+    assert 't("admin.connectors.option.excluded_default")' in js
     assert 'method: "PATCH"' in js
     assert "exclude_from_default_permissions" in js
     assert 'data-act="settings"' in js
@@ -118,8 +118,8 @@ async def test_admin_javascript_displays_code_owned_connector_contract(app):
         js = (await c.get("/static/app.js")).text
         css = (await c.get("/static/admin.css")).text
     assert "contract_version" in js
-    assert "Stable MCP URL" in js
-    assert "Current MCP URL" in js
+    assert 't("admin.connectors.stable_url.title")' in js
+    assert 't("admin.connectors.current_url.title")' in js
     assert "connector-url-row" in js
     assert "connector-url-row" in css
     assert "Publish next contract version" not in js

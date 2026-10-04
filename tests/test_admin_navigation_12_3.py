@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from cognita import __version__
+from cognita.localization import load_catalog
 from cognita.release_identity import APPLICATION_VERSION
 
 ROOT = Path(__file__).parents[1]
@@ -36,8 +37,11 @@ def test_connector_routes_are_immutable_id_based_and_alias_aware():
 def test_settings_presents_stable_and_immutable_current_urls():
     assert "stable_url" in JS
     assert "current_url" in JS
-    assert "Stable MCP URL" in JS
-    assert "Current MCP URL" in JS
+    assert 't("admin.connectors.stable_url.title")' in JS
+    assert 't("admin.connectors.current_url.title")' in JS
+    english = load_catalog("en-US")
+    assert english["admin.connectors.stable_url.title"] == "Stable MCP URL"
+    assert english["admin.connectors.current_url.title"] == "Current generation MCP URL"
     assert 'data-connector-copy-url="stable"' in JS
     assert 'data-connector-copy-url="current"' in JS
 

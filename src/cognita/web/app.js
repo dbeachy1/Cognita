@@ -729,9 +729,9 @@ function renderConnectorCreate() {
   if (settings) settings.hidden = true;
   if (editor) editor.hidden = false;
   const title = $("#connector-editor-title");
-  if (title) title.textContent = "Add connector";
+  if (title) title.textContent = t("admin.connectors.add");
   const submit = $("#connector-submit");
-  if (submit) submit.textContent = "Add connector";
+  if (submit) submit.textContent = t("admin.connectors.add");
   const cancel = $("#connector-cancel");
   if (cancel) cancel.hidden = false;
   const draft = state.connectorCreateDraft;
@@ -768,8 +768,8 @@ function renderConnectorEditor(connector) {
   editor.hidden = false;
   state.editingConnectorId = connector.id;
   const title = $("#connector-editor-title");
-  if (title) title.textContent = "Edit connector: " + connector.name;
-  $("#connector-submit").textContent = "Save connector";
+  if (title) title.textContent = t("admin.connectors.edit_title", { name: connector.name });
+  $("#connector-submit").textContent = t("admin.connectors.save");
   $("#connector-cancel").hidden = false;
   const draft = state.connectorSettingsDrafts.get(String(connector.id));
   $("#connector-name").value = draft ? draft.name : connector.name;
@@ -799,21 +799,22 @@ function renderConnectorSettings(connector) {
   const publicUrl = $("#public-url-section");
   if (publicUrl) publicUrl.hidden = false;
   section.hidden = false;
-  $("#connector-settings-heading").innerHTML = "Settings — " + esc(connector.name) +
-    ' <span class="actions"><button type="button" class="secondary outline" data-connector-edit="' + esc(connector.id) + '">Edit</button> <button type="button" class="contrast outline" data-connector-delete="' + esc(connector.id) + '">Delete</button></span>';
-  $("#connector-settings-summary").textContent = (connector.enabled ? "Enabled" : "Disabled") +
-    " · Workspace " + (connector.workspace_requested ? "requested" : "off") +
-    (connector.workspace_reason === "host_workspace_disabled" ? " (not effective: host_workspace_disabled)" :
-      (connector.workspace_effective ? " (effective)" : "")) +
-    " · Contract v" + (connector.contract_version || "—");
+  $("#connector-settings-heading").innerHTML = esc(t("admin.connectors.settings_for", { name: connector.name })) +
+    ' <span class="actions"><button type="button" class="secondary outline" data-connector-edit="' + esc(connector.id) + '">' + esc(t("admin.connectors.edit")) + '</button> <button type="button" class="contrast outline" data-connector-delete="' + esc(connector.id) + '">' + esc(t("admin.connectors.delete")) + '</button></span>';
+  const workspaceStatus = connector.workspace_reason === "host_workspace_disabled"
+    ? ` (${t("admin.connectors.not_effective_host")})`
+    : (connector.workspace_effective ? ` (${t("admin.connectors.workspace_effective")})` : "");
+  $("#connector-settings-summary").textContent = (connector.enabled ? t("admin.connectors.enabled") : t("admin.projects.disabled")) +
+    " · Workspace " + t(connector.workspace_requested ? "admin.connectors.workspace_requested" : "admin.connectors.workspace_off") + workspaceStatus +
+    " · " + t("admin.connectors.contract_version", { version: connector.contract_version || "—" });
   const stable = connector.stable_url || connector.url || connector.path || "";
   const current = connector.current_url || "";
   $("#connector-mcp-urls").innerHTML =
-    '<p><strong>Stable MCP URL</strong><br><small class="muted">Follows Cognita’s current contract generation.</small></p>' +
-    '<div class="connector-url-row"><label>Stable MCP URL<input class="connector-url" readonly value="' + esc(stable) + '"></label><button type="button" class="secondary outline" data-connector-copy-url="stable" data-url="' + esc(stable) + '">Copy URL</button></div>' +
-    '<p><strong>Current generation MCP URL</strong><br><small class="muted">Pinned to the current immutable generation.</small></p>' +
-    '<div class="connector-url-row"><label>Current MCP URL<input class="connector-url" readonly value="' + esc(current) + '"></label><button type="button" class="secondary outline" data-connector-copy-url="current" data-url="' + esc(current) + '">Copy URL</button></div>';
-  $("#connector-settings-credentials").innerHTML = '<strong>Private Bearer Token keys</strong><div class="connector-credentials-list"></div>';
+    '<p><strong>' + esc(t("admin.connectors.stable_url.title")) + '</strong><br><small class="muted">' + esc(t("admin.connectors.stable_url.help")) + '</small></p>' +
+    '<div class="connector-url-row"><label>' + esc(t("admin.connectors.stable_url.title")) + '<input class="connector-url" readonly value="' + esc(stable) + '"></label><button type="button" class="secondary outline" data-connector-copy-url="stable" data-url="' + esc(stable) + '">' + esc(t("admin.connectors.copy_url")) + '</button></div>' +
+    '<p><strong>' + esc(t("admin.connectors.current_url.title")) + '</strong><br><small class="muted">' + esc(t("admin.connectors.current_url.help")) + '</small></p>' +
+    '<div class="connector-url-row"><label>' + esc(t("admin.connectors.current_url.title")) + '<input class="connector-url" readonly value="' + esc(current) + '"></label><button type="button" class="secondary outline" data-connector-copy-url="current" data-url="' + esc(current) + '">' + esc(t("admin.connectors.copy_url")) + '</button></div>';
+  $("#connector-settings-credentials").innerHTML = '<strong>' + esc(t("admin.connectors.private_keys")) + '</strong><div class="connector-credentials-list"></div>';
   renderCredentialList("combined", connector.id, $("#connector-settings-credentials .connector-credentials-list"));
 }
 
@@ -884,7 +885,7 @@ function syncConnectorSelectors() {
     renderConnectorEditorProjects(connector);
   } else if (!connector) {
     const transferStatus = $("#connector-transfer-status");
-    if (transferStatus) transferStatus.textContent = "Workspace transfer is unavailable until a connector is configured.";
+    if (transferStatus) transferStatus.textContent = t("admin.connectors.transfer_unavailable");
     ["#connector-access-view", "#connector-transfer-view"].forEach((selector) => { const view = $(selector); if (view) view.hidden = true; });
   }
 }
@@ -904,8 +905,8 @@ function renderConnectorEditorProjects(connector) {
   const transferStatus = $("#connector-transfer-status");
   if (transferStatus) {
     transferStatus.innerHTML = connector && connector.workspace_enabled
-      ? "Workspace capability: <strong>Enabled</strong>. Configure per-project transfer below."
-      : 'Workspace capability is <strong>disabled</strong>; transfer is unavailable. <button type="button" class="secondary outline" data-go-connector-setup>Add / edit connector</button>';
+      ? esc(t("admin.connectors.workspace_capability_enabled"))
+      : esc(t("admin.connectors.workspace_capability_disabled")) + ' <button type="button" class="secondary outline" data-go-connector-setup>' + esc(t("admin.connectors.add_edit")) + '</button>';
   }
   const transferView = $("#connector-transfer-view");
   if (transferView && connector) transferView.hidden = !connector.workspace_enabled;
@@ -923,8 +924,8 @@ function renderConnectorEditorProjects(connector) {
     $("#connector-policy-high-trust-confirm").checked = transferDraft.confirm_high_trust;
   }
   if (!state.projects.length) {
-    container.innerHTML = '<span class="muted">Add a project to configure project access.</span>';
-    if (transferContainer) transferContainer.innerHTML = '<span class="muted">Add a project to configure transfer policy.</span>';
+    container.innerHTML = '<span class="muted">' + esc(t("admin.connectors.empty_access")) + '</span>';
+    if (transferContainer) transferContainer.innerHTML = '<span class="muted">' + esc(t("admin.connectors.empty_transfer")) + '</span>';
   } else {
     container.innerHTML = state.projects.map((project) => {
       const configuredValue =
@@ -934,10 +935,10 @@ function renderConnectorEditorProjects(connector) {
         ? (["inherit", "read", "write"].includes(configuredValue) ? configuredValue : "inherit")
         : (["none", "read", "write"].includes(configuredValue) ? configuredValue : "none");
       const options = mode === "all"
-        ? '<option value="inherit">' + (project.exclude_from_default_permissions ? "Excluded by project default" : "Inherit default") + '</option><option value="read">Read-only</option><option value="write">Read/write</option>'
-        : '<option value="none">Not selected</option><option value="read">Read-only</option><option value="write">Read/write</option>';
+          ? '<option value="inherit">' + esc(project.exclude_from_default_permissions ? t("admin.connectors.option.excluded_default") : t("admin.connectors.option.inherit_default")) + '</option><option value="read">' + esc(t("admin.oauth.read_only")) + '</option><option value="write">' + esc(t("admin.oauth.read_write")) + '</option>'
+        : '<option value="none">' + esc(t("admin.connectors.option.not_selected")) + '</option><option value="read">' + esc(t("admin.oauth.read_only")) + '</option><option value="write">' + esc(t("admin.oauth.read_write")) + '</option>';
       return '<label for="connector-access-' + encodeURIComponent(project.name) + '">' +
-        esc(project.name) + (project.enabled ? "" : " (disabled)") + "</label>" +
+        esc(project.name) + (project.enabled ? "" : " " + esc(t("admin.connectors.option.disabled_project"))) + "</label>" +
         '<select id="connector-access-' + encodeURIComponent(project.name) +
         '" data-project-access="' + esc(project.name) + '"' +
         (project.enabled ? "" : " disabled") + ">" +
@@ -949,15 +950,15 @@ function renderConnectorEditorProjects(connector) {
         const selected = ["inherit", "allow", "deny"].includes(configuredTransfer[project.name]) ? configuredTransfer[project.name] : "inherit";
         return '<label for="connector-transfer-' + encodeURIComponent(project.name) + '">' + esc(project.name) + '</label>' +
           '<select id="connector-transfer-' + encodeURIComponent(project.name) + '" data-project-transfer="' + esc(project.name) + '">' +
-          '<option value="inherit"' + (selected === "inherit" ? " selected" : "") + '>Inherit</option><option value="allow"' + (selected === "allow" ? " selected" : "") + '>Allow</option><option value="deny"' + (selected === "deny" ? " selected" : "") + '>Deny</option></select>';
+          '<option value="inherit"' + (selected === "inherit" ? " selected" : "") + '>' + esc(t("admin.connectors.option.inherit")) + '</option><option value="allow"' + (selected === "allow" ? " selected" : "") + '>' + esc(t("admin.connectors.option.allow")) + '</option><option value="deny"' + (selected === "deny" ? " selected" : "") + '>' + esc(t("admin.connectors.option.deny")) + '</option></select>';
       }).join("");
     }
   }
   const allMode = mode === "all";
   $("#connector-default-row").hidden = !allMode;
   $("#connector-project-help").textContent = allMode
-    ? "Inherit follows the project default. Excluded projects require an explicit override; future enabled projects are included unless excluded from defaults."
-    : "Selected mode exposes only projects marked Read-only or Read/write. Not selected removes membership.";
+    ? t("admin.connectors.access_help_all")
+    : t("admin.connectors.access_help_selected");
 }
 
 function connectorSummary(connector) {
@@ -979,17 +980,17 @@ function connectorSummary(connector) {
 function renderConnectors() {
   const body = $("#connectors-body");
   if (body) body.innerHTML = state.connectors.length
-    ? '<p class="muted">Select a connector tab to view or edit its settings.</p>'
-    : '<p><em>No connectors configured. Use the Add connector tab to create one.</em></p>';
+    ? '<p class="muted">' + esc(t("admin.connectors.select_prompt")) + '</p>'
+    : '<p><em>' + esc(t("admin.connectors.empty")) + '</em></p>';
   renderConnectorEntityTabs();
 }
 
 async function deleteConnector(connector) {
   if (!connector) return;
   const result = await uiConfirm({
-    title: "Delete connector",
-    body: "Delete \"" + connector.name + "\"? Projects and data will remain, but this connector URL and its access definition will stop working.",
-    confirmLabel: "Delete connector", danger: true,
+    title: t("admin.connectors.delete.confirm.title"),
+    body: t("admin.connectors.delete.confirm.body", { name: connector.name }),
+    confirmLabel: t("admin.connectors.delete"), danger: true,
   });
   if (!result.ok) return;
   const index = state.connectors.findIndex((item) => String(item.id) === String(connector.id));
@@ -1457,12 +1458,12 @@ function renderWorkspaceConnectors(data) {
   const body = $("#workspace-connectors-body");
   if (!body) return;
   const records = Array.isArray(data && data.workspace_connectors) ? data.workspace_connectors : state.workspaceConnectors;
-  if (!records.length) { body.innerHTML = '<p class="muted">No Workspace-only connectors configured.</p>'; return; }
+  if (!records.length) { body.innerHTML = '<p class="muted">' + esc(t("admin.workspaces.no_workspace_connectors")) + '</p>'; return; }
   body.innerHTML = records.map((surface) =>
-    '<article class="connector-card workspace-connector-card" data-workspace-surface-id="' + esc(surface.id || surface.surface_id || "") + '"><header><strong>' + esc(surface.display_name || surface.name || "Workspace") + '</strong><span>' + (surface.workspace_requested ? "Requested" : "Disabled") + (surface.workspace_reason === "host_workspace_disabled" ? " · not effective: host_workspace_disabled" : (surface.workspace_effective ? " · effective" : "")) + '</span></header>' +
-    '<p><code>' + esc(surface.slug || "") + '</code> · revision ' + esc(surface.revision == null ? "—" : surface.revision) + '</p>' +
-    '<div class="connector-url-row"><label>Stable MCP URL<input readonly value="' + esc(surface.url || "") + '"></label><button type="button" class="secondary outline" data-workspace-action="copy" data-url="' + esc(surface.url || "") + '">Copy URL</button></div>' +
-    '<div class="actions"><button type="button" class="secondary outline" data-workspace-action="credentials">Private Bearer Token keys</button><button type="button" class="contrast outline" data-workspace-action="delete">Disable connector</button></div><div class="workspace-credentials" hidden></div></article>'
+    '<article class="connector-card workspace-connector-card" data-workspace-surface-id="' + esc(surface.id || surface.surface_id || "") + '"><header><strong>' + esc(surface.display_name || surface.name || "Workspace") + '</strong><span>' + esc(t(surface.workspace_requested ? "admin.workspace_connector.requested" : "admin.workspace_connector.disabled")) + (surface.workspace_reason === "host_workspace_disabled" ? " · " + esc(t("admin.connectors.not_effective_host")) : (surface.workspace_effective ? " · " + esc(t("admin.workspace_connector.effective")) : "")) + '</span></header>' +
+    '<p><code>' + esc(surface.slug || "") + '</code> · ' + esc(t("admin.workspace_connector.contract_revision", { revision: surface.revision == null ? "—" : window.CognitaAdminLocale.number(surface.revision) })) + '</p>' +
+    '<div class="connector-url-row"><label>' + esc(t("admin.connectors.stable_url.title")) + '<input readonly value="' + esc(surface.url || "") + '"></label><button type="button" class="secondary outline" data-workspace-action="copy" data-url="' + esc(surface.url || "") + '">' + esc(t("admin.connectors.copy_url")) + '</button></div>' +
+    '<div class="actions"><button type="button" class="secondary outline" data-workspace-action="credentials">' + esc(t("admin.connectors.private_keys")) + '</button><button type="button" class="contrast outline" data-workspace-action="delete">' + esc(t("admin.workspace_connector.disable")) + '</button></div><div class="workspace-credentials" hidden></div></article>'
   ).join("");
 }
 
@@ -1475,7 +1476,7 @@ async function loadConnectors(cached = null, preloaded = false) {
       const safe = state.connectors.find((item) => item.enabled) || state.connectors[0];
       state.selectedConnectorId = safe ? safe.id : null;
     }
-    $("#connectors-revision").textContent = "Policy revision " + state.connectorsRevision;
+    $("#connectors-revision").textContent = t("admin.connectors.policy_revision", { revision: window.CognitaAdminLocale.number(state.connectorsRevision) });
     renderConnectors();
     syncConnectorSelectors();
     const route = normalizedConnectorRoute(routeForHash(window.location.hash));
@@ -1488,8 +1489,8 @@ async function loadConnectors(cached = null, preloaded = false) {
     activateShellRoute(route, false, false);
     return data;
   } catch (err) {
-    $("#connectors-revision").textContent = "Unavailable";
-    $("#connectors-body").innerHTML = '<p role="alert">Failed to load connectors: ' +
+    $("#connectors-revision").textContent = t("admin.connectors.unavailable");
+    $("#connectors-body").innerHTML = '<p role="alert">' + esc(t("admin.connectors.load_failed")) + ': ' +
       esc(err.message) + "</p>";
     return null;
   }
@@ -1535,8 +1536,8 @@ function resetConnectorEditor(options = {}) {
   $("#connector-workspace-enabled").checked = true;
   $("#connector-transfer-default").value = "allow";
   $("#connector-high-trust-confirm").checked = true;
-  $("#connector-editor-title").textContent = "Add connector";
-  $("#connector-submit").textContent = "Add connector";
+  $("#connector-editor-title").textContent = t("admin.connectors.add");
+  $("#connector-submit").textContent = t("admin.connectors.add");
   $("#connector-cancel").hidden = true;
   renderConnectorEditorProjects(selectedConnector());
   if (options.keepSelection) return;
@@ -1553,8 +1554,8 @@ function beginConnectorEdit(connector) {
   state.selectedConnectorId = connector.id;
   if (window.adminNavigate) window.adminNavigate(CognitaAdminState.routeFragment(connectorRoute(connector.id, "settings")));
   $("#connector-editor").open = true;
-  $("#connector-editor-title").textContent = "Edit connector: " + connector.name;
-  $("#connector-submit").textContent = "Save connector";
+  $("#connector-editor-title").textContent = t("admin.connectors.edit_title", { name: connector.name });
+  $("#connector-submit").textContent = t("admin.connectors.save");
   $("#connector-cancel").hidden = false;
   $("#connector-name").value = connector.name;
   $("#connector-enabled").checked = Boolean(connector.enabled);
@@ -1574,8 +1575,8 @@ async function handleConnectorError(err) {
     const editingId = state.editingConnectorId;
     if (state.selectedConnectorId != null) state.connectorDrafts.delete(String(state.selectedConnectorId));
     await uiNotice({
-      title: "Connector changed elsewhere",
-      body: "Your edit was not saved because another administrator changed the connector policy. The current policy has been reloaded; review it before saving again.",
+      title: t("admin.connectors.changed_elsewhere.title"),
+      body: t("admin.connectors.changed_elsewhere.body"),
     });
     await loadConnectors();
     if (editingId) {
@@ -1585,7 +1586,7 @@ async function handleConnectorError(err) {
     }
     return;
   }
-  await uiNotice({ title: "Connector change failed", body: err.message });
+  await uiNotice({ title: t("admin.connectors.change_failed"), body: err.message });
 }
 
 function connectionSummary(grant) {
@@ -1716,7 +1717,7 @@ $("#connector-cancel").addEventListener("click", resetConnectorEditor);
 async function saveConnectorPolicy(kind) {
   const connector = selectedConnector();
   if (!connector) {
-    await uiNotice({ title: "No connector selected", body: "Add a connector before configuring its policy." });
+    await uiNotice({ title: t("admin.connectors.no_selected.title"), body: t("admin.connectors.no_selected.body") });
     return;
   }
   const button = $(kind === "access" ? "#connector-access-save" : "#connector-transfer-save");
@@ -1741,7 +1742,7 @@ async function saveConnectorPolicy(kind) {
     state.connectorDrafts.delete(String(connector.id));
     await refreshAdminMutation("connector:update");
     selectConnector(connector.id);
-    await uiNotice({ title: "Policy saved", body: kind === "access" ? "Project access policy saved." : "Workspace transfer policy saved." });
+    await uiNotice({ title: t("admin.connectors.policy_saved.title"), body: t(kind === "access" ? "admin.connectors.access_saved" : "admin.connectors.transfer_saved") });
   } catch (err) {
     await handleConnectorError(err);
   } finally {
