@@ -571,7 +571,7 @@ def test_deploy_preserves_original_partial_build_failure_during_cleanup(
     monkeypatch.setattr(release, "run", lambda command, **kwargs:
                         (removed.append(command[-1]) or 0, ""))
     with pytest.raises(release.ReleaseError, match="original build error") as failure:
-        release.cmd_deploy(SimpleNamespace(test=False, no_build=False), target, log)
+        release.cmd_deploy(SimpleNamespace(test=False, no_build=False, connector=None), target, log)
     assert failure.value.state == "build-failed"
     assert set(removed) == set(refs.values())
 
@@ -612,7 +612,7 @@ def test_deploy_fetches_the_ocr_weights_into_the_targets_model_cache_before_it_a
     events: list = []
     target = release.TARGETS["main"]
     _deploy_rig(monkeypatch, tmp_path, target, events)
-    release.cmd_deploy(SimpleNamespace(test=False, no_build=False), target, log)
+    release.cmd_deploy(SimpleNamespace(test=False, no_build=False, connector=None), target, log)
     assert ("fetch", tmp_path / "models") in events
     assert events.index(("fetch", tmp_path / "models")) < events.index("apply")
     assert events.index(("fetch", tmp_path / "models")) < events.index("build")
@@ -633,7 +633,7 @@ def test_the_no_build_beta_deploy_also_fetches_the_weights_before_it_applies(
     monkeypatch.setattr(release, "image_id", lambda ref: "sha256:" + ref)
     monkeypatch.setattr(release, "stage_candidate_toolbox", lambda *a: events.append("toolbox"))
     monkeypatch.setattr(release, "run_test_stack", lambda *a, **k: events.append("test-stack"))
-    release.cmd_deploy(SimpleNamespace(test=False, no_build=True, images=tmp_path / "images",
+    release.cmd_deploy(SimpleNamespace(test=False, no_build=True, connector=None, images=tmp_path / "images",
                                        profile="amd", mode="full"), target, log)
     fetch = ("fetch", tmp_path / "models")
     assert events.count(fetch) == 1
@@ -651,9 +651,9 @@ def test_a_refused_deploy_downloads_nothing(releases_root, log, monkeypatch, tmp
 
     monkeypatch.setattr(release, "check_version_free", refuse)
     with pytest.raises(release.ReleaseError, match="exists"):
-        release.cmd_deploy(SimpleNamespace(test=False, no_build=False), target, log)
+        release.cmd_deploy(SimpleNamespace(test=False, no_build=False, connector=None), target, log)
     with pytest.raises(release.ReleaseError, match="supported only for Beta"):
-        release.cmd_deploy(SimpleNamespace(test=False, no_build=True, images=None), target, log)
+        release.cmd_deploy(SimpleNamespace(test=False, no_build=True, connector=None, images=None), target, log)
     assert not [e for e in events if isinstance(e, tuple) and e[0] == "fetch"]
 
 
@@ -665,7 +665,7 @@ def test_a_failed_weights_fetch_stops_the_deploy_before_anything_is_built_or_app
     _deploy_rig(monkeypatch, tmp_path, target, events,
                 fetch_error=release.ReleaseError("build-failed", "could not fetch the EasyOCR weights"))
     with pytest.raises(release.ReleaseError, match="could not fetch the EasyOCR weights"):
-        release.cmd_deploy(SimpleNamespace(test=False, no_build=False), target, log)
+        release.cmd_deploy(SimpleNamespace(test=False, no_build=False, connector=None), target, log)
     assert "build" not in events and "apply" not in events and "stage" not in events
 
 

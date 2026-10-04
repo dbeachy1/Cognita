@@ -292,7 +292,7 @@ def with_qa_connector(target: Target, slug: str | None) -> Target:
                 "connector that can write to the Self-Test project",
             )
         return target
-    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", slug):
         raise ReleaseError("usage", f"invalid QA connector slug: {slug!r}")
     return dataclasses.replace(target, connector=slug)
 
@@ -2663,7 +2663,8 @@ def qa_release(repo: Path, target: Target, version: str, tmp: Path, log: Log,
                 raise ReleaseError(
                     "test-mode-stuck",
                     f"normal-mode restoration could not be verified: {exc}. "
-                    f"Run `python3 scripts/release.py qa --target {target.name}` after restoring the service.",
+                    f"Run `python3 scripts/release.py qa --target {target.name} "
+                    f"--connector {target.connector}` after restoring the service.",
                 ) from exc
     log.line("verify: live self-test passed and the target is back in normal mode")
 

@@ -313,7 +313,8 @@ def test_no_build_beta_deploy_honors_live_qa_and_propagates_its_failure(
     monkeypatch.setattr(release, "apply_release", lambda *_args: events.append("apply"))
     monkeypatch.setattr(release, "verify_release", lambda *_args: events.append("verify"))
     monkeypatch.setattr(release, "qa_release", qa)
-    args = SimpleNamespace(no_build=True, images=images_dir, profile="amd", mode="full", test=run_qa)
+    args = SimpleNamespace(no_build=True, images=images_dir, profile="amd", mode="full",
+                           test=run_qa, connector=None)
     if qa_fails:
         with pytest.raises(release.ReleaseError, match="candidate live QA failed") as failure:
             release.cmd_deploy(args, target, log)
