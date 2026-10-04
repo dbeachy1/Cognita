@@ -142,7 +142,7 @@ async def test_login_page_follows_system_theme_until_one_is_picked(tmp_path):
         picked = await c.get("/")
     assert "Sign in" in first.text
     assert "data-theme" not in first.text.split("<head>", 1)[0]
-    assert '<html lang="en" data-theme="dark">' in picked.text
+    assert '<html lang="en-US" data-theme="dark">' in picked.text
 
 
 async def test_login_wrong_password_denied(tmp_path):

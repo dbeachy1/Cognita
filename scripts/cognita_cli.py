@@ -322,13 +322,15 @@ class Progress:
 
         {"schema": 1, "time": "<local ISO>", "stage": "<id>", "title": "<plain words>",
          "state": "start|progress|done|failed|warning", "bytes_done": N, "bytes_total": N,
-         "message": "...", "fix": "..."}
+         "message": "...", "fix": "...", "presentation_id": "...",
+         "presentation_values": {"name": "nonsensitive value"}}
 
     ``bytes_*`` appear only on download stages; ``message`` and ``fix`` only on ``failed`` and ``warning``.
-    Without a path every method is a no-op, so a caller never has to ask whether progress is on.  The
-    file holds only text the terminal shows, so it holds no secret.  A write failure is logged ONCE and
-    never fails the command.  ``render`` (the UI's command-name rewrite) is applied to message and fix so
-    the file says ``cognita``, not ``./cognita``, where the terminal does.
+    Presentation fields are optional and Setup-only; the English detail and fix remain present for support.
+    Without a path every method is a no-op, so a caller never has to ask whether progress is on. The file
+    carries no secrets. A write failure is logged ONCE and never fails the command. ``render`` (the UI's
+    command-name rewrite) is applied to message and fix so the file says ``cognita``, not ``./cognita``,
+    where the terminal does.
     """
 
     def __init__(self, path: str | os.PathLike | None = None, *, log=None,
@@ -374,7 +376,9 @@ class Progress:
                       "progress reporting is off for this run, the command goes on")
 
     def emit(self, stage: str, state: str, *, bytes_done: int | None = None, bytes_total: int | None = None,
-             message: str | None = None, fix: str | None = None, title: str | None = None) -> None:
+             message: str | None = None, fix: str | None = None, title: str | None = None,
+             presentation_id: str | None = None,
+             presentation_values: dict[str, str] | None = None) -> None:
         """``title`` replaces the stage's usual title for this one line (design 21.2: a skipped proof)."""
         if not self.enabled:
             return
@@ -392,6 +396,9 @@ class Progress:
             record["message"] = self.render(message)
         if fix is not None:
             record["fix"] = self.render(fix)
+        if state in {"warning", "failed"} and presentation_id is not None:
+            record["presentation_id"] = presentation_id
+            record["presentation_values"] = dict(presentation_values or {})
         try:
             with open(self.path, "a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -442,12 +449,17 @@ class Progress:
     def update(self, stage: str, done: int, total: int) -> None:
         self.emit(stage, "progress", bytes_done=min(done, total) if total else done, bytes_total=total)
 
-    def warning(self, stage: str, message: str) -> None:
-        self.emit(stage, "warning", message=message)
+    def warning(self, stage: str, message: str, *, presentation_id: str | None = None,
+                presentation_values: dict[str, str] | None = None) -> None:
+        self.emit(stage, "warning", message=message, presentation_id=presentation_id,
+                  presentation_values=presentation_values)
 
-    def fail(self, message: str, fix: str | None = None, *, default_stage: str = "checks") -> None:
+    def fail(self, message: str, fix: str | None = None, *, default_stage: str = "checks",
+             presentation_id: str | None = None,
+             presentation_values: dict[str, str] | None = None) -> None:
         """A `failed` line for the stage that was open (else the outer one, else ``default_stage``)."""
-        self.emit(self.stage or self.outer or default_stage, "failed", message=message, fix=fix or "")
+        self.emit(self.stage or self.outer or default_stage, "failed", message=message, fix=fix or "",
+                  presentation_id=presentation_id, presentation_values=presentation_values)
 
 
 class UI:
@@ -3099,7 +3111,12 @@ def acceleration_and_proof(ctx: Ctx, values: dict[str, str], target, admin_user:
     if verified:
         return target, None
     warnings.append(f"{label} acceleration did not verify ({why}), so Cognita is using the CPU.")
-    ctx.ui.progress.warning("acceleration", warnings[-1])
+    ctx.ui.progress.warning(
+        "acceleration",
+        warnings[-1],
+        presentation_id="setup.acceleration.verification_failed",
+        presentation_values={"vendor": label},
+    )
     switch_to_cpu(ctx, values, admin_user, password, why)
     target = target_of(values)
     try:
@@ -3182,7 +3199,7 @@ def gpu_notes_for(vendor: str, report: Report) -> str:
     return "".join(f" {message}" for message in candidates if message in report.notes)
 
 
-def gpu_fallback_reason(vendor: str, report: Report, *, no_image: bool) -> str:
+def gpu_fallback_reason_details(vendor: str, report: Report, *, no_image: bool) -> tuple[str, str]:
     """The plain reason a requested GPU vendor cannot be used here, built from the facts, for the one
     `acceleration` warning of --acceleration-fallback cpu (design 22.12 item 2).  In this order: the published
     release has no image for it; Linux cannot see an NVIDIA driver (under WSL that means WSL does not pass the
@@ -3191,23 +3208,34 @@ def gpu_fallback_reason(vendor: str, report: Report, *, no_image: bool) -> str:
     label = GPU_LABELS[vendor]
     facts = report.facts
     if no_image:
-        return f"the published release has no {label} image"
+        return f"the published release has no {label} image", "no_image"
     if vendor == "nvidia" and facts is not None:
         if not facts.nvidia_driver:
-            return "Linux cannot see an NVIDIA driver"
+            return "Linux cannot see an NVIDIA driver", "driver_unavailable"
         if nvidia_driver_too_old(facts):
-            return f"the NVIDIA driver is older than {NVIDIA_DRIVER_FLOOR}"
+            return f"the NVIDIA driver is older than {NVIDIA_DRIVER_FLOOR}", "driver_too_old"
         if facts.nvidia_runtime is False:
-            return "Docker does not know the nvidia runtime"
-    return "it did not qualify"
+            return "Docker does not know the nvidia runtime", "runtime_unavailable"
+    return "it did not qualify", "not_qualified"
 
 
-def emit_acceleration_warning(ctx: Ctx, vendor: str, message: str, *, why: str) -> None:
+def gpu_fallback_reason(vendor: str, report: Report, *, no_image: bool) -> str:
+    """Return the existing English detail used by console output and logs."""
+    return gpu_fallback_reason_details(vendor, report, no_image=no_image)[0]
+
+
+def emit_acceleration_warning(ctx: Ctx, vendor: str, message: str, *, why: str,
+                              presentation_reason: str) -> None:
     """One `acceleration`-stage progress warning (design 22.12 items 2 and 9).  The stage title names the vendor,
     so the label is set before emitting; Setup adds its own fix line to a warning of this stage.  ``why`` is
     only for the log line, which carries what was emitted."""
     ctx.ui.progress.accel_label = GPU_LABELS[vendor]
-    ctx.ui.progress.warning("acceleration", message)
+    ctx.ui.progress.warning(
+        "acceleration",
+        message,
+        presentation_id="setup.acceleration.fallback_unavailable",
+        presentation_values={"vendor": GPU_LABELS[vendor], "reason": presentation_reason},
+    )
     ctx.log.line(f"acceleration warning: vendor={vendor} why={why} message=[{message}]")
 
 
@@ -3284,11 +3312,11 @@ def choose_hardware(ctx: Ctx, a, report: Report, published: dict[str, str],
         # from the facts; the screen also gets the step-1 driver / runtime notes, which stay out of the progress
         # line (they say "run ./cognita install ...", which is not what a Setup user does).
         label = GPU_LABELS[wanted]
-        why = gpu_fallback_reason(wanted, report, no_image=wanted in no_image)
+        why, reason_code = gpu_fallback_reason_details(wanted, report, no_image=wanted in no_image)
         message = (f"{label} acceleration was chosen, but Cognita cannot use the {label} GPU here ({why}), "
                    "so it will use the CPU.")
         ui.say(message + gpu_notes_for(wanted, report))
-        emit_acceleration_warning(ctx, wanted, message, why=why)
+        emit_acceleration_warning(ctx, wanted, message, why=why, presentation_reason=reason_code)
         log.line(f"choice: --acceleration {wanted} not usable here; --acceleration-fallback cpu -> cpu")
         requested = "cpu"
         fallback_warned = True
@@ -3331,7 +3359,10 @@ def choose_hardware(ctx: Ctx, a, report: Report, published: dict[str, str],
             log.line("choice: saved-profile note not emitted as an acceleration warning; --acceleration cpu "
                      "was given")
         else:
-            emit_acceleration_warning(ctx, before_accel, _sentence(note), why="saved profile no longer honored")
+            emit_acceleration_warning(
+                ctx, before_accel, _sentence(note), why="saved profile no longer honored",
+                presentation_reason="saved_profile",
+            )
     before_workspace = existing.get("COGNITA_WORKSPACE")
     if report.workspace_available:
         if a.workspace:
@@ -4361,7 +4392,10 @@ def requalify_saved_gpu_profile(ctx: Ctx, env: dict[str, str]) -> None:
     ctx.ui.say(f"Note: {note}")
     ctx.log.line(f"update: acceleration {saved} -> cpu because no qualifying {GPU_LABELS[saved]} card is present")
     # 15.1.0 (design 22.12 item 9): Setup's page shows the drop too, as an `acceleration` warning.
-    emit_acceleration_warning(ctx, saved, _sentence(note), why="saved profile no longer honored on update")
+    emit_acceleration_warning(
+        ctx, saved, _sentence(note), why="saved profile no longer honored on update",
+        presentation_reason="saved_profile",
+    )
 
 
 def switch_release(ctx: Ctx, a, env: dict[str, str], *, kind: str, old_version: str, new_version: str,

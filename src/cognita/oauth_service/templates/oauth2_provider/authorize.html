@@ -1,35 +1,34 @@
 {% extends "cognita/base.html" %}
-{% load i18n %}
-{% block title %}{% if error %}Authorization error{% else %}Authorize · Cognita{% endif %}{% endblock %}
+{% block title %}{% if error %}{{ ui.title_error }}{% else %}{{ ui.title }}{% endif %}{% endblock %}
 {% block content %}
 <section class="card" aria-labelledby="authorization-title">
   {% if error %}
-    <h1 id="authorization-title">Authorization could not continue</h1>
-    <p class="error" role="alert">{{ error.description|default:error.error }}</p>
-    <p class="muted">Return to the requesting application and try again.</p>
+    <h1 id="authorization-title">{{ ui.heading_error }}</h1>
+    <p class="error" role="alert">{{ ui.error_message }}</p>
+    <p class="muted">{{ ui.error_return }}</p>
   {% else %}
-    <h1 id="authorization-title">Authorize {{ application.name }}?</h1>
-    <p class="muted">Cognita is asking for access through this connector.</p>
+    <h1 id="authorization-title">{{ ui.heading }}</h1>
+    <p class="muted">{{ ui.intro }}</p>
     {% if connector %}
-      <h2>Connector access</h2>
+      <h2>{{ ui.connector_access }}</h2>
       {% if connector.project_mode == "all" %}
-        <p>{{ connector.name }} includes enabled projects with {{ connector.default_access|capfirst }} default access unless a project is excluded from defaults. Explicit overrides are shown below, and future enabled projects are included unless excluded. Access settings are managed by your administrator and may change.</p>
+        <p>{{ ui.project_mode }}</p>
       {% else %}
-        <p>{{ connector.name }} is limited to the selected enabled projects below. Access settings are managed by your administrator and may change.</p>
+        <p>{{ ui.project_mode }}</p>
       {% endif %}
       {% if connector.projects %}
         <ul class="access-list">
           {% for project in connector.projects %}
-            <li class="access-item"><span>{{ project.name }}</span><span class="access-mode">{{ project.access|capfirst }}</span></li>
+            <li class="access-item"><span>{{ project.name }}</span><span class="access-mode">{{ project.access_label }}</span></li>
           {% endfor %}
         </ul>
       {% else %}
-        <p class="muted">No enabled projects are currently available.</p>
+        <p class="muted">{{ ui.no_projects }}</p>
       {% endif %}
     {% else %}
-      <p>This request does not identify an available Cognita connector.</p>
+      <p>{{ ui.unavailable_connector }}</p>
     {% endif %}
-    <p class="muted">Review the request before continuing. You can deny access at any time.</p>
+    <p class="muted">{{ ui.review }}</p>
     <form id="authorizationForm" method="post">
       {% csrf_token %}
       {% for field in form %}
@@ -40,9 +39,24 @@
         {% if field.errors %}<div class="error" role="alert">{{ field.errors }}</div>{% endif %}
       {% endfor %}
       <div class="actions">
-        <button type="submit" class="secondary" name="deny" value="Deny">Deny</button>
-        <button type="submit" name="allow" value="Authorize">Authorize</button>
+        <button type="submit" class="secondary" name="deny" value="Deny">{{ ui.deny }}</button>
+        <button type="submit" name="allow" value="Authorize">{{ ui.authorize }}</button>
       </div>
+    </form>
+  {% endif %}
+  {% if language_next %}
+    <form method="post" action="/oauth/authorize" aria-label="{{ language_label }}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ language_next }}">
+      <div class="field">
+        <label for="oauth-language">{{ language_label }}</label>
+        <select id="oauth-language" name="language">
+          {% for option in language_options %}
+            <option value="{{ option.tag }}"{% if option.selected %} selected{% endif %}>{{ option.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" name="change_language" value="1" class="secondary">{{ language_submit }}</button>
     </form>
   {% endif %}
 </section>

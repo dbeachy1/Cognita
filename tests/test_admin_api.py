@@ -192,6 +192,36 @@ async def test_documents_path_info_counts_files_and_bytes(ctx):
     }
 
 
+async def test_documents_root_probe_returns_folder_presentation_ids(ctx, monkeypatch):
+    app, _, _, docs = ctx
+    root = str(docs.resolve())
+    monkeypatch.setattr("cognita.admin_api.configured_document_roots", lambda: [root])
+    (docs / "available").mkdir()
+    async with await _client(app) as c:
+        invalid = await c.post(
+            "/api/projects/path-info", json={"root": root, "folder": "../outside"}
+        )
+        missing = await c.post(
+            "/api/projects/path-info", json={"root": root, "folder": "not-created"}
+        )
+        available = await c.post(
+            "/api/projects/path-info", json={"root": root, "folder": "available"}
+        )
+
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "The folder may not contain '..'."
+    assert invalid.json()["presentation_id"] == "admin.folder.invalid"
+    assert invalid.json()["presentation_values"] == {"folder": "../outside"}
+    assert missing.status_code == 200
+    assert missing.json()["presentation_id"] == "admin.folder.missing"
+    assert missing.json()["presentation_values"] == {"folder": str(docs / "not-created")}
+    assert missing.json()["message"] == "This folder does not exist. Create it first."
+    assert available.status_code == 200
+    assert available.json()["presentation_id"] == "admin.folder.readwrite"
+    assert available.json()["presentation_values"] == {"folder": str(docs / "available")}
+    assert available.json()["message"] == "Cognita can read and write this folder."
+
+
 async def test_documents_path_info_does_not_follow_directory_symlinks(ctx, tmp_path):
     app, _, _, docs = ctx
     outside = tmp_path / "outside"
@@ -314,6 +344,16 @@ async def test_index_without_theme_cookie_follows_system(ctx):
         r = await c.get("/")
     assert r.status_code == 200
     assert "data-theme" not in r.text.split("<head>", 1)[0]
+
+
+async def test_index_language_cookie_precedes_accept_language(ctx):
+    app, *_ = ctx
+    async with await _client(app) as c:
+        preferred = await c.get("/", headers={"Accept-Language": "fr-FR, en-US;q=0.8"})
+        c.cookies.set("cognita_lang", "pt-BR")
+        chosen = await c.get("/", headers={"Accept-Language": "fr-FR"})
+    assert '<html lang="fr-FR"' in preferred.text
+    assert '<html lang="pt-BR"' in chosen.text
 
 
 async def test_index_theme_cookie_light_stays_light(ctx):

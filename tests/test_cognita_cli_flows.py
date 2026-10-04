@@ -407,11 +407,16 @@ def test_amd_is_turned_on_through_admin_restarted_verified_and_proven_on_the_gpu
     assert rig.tool.names().count("stage_published") == 1               # no fallback
 
 
-def test_an_unverified_gpu_falls_back_to_cpu_says_why_and_the_install_still_succeeds(rig):
+def test_an_unverified_gpu_falls_back_to_cpu_says_why_and_the_install_still_succeeds(rig, tmp_path):
     _amd_machine(rig)
     rig.admin_state.verify_result = {"state": "failed", "cards": [], "cleanup": "passed",
                                      "runtimes": {"embedding": {"reason": "canary_failed"}, "ocr": {}}}
+    path = _progress_to(rig, tmp_path)
     assert run_install(rig, "--acceleration", "amd") == cli.EXIT_OK
+    [warning] = _accel_warnings(path)
+    assert warning["presentation_id"] == "setup.acceleration.verification_failed"
+    assert warning["presentation_values"] == {"vendor": "AMD"}
+    assert "canary_failed" in warning["message"]
     log = next(Path(rig.data).rglob("install-*.log")).read_text(encoding="utf-8")
     assert "AMD acceleration did not verify: embedding: canary_failed. Switching to CPU." in log
     env = rig.env()
@@ -2375,6 +2380,8 @@ def test_the_fallback_installs_for_the_cpu_when_no_card_qualifies_with_one_warni
     assert warnings[0]["title"] == "Checking the NVIDIA card"                      # accel_label was set first
     assert warnings[0]["message"] == ("NVIDIA acceleration was chosen, but Cognita cannot use the NVIDIA GPU here "
                                       "(Linux cannot see an NVIDIA driver), so it will use the CPU.")
+    assert warnings[0]["presentation_id"] == "setup.acceleration.fallback_unavailable"
+    assert warnings[0]["presentation_values"] == {"vendor": "NVIDIA", "reason": "driver_unavailable"}
     assert "./cognita install" not in warnings[0]["message"]                      # the notes are screen-only
     screen = rig.screen()
     assert warnings[0]["message"] in screen and cli.NVIDIA_DRIVER_MESSAGE in screen
@@ -2509,6 +2516,8 @@ def test_an_install_rerun_that_drops_a_saved_gpu_also_warns_at_the_acceleration_
     assert warning["title"] == "Checking the NVIDIA card"
     assert warning["message"] == ("This install used NVIDIA acceleration, but no NVIDIA GPU that Cognita can use "
                                   "was found now, so it will run on the CPU.")
+    assert warning["presentation_id"] == "setup.acceleration.fallback_unavailable"
+    assert warning["presentation_values"] == {"vendor": "NVIDIA", "reason": "saved_profile"}
     assert "Note: this install used NVIDIA acceleration" in rig.screen()
 
 

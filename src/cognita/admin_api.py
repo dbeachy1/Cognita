@@ -61,6 +61,7 @@ from .config import CognitaConfig
 # 14.1.0 (installer design 19.2): the documents roots and their display text live in one module.
 # `configured_document_roots` moved there from this file.
 from .document_roots import configured_document_roots, display_for, roots_with_displays
+from .localization import SUPPORTED_LOCALES, resolve_locale
 from .connectors import (
     WORKSPACE_CONTRACT_VERSION,
     ConnectorPolicyError,
@@ -153,19 +154,52 @@ def _theme_from(request: Request) -> str | None:
     return theme if theme in _VALID_THEMES else None
 
 
-def _render_page(filename: str, theme: str | None) -> HTMLResponse:
-    """Serve a web/ page with the persisted theme stamped onto <html>.
+def _admin_locale(request: Request) -> str:
+    """Resolve the host's saved Admin language, then its supported browser preference."""
+    cookie = request.cookies.get("cognita_lang", "")
+    if cookie in SUPPORTED_LOCALES:
+        return cookie
+    choices: list[tuple[float, int, str]] = []
+    for index, part in enumerate(request.headers.get("Accept-Language", "").split(",")[:32]):
+        fields = [field.strip() for field in part.split(";")]
+        tag = fields[0].replace("_", "-").lower()
+        quality = 1.0
+        for field in fields[1:]:
+            if field.startswith("q="):
+                try:
+                    quality = float(field[2:])
+                except ValueError:
+                    quality = 0.0
+                break
+        if not 0.0 < quality <= 1.0 or tag == "*":
+            continue
+        locale = next((item for item in SUPPORTED_LOCALES if item.lower() == tag), None)
+        if locale is None and tag in {"es", "fr", "de", "it", "en"}:
+            locale = resolve_locale(tag)
+        if locale is not None:
+            choices.append((quality, -index, locale))
+    return max(choices)[2] if choices else "en-US"
 
-    The pages ship with data-theme="light"; we rewrite that single attribute to
-    the chosen theme, or drop it when there is no choice so the system theme
-    applies. Rendered per-request (not FileResponse) precisely because the
-    output now depends on the request's cookie.
+
+def _render_page(filename: str, theme: str | None, locale: str = "en-US") -> HTMLResponse:
+    """Serve a web/ page with the persisted theme and resolved language on <html>.
+
+    The pages ship with data-theme="light"; we rewrite it to the chosen theme,
+    or drop it when unset so the system theme applies. The language is resolved
+    per request from the cookie and Accept-Language header. Rendered per-request
+    (not FileResponse) because the output depends on request preferences.
     """
     html = (WEB_DIR / filename).read_text(encoding="utf-8")
     # The running package is the sole version authority.  Replacing tokens at
     # response time keeps the visible shell, login page, and asset cache keys
     # aligned after deployment without a browser-bundled version constant.
     html = html.replace("__COGNITA_VERSION__", __version__)
+    html = re.sub(
+        r'(<html\b[^>]*\blang=)["\'][^"\']*["\']',
+        lambda match: f'{match.group(1)}"{locale}"',
+        html,
+        count=1,
+    )
     if theme is None:
         html = html.replace(' data-theme="light"', "", 1)
     elif theme != "light":
@@ -358,8 +392,10 @@ def _probe_root_folder(root: str, folder: str) -> dict:
     }
     if not joined.exists():
         result["message"] = "This folder does not exist. Create it first."
+        result["presentation_id"] = "admin.folder.missing"
     elif not joined.is_dir():
         result["message"] = "This is a file, not a folder. Pick a folder."
+        result["presentation_id"] = "admin.folder.file"
     else:
         try:
             os.listdir(joined)
@@ -390,11 +426,15 @@ def _probe_root_folder(root: str, folder: str) -> dict:
                                 probe, type(exc).__name__, exc)
         if not result["readable"]:
             result["message"] = "Cognita cannot read this folder. Check who owns it and its permissions."
+            result["presentation_id"] = "admin.folder.unreadable"
         elif result["writable"]:
             result["message"] = "Cognita can read and write this folder."
+            result["presentation_id"] = "admin.folder.readwrite"
         else:
             result["message"] = ("Cognita can read this folder but cannot write to it. "
                                  "Editing documents through Cognita will fail.")
+            result["presentation_id"] = "admin.folder.readonly"
+    result["presentation_values"] = {"folder": result["display"]}
     log.info("Documents folder probe path=%s display=%s exists=%s readable=%s writable=%s files=%d",
              joined, result["display"], result["exists"], result["readable"], result["writable"],
              result["file_count"])
@@ -2176,21 +2216,36 @@ def create_admin_app(
             return failure
         if body.root is not None:
             if body.documents_dir is not None:
-                raise HTTPException(status_code=400, detail="Send either documents_dir or root and folder, not both")
+                return JSONResponse({
+                    "detail": "Send either documents_dir or root and folder, not both",
+                    "presentation_id": "admin.folder.invalid",
+                    "presentation_values": {"folder": body.folder},
+                }, status_code=400)
             try:
                 probed = await asyncio.to_thread(_probe_root_folder, body.root, body.folder)
             except ValueError as exc:
                 log.info("Documents folder probe refused root=%s reason=%s", body.root, exc)
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                return JSONResponse({
+                    "detail": str(exc),
+                    "presentation_id": "admin.folder.invalid",
+                    "presentation_values": {"folder": body.folder},
+                }, status_code=400)
             return JSONResponse(probed)
         if body.documents_dir is None:
-            raise HTTPException(status_code=400, detail="documents_dir (or root and folder) is required")
+            return JSONResponse({
+                "detail": "documents_dir (or root and folder) is required",
+                "presentation_id": "admin.folder.path_required",
+            }, status_code=400)
         try:
             root, file_count, total_bytes = await asyncio.to_thread(
                 _documents_directory_stats, body.documents_dir
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return JSONResponse({
+                "detail": str(exc),
+                "presentation_id": "admin.folder.invalid",
+                "presentation_values": {"folder": body.documents_dir},
+            }, status_code=400)
         log.info(
             "Documents folder probe succeeded files=%d total_bytes=%d",
             file_count,
@@ -2567,8 +2622,8 @@ def create_admin_app(
         if admin_auth_configured(config) and not read_session_user(
             config, request.cookies.get(SESSION_COOKIE)
         ):
-            return _render_page("login.html", theme)
-        return _render_page("index.html", theme)
+            return _render_page("login.html", theme, _admin_locale(request))
+        return _render_page("index.html", theme, _admin_locale(request))
 
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
     return app

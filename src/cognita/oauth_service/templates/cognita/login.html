@@ -1,25 +1,37 @@
 {% extends "cognita/base.html" %}
-{% load i18n %}
-{% block title %}Sign in · Cognita{% endblock %}
+{% block title %}{{ ui.title }}{% endblock %}
 {% block content %}
 <section class="card" aria-labelledby="login-title">
-  <h1 id="login-title">Sign in to Cognita</h1>
-  <p class="muted">Sign in to continue authorizing this connection.</p>
+  <h1 id="login-title">{{ ui.heading }}</h1>
+  <p class="muted">{{ ui.intro }}</p>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="/oauth/login">
     {% csrf_token %}
-    <input type="hidden" name=next value="{{ next }}">
+    <input type="hidden" name="next" value="{{ next }}">
     <div class="field">
-      <label for="username">Username</label>
+      <label for="username">{{ ui.username }}</label>
       <input id="username" name="username" type="text" autocomplete="username" required autofocus>
     </div>
     <div class="field">
-      <label for="password">Password</label>
+      <label for="password">{{ ui.password }}</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
     </div>
     <div class="actions">
-      <button type="submit">Continue</button>
+      <button type="submit">{{ ui.continue }}</button>
     </div>
+  </form>
+  <form method="post" action="/oauth/login" aria-label="{{ language_label }}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="field">
+      <label for="oauth-language">{{ language_label }}</label>
+      <select id="oauth-language" name="language">
+        {% for option in language_options %}
+          <option value="{{ option.tag }}"{% if option.selected %} selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" name="change_language" value="1" class="secondary">{{ language_submit }}</button>
   </form>
 </section>
 {% endblock %}

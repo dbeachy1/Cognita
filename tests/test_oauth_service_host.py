@@ -132,7 +132,7 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     )
     assert rejected_authorization.status_code == 400
     assert "/oauth/login" not in rejected_authorization.get("Location", "")
-    assert "Authorization could not continue" in rejected_authorization.text
+    assert "Authorization could not continue" in rejected_authorization.text, rejected_authorization.text
     assert "oauth2_provider/css/oauth2_provider.css" not in rejected_authorization.text
     assert "<Client & Test>" not in rejected_authorization.text
 
@@ -150,7 +150,7 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     assert "prefers-reduced-motion" in login_page.text
     assert 'autocomplete="current-password"' in login_page.text
     next_url = html.unescape(
-        re.search(r'name=next value="([^"]+)"', login_page.content.decode()).group(1)
+        re.search(r'name=["\']?next["\']? value="([^"]+)"', login_page.content.decode()).group(1)
     )
     for _ in range(5):
         failed = client.post(
@@ -182,6 +182,83 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     assert "<Client & Test>" not in consent.text
     assert "future enabled projects are included unless excluded" in consent.text
     assert "includes all enabled projects" not in consent.text
+
+    # Language selection is a separate CSRF-protected POST. It changes only the
+    # host-only UI cookie and revalidates the same authorization request.
+    language_client = Client(enforce_csrf_checks=True)
+    language_authorization = {**authorization, "state": "language-state"}
+    login_redirect = language_client.get(
+        "/oauth/authorize", language_authorization,
+        HTTP_ACCEPT_LANGUAGE="fr-FR, en-US;q=0.8",
+    )
+    language_login = language_client.get(
+        login_redirect["Location"], HTTP_ACCEPT_LANGUAGE="fr-FR, en-US;q=0.8"
+    )
+    assert 'lang="fr-FR"' in language_login.text
+    language_csrf = re.search(
+        r'name=["\']?csrfmiddlewaretoken["\']? value="([^"\']+)"', language_login.text
+    ).group(1)
+    language_next = html.unescape(
+        re.search(r'name="next" value="([^"]+)"', language_login.text).group(1)
+    )
+    csrf_rejected = language_client.post(
+        "/oauth/login",
+        {"language": "pt-BR", "change_language": "1", "next": language_next},
+    )
+    assert csrf_rejected.status_code == 403
+    switched = language_client.post(
+        "/oauth/login",
+        {"csrfmiddlewaretoken": language_csrf, "language": "pt-BR",
+         "change_language": "1", "next": language_next},
+        follow=False,
+    )
+    assert switched.status_code == 302
+    assert switched["Location"].startswith("/oauth/login?")
+    language_cookie = switched.cookies["cognita_lang"].output()
+    assert "Path=/oauth" in language_cookie and "Secure" in language_cookie
+    assert "HttpOnly" in language_cookie and "SameSite=Lax" in language_cookie
+    language_login = language_client.get(switched["Location"], HTTP_ACCEPT_LANGUAGE="es-ES")
+    assert 'lang="pt-BR"' in language_login.text
+    assert "Entrar" in language_login.text
+    language_csrf = re.search(
+        r'name=["\']?csrfmiddlewaretoken["\']? value="([^"\']+)"', language_login.text
+    ).group(1)
+    logged_in = language_client.post(
+        "/oauth/login",
+        {"csrfmiddlewaretoken": language_csrf, "username": "admin", "password": "pw",
+         "next": language_next},
+        follow=False,
+    )
+    assert logged_in.status_code == 302
+    language_consent = language_client.get(logged_in["Location"])
+    assert language_consent.status_code == 200 and 'lang="pt-BR"' in language_consent.text
+    assert "Acesso ao conector" in language_consent.text
+    language_csrf = re.search(
+        r'name=["\']?csrfmiddlewaretoken["\']? value="([^"\']+)"', language_consent.text
+    ).group(1)
+    language_next = html.unescape(
+        re.search(r'name="next" value="([^"]+)"', language_consent.text).group(1)
+    )
+    consent_switch = language_client.post(
+        "/oauth/authorize",
+        {"csrfmiddlewaretoken": language_csrf, "language": "de-DE",
+         "change_language": "1", "next": language_next},
+        follow=False,
+    )
+    assert consent_switch.status_code == 302
+    assert parse_qs(urlsplit(consent_switch["Location"]).query)["state"] == ["language-state"]
+    language_consent = language_client.get(consent_switch["Location"])
+    assert language_consent.status_code == 200 and 'lang="de-DE"' in language_consent.text
+    assert "Zugriff" in language_consent.text
+
+    language_client.cookies.pop("cognita_lang", None)
+    invalid_switch = language_client.post(
+        "/oauth/authorize",
+        {"csrfmiddlewaretoken": language_csrf, "language": "es-ES",
+         "change_language": "1", "next": "/oauth/authorize?client_id=missing-client"},
+    )
+    assert invalid_switch.status_code == 400
+    assert "cognita_lang" not in invalid_switch.cookies
 
     for _ in range(99):
         capacity_entry = client.post(

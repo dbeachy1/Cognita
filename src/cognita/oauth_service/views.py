@@ -13,12 +13,12 @@ import logging
 import time
 from collections import defaultdict, deque
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import urlencode, urlparse, urlsplit
 
 from django.contrib.auth import get_user_model, login, logout
 from django.contrib.auth.hashers import check_password
 from django.db import transaction
-from django.http import HttpRequest, HttpResponse, JsonResponse, QueryDict
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse, QueryDict
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views import View
@@ -41,6 +41,7 @@ from oauth2_provider.views.introspect import IntrospectTokenView
 from oauthlib.oauth2.rfc6749.errors import CustomOAuth2Error
 
 from cognita.admin_auth import has_argon2_credentials, verify_login
+from cognita.localization import SUPPORTED_LOCALES, resolve_locale, translate
 from cognita.public_url import effective_public_base_url
 
 from .policy import get_policy
@@ -53,6 +54,14 @@ _LOGIN_FAILURES: dict[str, deque[float]] = defaultdict(deque)
 _LOGIN_FAILURE_LIMIT = 5
 _LOGIN_FAILURE_WINDOW_S = 60
 _LOGIN_FAILURE_BUCKET_CAP = 1024
+_LANGUAGE_OPTIONS = (
+    ("en-US", "English"),
+    ("es-ES", "Español"),
+    ("fr-FR", "Français"),
+    ("de-DE", "Deutsch"),
+    ("it-IT", "Italiano"),
+    ("pt-BR", "Português (Brasil)"),
+)
 
 
 def set_context(ctx: ServiceContext) -> None:
@@ -80,6 +89,80 @@ def _public_base_url() -> str:
     except (AttributeError, TypeError):
         log.warning("OAuth issuer setting could not be refreshed")
     return value
+
+
+def _header_locale(request: HttpRequest) -> str:
+    """Choose a supported locale from Accept-Language without trusting raw tags."""
+    choices: list[tuple[float, int, str]] = []
+    for index, part in enumerate(request.headers.get("Accept-Language", "").split(",")[:32]):
+        fields = [field.strip() for field in part.split(";")]
+        tag = fields[0].replace("_", "-")
+        quality = 1.0
+        for field in fields[1:]:
+            if field.startswith("q="):
+                try:
+                    quality = float(field[2:])
+                except ValueError:
+                    quality = 0.0
+                break
+        if not 0.0 < quality <= 1.0:
+            continue
+        normalized = tag.lower()
+        match = next((supported for supported in SUPPORTED_LOCALES if supported.lower() == normalized), None)
+        if match is None and normalized in {"es", "fr", "de", "it"}:
+            match = resolve_locale(normalized)
+        if match is not None:
+            choices.append((quality, -index, match))
+    return max(choices)[2] if choices else "en-US"
+
+
+def _locale_for(request: HttpRequest) -> str:
+    cookie = request.COOKIES.get("cognita_lang", "")
+    if cookie in SUPPORTED_LOCALES:
+        return cookie
+    return _header_locale(request)
+
+
+def _message(locale: str, key: str, values: dict | None = None) -> str:
+    return translate(locale, key, values)
+
+
+def _language_page_context(request: HttpRequest) -> dict:
+    locale = _locale_for(request)
+    return {
+        "locale": locale,
+        "language_options": [
+            {"tag": tag, "name": name, "selected": tag == locale}
+            for tag, name in _LANGUAGE_OPTIONS
+        ],
+        "language_label": _message(locale, "oauth.language.label"),
+        "language_submit": _message(locale, "oauth.language.submit"),
+    }
+
+
+def _set_language_cookie(response: HttpResponse, locale: str) -> HttpResponse:
+    response.set_cookie(
+        "cognita_lang",
+        locale,
+        max_age=365 * 24 * 60 * 60,
+        path="/oauth",
+        secure=urlparse(_public_base_url()).scheme.lower() == "https",
+        httponly=True,
+        samesite="Lax",
+    )
+    return response
+
+
+def _language_switch(request: HttpRequest, *, login_page: bool = False) -> HttpResponse:
+    locale = request.POST.get("language", "")
+    target = request.POST.get("next", "")
+    if locale not in SUPPORTED_LOCALES:
+        return HttpResponseBadRequest("Invalid language.")
+    validated = _validated_next(request, target)
+    if validated is None:
+        return HttpResponseBadRequest("Authorization request is invalid.")
+    destination = f"/oauth/login?{urlencode({'next': validated})}" if login_page else validated
+    return _set_language_cookie(redirect(destination), locale)
 
 
 def _json_error(error: str, description: str, status: int = 400) -> JsonResponse:
@@ -207,10 +290,24 @@ class LoginView(View):
         status: int = 200,
     ) -> HttpResponse:
         """Render the short browser-flow login page without exposing secrets."""
+        page = _language_page_context(request)
+        locale = page["locale"]
+        page.update({
+            "next": next_url,
+            "error": _message(locale, error) if error else None,
+            "ui": {
+                "title": _message(locale, "oauth.title.login"),
+                "heading": _message(locale, "oauth.login.heading"),
+                "intro": _message(locale, "oauth.login.intro"),
+                "username": _message(locale, "oauth.login.username"),
+                "password": _message(locale, "oauth.login.password"),
+                "continue": _message(locale, "oauth.login.continue"),
+            },
+        })
         return render(
             request,
             "cognita/login.html",
-            {"next": next_url, "error": error},
+            page,
             status=status,
         )
 
@@ -222,6 +319,8 @@ class LoginView(View):
 
 
     def post(self, request: HttpRequest) -> HttpResponse:
+        if "change_language" in request.POST:
+            return _language_switch(request, login_page=True)
         username = request.POST.get("username", "")
         password = request.POST.get("password", "")
         next_url = _validated_next(request, request.POST.get("next", ""))
@@ -233,7 +332,7 @@ class LoginView(View):
             return self._page(
                 request,
                 next_url,
-                "Too many attempts. Please wait and try again.",
+                "oauth.login.too_many_attempts",
                 status=429,
             )
         if not has_argon2_credentials(context().config) or not verify_login(
@@ -241,7 +340,7 @@ class LoginView(View):
         ):
             _record_login_failure(address)
             log.warning("OAuth login rejected reason=invalid_login remote=%s", address)
-            return self._page(request, next_url, "The username or password is incorrect.", status=401)
+            return self._page(request, next_url, "oauth.login.invalid_credentials", status=401)
         _LOGIN_FAILURES.pop(address, None)
         subject = get_user_model().objects.get(username=context().subject_username)
         login(request, subject, backend="django.contrib.auth.backends.ModelBackend")
@@ -252,16 +351,71 @@ class LoginView(View):
 class CognitaAuthorizationView(AuthorizationView):
     def get_context_data(self, **kwargs):
         context_data = super().get_context_data(**kwargs)
+        page = _language_page_context(self.request)
+        locale = page["locale"]
+        page["language_next"] = (
+            _validated_next(self.request, "/oauth/authorize?" + self.request.GET.urlencode())
+            if self.request.GET else None
+        )
+        ui = {
+            "title": _message(locale, "oauth.consent.title"),
+            "title_error": _message(locale, "oauth.consent.title_error"),
+            "heading_error": _message(locale, "oauth.consent.heading_error"),
+            "error_return": _message(locale, "oauth.consent.error_return"),
+            "intro": _message(locale, "oauth.consent.intro"),
+            "connector_access": _message(locale, "oauth.consent.connector_access"),
+            "no_projects": _message(locale, "oauth.consent.no_projects"),
+            "unavailable_connector": _message(locale, "oauth.consent.unavailable_connector"),
+            "review": _message(locale, "oauth.consent.review"),
+            "deny": _message(locale, "oauth.consent.deny"),
+            "authorize": _message(locale, "oauth.consent.authorize"),
+        }
+        application = context_data.get("application")
+        if application is not None:
+            ui["heading"] = _message(
+                locale, "oauth.consent.heading", {"application": application.name}
+            )
+        error = context_data.get("error")
+        if error:
+            error_id = (
+                "oauth.consent.error_invalid_request"
+                if getattr(error, "error", "") == "invalid_request"
+                else "oauth.consent.error_unknown"
+            )
+            ui["error_message"] = _message(locale, error_id)
+        page["ui"] = ui
+        context_data.update(page)
         resource = kwargs.get("resource") or self.oauth2_data.get("resource")
         if isinstance(resource, str):
             policy = get_policy()
             summary = policy.connection_summary(resource)
             definition = policy.connector_for(resource)
             if summary is not None and definition is not None:
+                mode_key = (
+                    "oauth.consent.project_mode_all"
+                    if definition.project_mode == "all"
+                    else "oauth.consent.project_mode_selected"
+                )
+                mode_values = {"name": summary["name"]}
+                if definition.project_mode == "all":
+                    mode_values["access"] = _message(
+                        locale, f"oauth.access.{definition.default_access}"
+                    )
+                ui["project_mode"] = _message(
+                    locale,
+                    mode_key,
+                    mode_values,
+                )
                 summary = {
                     **summary,
+                    "projects": [
+                        {
+                            **project,
+                            "access_label": _message(locale, f"oauth.access.{project['access']}"),
+                        }
+                        for project in summary.get("projects", [])
+                    ],
                     "project_mode": definition.project_mode,
-                    "default_access": definition.default_access,
                 }
             context_data["connector"] = summary
         return context_data
@@ -275,6 +429,27 @@ class CognitaAuthorizationView(AuthorizationView):
         same configured issuer to the resulting redirect only.
         """
         response = super().error_response(error, application, **kwargs)
+        if response.status_code >= 400 and response.get("Content-Type", "").startswith("text/html"):
+            page = _language_page_context(self.request)
+            code = getattr(getattr(error, "error", None), "error", "")
+            error_id = (
+                "oauth.consent.error_invalid_request"
+                if code == "invalid_request"
+                else "oauth.consent.error_unknown"
+            )
+            locale = page["locale"]
+            page["ui"] = {
+                "title_error": _message(locale, "oauth.consent.title_error"),
+                "heading_error": _message(locale, "oauth.consent.heading_error"),
+                "error_return": _message(locale, "oauth.consent.error_return"),
+                "error_message": _message(locale, error_id),
+            }
+            response = render(
+                self.request,
+                "oauth2_provider/authorize.html",
+                {**page, "error": True},
+                status=response.status_code,
+            )
         location = response.get("Location")
         if location and oauth2_settings.COMPLIANT_BCP_RFC9700_AUTHZ_RESPONSE_ISS:
             response["Location"] = _add_iss_to_redirect(
@@ -326,6 +501,11 @@ class CognitaAuthorizationView(AuthorizationView):
         logout(self.request)
         response.delete_cookie("cognita_oauth_session", path="/oauth")
         return response
+
+    def post(self, request, *args, **kwargs):
+        if "change_language" in request.POST:
+            return _language_switch(request)
+        return super().post(request, *args, **kwargs)
 
 
 def _host_allowed(uri: str, configured: list[str]) -> bool:
