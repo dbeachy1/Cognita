@@ -167,12 +167,31 @@ async def test_add_bad_name_400(ctx):
 
 
 async def test_add_missing_docs_dir_400(ctx):
-    app, *_ = ctx
+    app, _, _, docs = ctx
+    missing = docs / "not-created"
     async with await _client(app) as c:
         r = await c.post(
-            "/api/projects", json={"name": "X", "documents_dir": "B:/nope/does-not-exist"}
+            "/api/projects", json={"name": "X", "documents_dir": str(missing)}
         )
     assert r.status_code == 400
+    assert r.json()["detail"] == (
+        f"Documents folder does not exist or is not a directory: {missing}"
+    )
+    assert r.json()["presentation_id"] == "admin.folder.missing"
+    assert r.json()["presentation_values"] == {"folder": str(missing)}
+
+
+async def test_add_file_as_docs_dir_reports_file_guidance(ctx):
+    app, _, _, docs = ctx
+    file_path = docs / "document.txt"
+    file_path.write_text("text", encoding="utf-8")
+    async with await _client(app) as c:
+        response = await c.post(
+            "/api/projects", json={"name": "X", "documents_dir": str(file_path)}
+        )
+    assert response.status_code == 400
+    assert response.json()["presentation_id"] == "admin.folder.file"
+    assert response.json()["presentation_values"] == {"folder": str(file_path)}
 
 
 async def test_documents_path_info_counts_files_and_bytes(ctx):
@@ -189,6 +208,8 @@ async def test_documents_path_info_counts_files_and_bytes(ctx):
         "path": str(docs.resolve()),
         "file_count": 2,
         "total_bytes": 8,
+        "presentation_id": "admin.project.path_checked",
+        "presentation_values": {"folder": str(docs.resolve())},
     }
 
 
@@ -255,16 +276,26 @@ async def test_documents_path_info_does_not_expose_nested_name_on_scan_failure(
 
     assert r.status_code == 400
     assert r.json()["detail"] == "Documents folder cannot be read completely"
+    assert r.json()["presentation_id"] == "admin.folder.unreadable"
+    assert r.json()["presentation_values"] == {"folder": str(docs)}
     assert "private-name.txt" not in r.text
 
 
-@pytest.mark.parametrize("documents_dir", ["relative/folder", "B:/nope/does-not-exist"])
-async def test_documents_path_info_rejects_invalid_path(ctx, documents_dir):
+@pytest.mark.parametrize(
+    ("documents_dir", "presentation_id"),
+    [
+        ("relative/folder", "admin.folder.invalid"),
+        ("B:/nope/does-not-exist", "admin.folder.missing"),
+    ],
+)
+async def test_documents_path_info_rejects_invalid_path(ctx, documents_dir, presentation_id):
     app, *_ = ctx
     async with await _client(app) as c:
         r = await c.post("/api/projects/path-info", json={"documents_dir": documents_dir})
     assert r.status_code == 400
     assert "detail" in r.json()
+    assert r.json()["presentation_id"] == presentation_id
+    assert r.json()["presentation_values"] == {"folder": documents_dir}
 
 
 async def test_regenerate_token_is_retired(ctx):

@@ -2241,10 +2241,19 @@ def create_admin_app(
                 _documents_directory_stats, body.documents_dir
             )
         except ValueError as exc:
+            candidate = Path(body.documents_dir).expanduser()
+            presentation_id = "admin.folder.invalid"
+            if candidate.is_absolute():
+                if not candidate.exists():
+                    presentation_id = "admin.folder.missing"
+                elif not candidate.is_dir():
+                    presentation_id = "admin.folder.file"
+                else:
+                    presentation_id = "admin.folder.unreadable"
             return JSONResponse({
                 "detail": str(exc),
-                "presentation_id": "admin.folder.invalid",
-                "presentation_values": {"folder": body.documents_dir},
+                "presentation_id": presentation_id,
+                "presentation_values": {"folder": display_for(body.documents_dir)},
             }, status_code=400)
         log.info(
             "Documents folder probe succeeded files=%d total_bytes=%d",
@@ -2256,6 +2265,8 @@ def create_admin_app(
             "path": str(root),
             "file_count": file_count,
             "total_bytes": total_bytes,
+            "presentation_id": "admin.project.path_checked",
+            "presentation_values": {"folder": display_for(str(root))},
         })
 
     @app.post("/api/projects", status_code=201)
@@ -2264,9 +2275,16 @@ def create_admin_app(
             return failure
         docs = Path(body.documents_dir).expanduser()
         if not docs.is_dir():
-            raise HTTPException(
+            display = display_for(str(docs))
+            detail = f"Documents folder does not exist or is not a directory: {display}"
+            presentation_id = "admin.folder.missing" if not docs.exists() else "admin.folder.file"
+            return JSONResponse(
+                {
+                    "detail": detail,
+                    "presentation_id": presentation_id,
+                    "presentation_values": {"folder": display},
+                },
                 status_code=400,
-                detail=f"Documents folder does not exist or is not a directory: {display_for(str(docs))}",
             )
         data_dir = Path(config.data_root) / body.name
         try:
