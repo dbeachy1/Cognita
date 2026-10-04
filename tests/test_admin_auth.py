@@ -150,6 +150,8 @@ async def test_login_wrong_password_denied(tmp_path):
     async with await _client(app) as c:
         r = await c.post("/api/login", json={"username": "admin", "password": "nope"})
         assert r.status_code == 401
+        assert r.json()["detail"] == "Invalid username or password"
+        assert r.json()["presentation_id"] == "admin.login.invalid_credentials"
         assert (await c.get("/api/projects")).status_code == 401  # no cookie granted
 
 
@@ -577,6 +579,11 @@ async def test_login_is_throttled_after_repeated_failures(tmp_path):
         r = await c.post("/api/login", json={"username": "admin", "password": "wrong"})
         assert r.status_code == 429
         assert "Retry-After" in r.headers
+        assert r.json()["detail"].startswith("Too many failed attempts. Try again in ")
+        assert r.json()["presentation_id"] == "admin.login.too_many_attempts"
+        assert r.json()["presentation_values"] == {
+            "retry_after": int(r.headers["Retry-After"])
+        }
         # and the CORRECT password is refused too while locked out — otherwise
         # the lockout would not bound guessing at all
         r = await c.post("/api/login", json={"username": "admin", "password": PW})

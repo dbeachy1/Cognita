@@ -784,14 +784,25 @@ def create_admin_app(
         retry_after = _login_lockout_remaining(client)
         if retry_after:
             log.warning("Admin login locked out for %s (%ds remaining)", client, retry_after)
-            raise HTTPException(
-                status_code=429, detail=f"Too many failed attempts. Try again in {retry_after}s.",
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": f"Too many failed attempts. Try again in {retry_after}s.",
+                    "presentation_id": "admin.login.too_many_attempts",
+                    "presentation_values": {"retry_after": retry_after},
+                },
                 headers={"Retry-After": str(retry_after)},
             )
         if not verify_login(config, body.username, body.password):
             _record_login_failure(client)
             log.warning("Admin login FAILED from %s", client)
-            raise HTTPException(status_code=401, detail="Invalid username or password")
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "Invalid username or password",
+                    "presentation_id": "admin.login.invalid_credentials",
+                },
+            )
         _clear_login_failures(client)
         resp = JSONResponse({"ok": True, "username": config.admin_username})
         resp.set_cookie(SESSION_COOKIE, issue_session_token(config), **session_cookie_kwargs(config))
