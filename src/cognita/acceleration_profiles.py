@@ -223,7 +223,6 @@ def current_profile() -> AccelerationProfile:
     """
     raw = os.environ.get(PROFILE_ENV, "cpu")
     profile = profile_named(raw)
-    log.debug("acceleration.profile env=%r resolved=%s", raw, profile.name)
     return profile
 
 

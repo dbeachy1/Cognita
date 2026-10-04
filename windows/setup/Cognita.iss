@@ -507,12 +507,6 @@ begin
   Result := (StFunnelPort <> '') and (InstallMode <> ModeUpdate);
 end;
 
-{ The password page shows one field on repair and update, two otherwise. }
-function PasswordTwice: Boolean;
-begin
-  Result := not RunsOverInstalled;
-end;
-
 { A fresh random name for a pipe: 128 bits from the system's UUID generator. }
 function RandomPipeName: String;
 var
@@ -1950,8 +1944,8 @@ begin
   FolderReason.Font.Color := clRed;
   FolderReason.Caption := '';
 
-  { Admin sign-in. The sub-caption is set per mode in CurPageChanged: "Type the password twice" only
-    when two fields show (design 18.5). The page is created with the LONGER of the two captions:
+  { Admin sign-in. The sub-caption is set per mode in CurPageChanged. The page is created with
+    the LONGER of the two captions:
     Inno places the fields below the caption's height at creation and never moves them, so a caption
     that later grows to two lines runs under the first field. }
   PageAdmin := CreateInputQueryPage(PageFolder.ID, 'Admin sign-in',
@@ -2576,7 +2570,7 @@ end;
 procedure CurPageChanged(CurPageID: Integer);
 var
   Top: Integer;
-  After, Cap: String;
+  Cap: String;
 begin
   WizardForm.NextButton.Caption := SetupMessage(msgButtonNext);
   WizardForm.BackButton.Visible := True;
@@ -2657,28 +2651,20 @@ begin
     end
     else
       PageAdmin.Edits[0].ReadOnly := False;
-    if PasswordTwice then
+    if not RunsOverInstalled then
     begin
       PageAdmin.SubCaptionLabel.Caption := 'You use this user name and password to open Cognita Admin in your browser. Type the password twice.';
       PageAdmin.PromptLabels[1].Caption := 'Password:';
-      PageAdmin.PromptLabels[2].Visible := True;
-      PageAdmin.Edits[2].Visible := True;
     end
     else
     begin
-      { Repair, update and reinstall ask for the existing password once. Setup uses it to check Cognita
-        afterwards (the proof needs it, Linux design 0); it does not change the password. }
-      if InstallMode = ModeUpdate then
-        After := 'update'
-      else if InstallMode = ModeReinstall then
-        After := 'reinstall'
-      else
-        After := 'repair';
-      PageAdmin.PromptLabels[1].Caption := 'Password (Setup uses it to check Cognita after the ' + After + '):';
-      PageAdmin.SubCaptionLabel.Caption := 'Type your current Cognita Admin password.';
-      PageAdmin.PromptLabels[2].Visible := False;
-      PageAdmin.Edits[2].Visible := False;
+      { Repair, update and reinstall use the existing password to check Cognita afterwards.
+        Asking twice catches a hidden-field typo; it does not change the password. }
+      PageAdmin.PromptLabels[1].Caption := 'Current password:';
+      PageAdmin.SubCaptionLabel.Caption := 'Type your current Admin password twice. Setup checks Cognita with it; the password is unchanged.';
     end;
+    PageAdmin.PromptLabels[2].Visible := True;
+    PageAdmin.Edits[2].Visible := True;
   end
   else if CurPageID = PageAccel.ID then
     ShowAccelPage
@@ -2972,7 +2958,7 @@ begin
     MsgBox('Type a password.', mbError, MB_OK);
     Exit;
   end;
-  if PasswordTwice and (Pw <> Pw2) then
+  if Pw <> Pw2 then
   begin
     MsgBox('The two passwords are not the same.', mbError, MB_OK);
     Exit;

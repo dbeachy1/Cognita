@@ -1,5 +1,9 @@
 # Cognita-Windows operator guide
 
+This documents the legacy maintainer bundle installer. For a current Windows installation or
+update, use `Cognita-Setup-<version>.exe` as described in the repository [README](../../README.md#install-on-windows).
+The fixed paths below belong to that older reference installation and are not consumer defaults.
+
 This private Windows reference install runs the accepted Linux/amd64 CPU image in
 Docker inside its own Ubuntu 24.04 WSL2 distribution. It does not use Docker Desktop,
 the default WSL distribution, Cognita K, Beta, a Windows port proxy, or personal

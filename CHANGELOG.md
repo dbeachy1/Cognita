@@ -1,5 +1,14 @@
 # Changelog
 
+## 15.2.0 — Quieter GPU health checks and Windows password confirmation (2026-10-04)
+
+- Repeated GPU profile, probe-choice, and VRAM-ceiling DEBUG messages no longer fill logs during
+  routine health checks. GPU worker diagnostics remain available when enabled.
+- Windows Setup asks for the existing Admin password twice during update, repair, and reinstall,
+  catching a hidden-field typing mismatch before it starts. `cognita password` remains the way to
+  change the password.
+- MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.2.0.md`.
+
 ## 15.1.3 — Engine code organization (2026-10-03)
 
 - Local engine operations are organized into focused modules for reads, document changes, transfers,

@@ -490,10 +490,8 @@ def default_probe(profile: AccelerationProfile | None = None) -> GpuProbe:
     """
     chosen = profile or current_profile()
     if os.name != "posix":
-        log.debug("gpu.probe profile=%s os=%s -> NullProbe", chosen.name, os.name)
         return NullProbe()
     probe = chosen.probe_factory()
-    log.debug("gpu.probe profile=%s -> %s", chosen.name, type(probe).__name__)
     return probe
 
 
@@ -543,7 +541,6 @@ def batch_ceiling_gb(batch_size: int, profile: AccelerationProfile | None = None
     ceiling = round(
         chosen.ceiling_fixed_gb + chosen.ceiling_per_batch_gb * size + 0.004, 2
     )
-    log.debug("gpu.ceiling profile=%s batch=%d -> %.2fGB", chosen.name, size, ceiling)
     return ceiling
 
 
