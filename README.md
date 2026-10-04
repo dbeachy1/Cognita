@@ -1,5 +1,3 @@
-# Cognita
-
 Cognita lets Claude, ChatGPT and other AI assistants read, search and edit your own documents,
 on your own computer. You point it at your folders; it indexes them locally and serves them to
 the assistant through the Model Context Protocol (MCP). Your files stay on your machine: the
@@ -38,10 +36,10 @@ it can run code, process files and search the web, then copy results back into y
 The [error reason codes](docs/ERROR-REASONS.md) document machine-readable error values for
 clients.
 
-**Source release status (15.6.0):** The source is available here, but the container images and
-Windows Setup download are not public yet. The Linux install command below requires a published
-image manifest and images; the Windows instructions require a Setup download. These instructions
-describe the tested installation paths for when those assets are published.
+The [latest GitHub release](https://github.com/dbeachy1/Cognita/releases/latest) offers a
+Windows Setup download (`Cognita-Setup-<version>-r<N>.exe`) and a Linux archive
+(`cognita-src-<version>.tar.gz`). Both install the same Cognita version. The Linux archive pulls
+the published container images during installation.
 
 ## Install on Linux
 
@@ -55,10 +53,17 @@ install. That install downloads about 1.5 GB of software (12.6 GB with AMD accel
 with NVIDIA) and 3.6 GB of search models. Workspace also needs hardware virtualization
 (`/dev/kvm`); without it, everything else works.
 
+Download `cognita-src-<version>.tar.gz` from the
+[latest release](https://github.com/dbeachy1/Cognita/releases/latest), then extract it into a
+new directory and run the installer from there:
+
 ```bash
-git clone https://github.com/dbeachy1/cognita-public && cd cognita-public
+mkdir Cognita && tar -xzf cognita-src-15.6.0.tar.gz -C Cognita
+cd Cognita
 ./cognita install
 ```
+
+You can also clone this repository and run `./cognita install` from the clone.
 
 The install asks only what it cannot know:
 
@@ -89,9 +94,8 @@ the BIOS/UEFI (most PCs have it on; on a virtual machine, nested virtualization)
 internet connection for the first install. That install downloads about 1.5 GB of software and
 3.6 GB of search models.
 
-Download `Cognita-Setup-<version>.exe` from the
-[latest release](https://github.com/dbeachy1/cognita-public/releases/latest) when a public Setup
-build is available, and run it. You do not
+Download `Cognita-Setup-15.6.0-r1.exe` from the
+[latest release](https://github.com/dbeachy1/Cognita/releases/latest) and run it. You do not
 need to be an administrator; Windows asks your permission once, the first time, to turn on WSL.
 This build is not signed yet, so Windows SmartScreen may say "Windows protected your PC": click
 **More info**, then **Run anyway**. (A PC with Smart App Control turned on refuses unsigned
@@ -153,7 +157,7 @@ what will go and asks you to type `DELETE`. Your documents are never touched.
 (**Show the file** opens it). At any other time, `cognita diagnostics` writes the same file. It
 holds Cognita's logs and settings, WSL and Windows facts, and a README of what is inside; never
 passwords, keys, tokens or your documents. Nothing is ever sent anywhere by itself. To get help,
-attach it to a [new issue](https://github.com/dbeachy1/cognita-public/issues/new); the **Report a
+attach it to a [new issue](https://github.com/dbeachy1/Cognita/issues/new); the **Report a
 problem** link in Setup goes there. Common causes Setup names for you: a port in use (choose
 others under **Advanced**), `localhostForwarding=false` in your `.wslconfig`, a WSL distro named
 Cognita that Setup did not create, or Docker Desktop's WSL integration turned on for Cognita

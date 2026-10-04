@@ -15,4 +15,6 @@
 MCP arguments, results, and contract versions are unchanged. Application and MCP logs and
 console scripts remain in English.
 
-This source release does not include a public Windows installer or container image assets.
+The GitHub release provides a Windows Setup download and a Linux source archive. The Linux
+archive uses the published container images. Windows Setup is unsigned; Windows Smart App
+Control can block unsigned applications.
