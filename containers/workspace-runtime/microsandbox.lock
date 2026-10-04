@@ -1,0 +1,8 @@
+# Official Microsandbox SDK artifact for Cognita Workspace runtime (Linux x86-64).
+name = "microsandbox"
+version = "0.7.0"
+filename = "microsandbox-0.7.0-cp310-abi3-manylinux_2_28_x86_64.whl"
+sha256 = "848eab6e23b3bc168934b3093baafe26b086348d2914ae710900884e7bb74470"
+index = "https://pypi.org/simple"
+runtime_root = "/opt/microsandbox/0.7.0"
+wheel_runtime = true

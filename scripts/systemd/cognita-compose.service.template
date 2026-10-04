@@ -1,0 +1,24 @@
+[Unit]
+Description=${DESCRIPTION}
+Documentation=https://github.com/dbeachy1/Cognita
+Wants=network-online.target
+# Docker runs under the system manager while this is a user unit, so a hard
+# dependency on docker.service would resolve in the wrong manager and fail the
+# unit.  The Compose CLI is the readiness gate instead: `up --wait` blocks
+# until every service healthcheck passes.
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# No WorkingDirectory: every Compose file is named by absolute path, and
+# `current` is a symlink that only exists once a release has been applied.
+# Startup never builds, pulls, tests, migrates, restores or resets
+# (DESIGN-13.0 section 6.4).
+${EXEC_START_PRE}ExecStart=/usr/bin/docker compose -p ${PROJECT} --env-file ${ENV_FILE} ${COMPOSE_FILES} up -d --no-build --pull never --wait
+ExecStop=/usr/bin/docker compose -p ${PROJECT} --env-file ${ENV_FILE} ${COMPOSE_FILES} down
+TimeoutStartSec=15min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=default.target

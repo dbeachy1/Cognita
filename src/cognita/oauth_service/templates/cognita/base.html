@@ -1,0 +1,115 @@
+{% load i18n %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}Cognita{% endblock %}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f4f6f8;
+      color: #18212b;
+      --surface: #fff;
+      --border: #c8d0d9;
+      --muted: #536170;
+      --accent: #1458a6;
+      --accent-contrast: #fff;
+      --danger: #a51d2d;
+      --danger-surface: #fff0f1;
+      --shadow: 0 1rem 3rem rgb(25 39 52 / 12%);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #11161b;
+        color: #eef2f6;
+        --surface: #1c242c;
+        --border: #53616f;
+        --muted: #bac5cf;
+        --accent: #8dbaff;
+        --accent-contrast: #101820;
+        --danger: #ff9b9b;
+        --danger-surface: #3c2025;
+        --shadow: 0 1rem 3rem rgb(0 0 0 / 35%);
+      }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      min-block-size: 100vh;
+      margin: 0;
+      padding: clamp(1rem, 5vw, 4rem);
+      display: grid;
+      place-items: center;
+      background: inherit;
+    }
+    main { width: min(100%, 36rem); }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: .75rem;
+      box-shadow: var(--shadow);
+      padding: clamp(1.25rem, 5vw, 2.5rem);
+    }
+    h1 { margin: 0 0 .5rem; font-size: clamp(1.5rem, 4vw, 2rem); line-height: 1.2; }
+    h2 { margin: 1.5rem 0 .5rem; font-size: 1.125rem; }
+    p { line-height: 1.55; }
+    .muted { color: var(--muted); }
+    .error {
+      margin: 1rem 0;
+      padding: .75rem 1rem;
+      border-inline-start: .25rem solid var(--danger);
+      background: var(--danger-surface);
+      color: var(--danger);
+      font-weight: 600;
+    }
+    .field { display: grid; gap: .4rem; margin-block: 1rem; }
+    label { font-weight: 650; }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      min-block-size: 2.75rem;
+      border: 1px solid var(--border);
+      border-radius: .35rem;
+      padding: .6rem .7rem;
+      background: var(--surface);
+      color: inherit;
+      font: inherit;
+    }
+    :where(a, button, input):focus-visible {
+      outline: .2rem solid var(--accent);
+      outline-offset: .15rem;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+    button {
+      min-block-size: 2.75rem;
+      border: 1px solid var(--accent);
+      border-radius: .35rem;
+      padding: .6rem 1.1rem;
+      background: var(--accent);
+      color: var(--accent-contrast);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+    }
+    button.secondary { background: transparent; color: inherit; border-color: var(--border); }
+    button:hover { filter: brightness(1.08); }
+    ul { padding-inline-start: 1.25rem; }
+    li { margin-block: .5rem; }
+    .access-list { display: grid; gap: .5rem; }
+    .access-item { display: flex; justify-content: space-between; gap: 1rem; }
+    .access-mode { color: var(--muted); white-space: nowrap; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

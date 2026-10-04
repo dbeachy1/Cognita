@@ -1,0 +1,67 @@
+{
+  "embedding": {
+    "fastembed": "0.8.0",
+    "onnxruntime-migraphx": "1.23.1",
+    "python_abi": "cp312",
+    "provider_wheel": {
+      "origin": "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/",
+      "filename": "onnxruntime_migraphx-1.23.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "ccbbcf44b06e57d6b1f103843649a6f6c2d01ed7655133cf25cb441ccde60e35"
+    },
+    "migraphx_deb": {
+      "origin": "https://repo.radeon.com/rocm/apt/7.1",
+      "version": "2.14.0.70100-20~24.04",
+      "sha256": "40e5aeeb6009c2e08dd7c3b10642835c3ff1aa9e321222a971ee43ba98c1d307"
+    },
+    "provider": "MIGraphXExecutionProvider"
+  },
+  "ocr": {
+    "easyocr": "1.7.2",
+    "torch": "2.10.0+rocm7.1",
+    "torchvision": "0.25.0+rocm7.1",
+    "triton-rocm": "3.6.0",
+    "vendor_wheels": {
+      "triton-rocm": {
+        "version": "3.6.0",
+        "filename": "triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+        "url": "https://download.pytorch.org/whl/test/triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+        "python_abi": "cp313",
+        "platform": "linux_x86_64",
+        "sha256": "21c0d650cdcf91cb5ae1d18c6dfc027b8238d49cd08212b9fcf77f27cc04e752",
+        "metadata_sha256": "5c924120cb0a24aa3979be779d0fa0d2945460dde676e56abb53fcc9244f52f7"
+      }
+    },
+    "Pillow": "11.3.0",
+    "opencv-python-headless": "4.12.0.88",
+    "numpy": "2.2.6",
+    "psutil": "7.0.0",
+    "model_manifest": "/opt/cognita-models/easyocr-qualification.json"
+  },
+  "runtime_paths": {
+    "embedding_python": "/opt/cognita-runtimes/embed/bin/python",
+    "ocr_python": "/opt/cognita-runtimes/ocr/bin/python",
+    "ocr_models": "/var/lib/cognita/models/easyocr"
+  },
+  "artifacts": {
+    "qualification_manifest": {
+      "path": "docs/easyocr-qualification-dependencies.json",
+      "sha256": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
+    },
+    "ocr_models": {
+      "craft_mlt_25k.pth": {
+        "sha256": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17"
+      },
+      "english_g2.pth": {
+        "sha256": "e2272681d9d67a04e2dff396b6e95077bc19001f8f6d3593c307b9852e1c29e8"
+      }
+    },
+    "preflight_source": {
+      "path": "scripts/amd_runtime_preflight.py",
+      "sha256": "0008faaacc68e9f333633b0d824a440ddd2d70359c92cd9834d296452ec590df"
+    },
+    "dockerfile_source": {
+      "path": "containers/cognita-amd/Dockerfile",
+      "sha256": "e1024283949835011f01a479b50f45c23d6e938c3b0324aa74fe3a7cb13e1bc8"
+    }
+  }
+}

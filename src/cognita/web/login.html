@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cognita __COGNITA_VERSION__ Admin — Sign in</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=__COGNITA_VERSION__">
+  <link rel="stylesheet" href="/static/pico.min.css?v=__COGNITA_VERSION__">
+  <style>
+    body { display: grid; place-items: center; min-height: 100vh; }
+    main { width: 100%; max-width: 22rem; }
+    .brand { text-align: center; margin-bottom: 1.5rem; }
+    .brand img { width: 48px; height: 48px; }
+    .brand h1 { margin: .5rem 0 0; font-size: 1.4rem; }
+    .brand p { margin: 0; color: var(--pico-muted-color); font-size: .85rem; }
+    #error { color: var(--pico-del-color, #b3261e); font-size: .9rem; min-height: 1.2rem; margin: .25rem 0 .5rem; }
+    button { margin-top: .5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <img src="/static/favicon.svg?v=__COGNITA_VERSION__" alt="">
+      <h1>Cognita <span id="cognita-version">__COGNITA_VERSION__</span></h1>
+      <p>Admin — sign in</p>
+    </div>
+    <article>
+      <form id="login-form">
+        <label>
+          Username
+          <input name="username" autocomplete="username" autofocus required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="error" role="alert"></p>
+        <button type="submit">Sign in</button>
+      </form>
+    </article>
+  </main>
+
+  <script>
+    "use strict";
+    fetch("/api/bootstrap", { cache: "no-store" }).then((res) => res.ok ? res.json() : null).then((data) => {
+      if (!data || typeof data.version !== "string") return;
+      document.title = `Cognita ${data.version} Admin — Sign in`;
+      const version = document.getElementById("cognita-version");
+      if (version) version.textContent = data.version;
+    }).catch(() => {});
+    const form = document.getElementById("login-form");
+    const errEl = document.getElementById("error");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.textContent = "";
+      const btn = form.querySelector("button[type=submit]");
+      btn.setAttribute("aria-busy", "true");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: form.username.value,
+            password: form.password.value,
+          }),
+        });
+        if (res.ok) {
+          window.location.href = "/";
+          return;
+        }
+        let detail = "Invalid username or password";
+        try { detail = (await res.json()).detail || detail; } catch { /* no body */ }
+        errEl.textContent = detail;
+        form.password.value = "";
+        form.password.focus();
+      } catch (err) {
+        errEl.textContent = "Could not reach the server. Try again.";
+      } finally {
+        btn.removeAttribute("aria-busy");
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

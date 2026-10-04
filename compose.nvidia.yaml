@@ -1,0 +1,28 @@
+services:
+  cognita:
+    # NVIDIA is opt-in and only affects Knowledge/OCR.  Workspace guests remain
+    # CPU-only and the broker never receives these devices.  The host needs the
+    # NVIDIA driver (R580 or newer for CUDA 13) and the NVIDIA Container Toolkit
+    # with its `nvidia` runtime registered with Docker; without the runtime Compose
+    # refuses to start the service ("could not select device driver nvidia"), so the
+    # installer checks for it before offering this profile.
+    #   docker compose -f compose.yaml -f compose.nvidia.yaml up -d --wait
+    build:
+      context: .
+      dockerfile: containers/cognita-nvidia/Dockerfile
+      args:
+        # 13.0 §4: no version literal here either; see compose.yaml.
+        COGNITA_VERSION: "${COGNITA_VERSION:?COGNITA_VERSION is required}"
+    image: cognita-nvidia:${COGNITA_VERSION:?COGNITA_VERSION is required}
+    environment:
+      COGNITA_ACCELERATION_PROFILE: nvidia
+    # Every card is exposed; which cards Cognita uses is chosen in Admin and the
+    # embed worker scopes itself with CUDA_VISIBLE_DEVICES (the way the AMD overlay
+    # exposes all of /dev/dri).  No group_add, no devices:, no program cache.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

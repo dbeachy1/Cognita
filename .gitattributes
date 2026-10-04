@@ -1,0 +1,17 @@
+# Self-Test fixture bytes are hashes in the deployment contract. Keep Git from
+# applying platform newline conversion to the deliberately malformed PNG too.
+src/cognita/selftest_fixtures/data/**/*.png binary
+src/cognita/selftest_fixtures/data/cognita-selftest/ocr/not-a-png.txt binary
+tests/fixtures/pdf/*.pdf binary
+
+# These files are copied into the AMD image or hashed into its runtime lock.
+# Keep their build-context bytes stable across Windows and Linux checkouts.
+scripts/amd_runtime_preflight.py text eol=lf
+containers/cognita-amd/runtime-lock.json text eol=lf
+containers/cognita-amd/Dockerfile text eol=lf
+docs/easyocr-qualification-dependencies.json text eol=lf
+
+# 15.0.0: the same for the NVIDIA image's Dockerfile, runtime lock and preflight.
+scripts/nvidia_runtime_preflight.py text eol=lf
+containers/cognita-nvidia/runtime-lock.json text eol=lf
+containers/cognita-nvidia/Dockerfile text eol=lf

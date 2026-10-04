@@ -1,0 +1,50 @@
+{
+  "embedding": {
+    "fastembed": "0.8.0",
+    "onnxruntime-gpu": "1.30.0",
+    "python_abi": "cp313",
+    "cuda_major": 13,
+    "provider": "CUDAExecutionProvider",
+    "nvidia_wheels": {
+      "nvidia-cublas": "13.8.1.7",
+      "nvidia-cuda-nvrtc": "13.4.92",
+      "nvidia-cuda-runtime": "13.4.92",
+      "nvidia-cudnn-cu13": "9.27.0.42",
+      "nvidia-cufft": "12.4.0.43",
+      "nvidia-curand": "10.4.4.72",
+      "nvidia-nvjitlink": "13.4.92"
+    }
+  },
+  "ocr": {
+    "easyocr": "1.7.2",
+    "torch": "2.14.0",
+    "torchvision": "0.29.0",
+    "triton": "excluded",
+    "cuda_major": 13,
+    "Pillow": "11.3.0",
+    "opencv-python-headless": "4.12.0.88",
+    "numpy": "2.2.6",
+    "psutil": "7.0.0",
+    "model_manifest": "/opt/cognita-models/easyocr-qualification.json"
+  },
+  "model_source_manifest": "docs/easyocr-qualification-dependencies.json",
+  "driver_floor": {
+    "linux": "580",
+    "windows_wsl": "580"
+  },
+  "runtime_paths": {
+    "embedding_python": "/opt/cognita-runtimes/embed/bin/python",
+    "ocr_python": "/opt/cognita-runtimes/ocr/bin/python",
+    "ocr_models": "/var/lib/cognita/models/easyocr"
+  },
+  "artifacts": {
+    "preflight_source": {
+      "path": "scripts/nvidia_runtime_preflight.py",
+      "sha256": "6e6cf92ac95cd95514f44088beab1f2dcc9a939339433168590e15d53ea0df22"
+    },
+    "dockerfile_source": {
+      "path": "containers/cognita-nvidia/Dockerfile",
+      "sha256": "1f03c9c6be0fcabe23f52ccdb26db437b7bd624294e5cf758a1916d73a81d10c"
+    }
+  }
+}

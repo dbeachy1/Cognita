@@ -1,0 +1,127 @@
+{
+  "consumed_source_sha256": {
+    "/tmp/cognita-cpu-evidence/containers/cognita/Dockerfile": "ae9d7c15b1ccafb8d651a6f4186b74af7e34e383c441ddc82bbb6f275eba007c",
+    "/tmp/cognita-cpu-evidence/containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
+    "/tmp/cognita-cpu-evidence/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
+    "/tmp/cognita-cpu-evidence/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
+    "/tmp/cognita-cpu-evidence/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
+    "/tmp/cognita-cpu-evidence/scripts/refresh_dependency_locks.py": "cf492daf61bafa40fda7004e294c7c866bb5129a704084fdf7272b206c2494e6"
+  },
+  "index_url": "https://pypi.org/simple",
+  "interpreters": {
+    "ocr-cpu": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {
+        "torch": {
+          "filename": "torch-2.10.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "metadata_sha256": "d6031f9f56089c835e78a75875c1be87a34bcfdf5a79ef9f069084ed9244a5d4",
+          "name": "torch",
+          "platform": "manylinux_2_28_x86_64",
+          "python_abi": "cp313",
+          "sha256": "8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095",
+          "url": "https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "version": "2.10.0+cpu",
+          "wheel_tags": [
+            "cp313-cp313-manylinux_2_28_x86_64"
+          ]
+        },
+        "torchvision": {
+          "filename": "torchvision-0.25.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "metadata_sha256": "a89da8e7d2c99e7557b648d0d23cf96d38aa8f37e97ca40e249f5fc28304064b",
+          "name": "torchvision",
+          "platform": "manylinux_2_28_x86_64",
+          "python_abi": "cp313",
+          "sha256": "90eec299e1f82cfaf080ccb789df3838cb9a54b57e2ebe33852cd392c692de5c",
+          "url": "https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "version": "0.25.0+cpu",
+          "wheel_tags": [
+            "cp313-cp313-manylinux_2_28_x86_64"
+          ]
+        }
+      }
+    }
+  },
+  "maintenance_evidence": "/tmp/cognita-cpu-evidence-out/dependency-refresh-evidence.json",
+  "operation": "dependency-refresh",
+  "platform": {
+    "architecture": "x86_64",
+    "os": "linux"
+  },
+  "roles": {
+    "ocr-cpu": {
+      "input_sha256": "b753a0b7944466504099c794c4992b8d3ed8a1a72bcfb286ad76bb505bf7706c",
+      "lock_sha256": "3ad435e0e184c4678eef7eced5619b81dc88b4c8010f8ef94e5371bf81ed20e8",
+      "packages": 27,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {
+          "torch": {
+            "filename": "torch-2.10.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "metadata_sha256": "d6031f9f56089c835e78a75875c1be87a34bcfdf5a79ef9f069084ed9244a5d4",
+            "name": "torch",
+            "platform": "manylinux_2_28_x86_64",
+            "python_abi": "cp313",
+            "sha256": "8d316e5bf121f1eab1147e49ad0511a9d92e4c45cc357d1ab0bee440da71a095",
+            "url": "https://download.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "version": "2.10.0+cpu",
+            "wheel_tags": [
+              "cp313-cp313-manylinux_2_28_x86_64"
+            ]
+          },
+          "torchvision": {
+            "filename": "torchvision-0.25.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "metadata_sha256": "a89da8e7d2c99e7557b648d0d23cf96d38aa8f37e97ca40e249f5fc28304064b",
+            "name": "torchvision",
+            "platform": "manylinux_2_28_x86_64",
+            "python_abi": "cp313",
+            "sha256": "90eec299e1f82cfaf080ccb789df3838cb9a54b57e2ebe33852cd392c692de5c",
+            "url": "https://download.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "version": "0.25.0+cpu",
+            "wheel_tags": [
+              "cp313-cp313-manylinux_2_28_x86_64"
+            ]
+          }
+        }
+      },
+      "source_inputs": [
+        "containers/cognita/Dockerfile",
+        "containers/cognita/runtime-lock.json",
+        "docs/easyocr-qualification-dependencies.json"
+      ],
+      "source_sha256": {
+        "containers/cognita/Dockerfile": "ae9d7c15b1ccafb8d651a6f4186b74af7e34e383c441ddc82bbb6f275eba007c",
+        "containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
+        "docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
+      }
+    }
+  },
+  "schema": 1,
+  "selected_roles": [
+    "ocr-cpu"
+  ],
+  "source": {
+    "branch": "nvidia-acceleration",
+    "commit": "e2a573cbc6fb3b8445c7138720029c387b18e099",
+    "remote": "https://github.com/dbeachy1/Cognita.git",
+    "tree": "e0e0f2241fee8fd967c27c8898547522ad9646d9"
+  },
+  "source_root": "/tmp/cognita-cpu-evidence",
+  "tool": {
+    "pip_compile": "container:python -m piptools",
+    "versions": {
+      "ocr-cpu": "pip-compile, version 7.6.1"
+    }
+  }
+}

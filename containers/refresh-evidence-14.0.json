@@ -1,0 +1,103 @@
+{
+  "consumed_source_sha256": {
+    "/tmp/c14-lock/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
+    "/tmp/c14-lock/containers/workspace-toolbox/packages.lock": "81b64215774617bc435228c202b7061443c3226003ba048ff002628ed6759957",
+    "/tmp/c14-lock/pyproject.toml": "cd1ae77675b7634fc500b4dff4b354781bab6f49ffec38f89d899311401042aa",
+    "/tmp/c14-lock/scripts/dependency_locks.py": "9bd7c57cb8dad598a283398479a4fa9acf68cacb5402fbdf8bc2648e7bd934c9",
+    "/tmp/c14-lock/scripts/refresh_dependency_locks.py": "3cd0366b026bdd05f5994f192031db05bdd54c5c3ae62543356c381923e8096d"
+  },
+  "index_url": "https://pypi.org/simple",
+  "interpreters": {
+    "service": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    },
+    "test": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    }
+  },
+  "maintenance_evidence": "/tmp/c14-lock-evidence2/dependency-refresh-evidence.json",
+  "operation": "dependency-refresh",
+  "platform": {
+    "architecture": "x86_64",
+    "os": "linux"
+  },
+  "roles": {
+    "service": {
+      "input_sha256": "6047e0c03a9d9cf2c3eee524cbea2c8a7651df1403fc572dacf53ddf37a22699",
+      "lock_sha256": "aabaaa8f09070eedd63eb7ebf85d8be41179a9af0c77e5de2b959beff8e53fed",
+      "packages": 69,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "pyproject.toml"
+      ],
+      "source_sha256": {
+        "pyproject.toml": "cd1ae77675b7634fc500b4dff4b354781bab6f49ffec38f89d899311401042aa"
+      }
+    },
+    "test": {
+      "input_sha256": "8a67d43c14d4755a5e3a336ad4cca2c307e70037d05b90bb7e5ab39a36028368",
+      "lock_sha256": "9ff6e4c7bceeef951cfcf039d00d889b024a8b50a3fe2bd94a64e562ba73d1a3",
+      "packages": 9,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "pyproject.toml",
+        "containers/workspace-toolbox/packages.lock"
+      ],
+      "source_sha256": {
+        "containers/workspace-toolbox/packages.lock": "81b64215774617bc435228c202b7061443c3226003ba048ff002628ed6759957",
+        "pyproject.toml": "cd1ae77675b7634fc500b4dff4b354781bab6f49ffec38f89d899311401042aa"
+      }
+    }
+  },
+  "schema": 1,
+  "selected_roles": [
+    "service",
+    "test"
+  ],
+  "source": {
+    "branch": "worktree-cognita-14.0",
+    "commit": "4f916a8bc6dd601a3c8a4f1f332909555535a8dc",
+    "remote": "git@github.com:dbeachy1/Cognita.git",
+    "tree": "fc6971c137f036820790162776d9d344b6679a5a"
+  },
+  "source_root": "/tmp/c14-lock",
+  "tool": {
+    "pip_compile": "container:python -m piptools",
+    "versions": {
+      "service": "pip-compile, version 7.6.1",
+      "test": "pip-compile, version 7.6.1"
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{% extends "cognita/base.html" %}
+{% load i18n %}
+{% block title %}{% if error %}Authorization error{% else %}Authorize · Cognita{% endif %}{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="authorization-title">
+  {% if error %}
+    <h1 id="authorization-title">Authorization could not continue</h1>
+    <p class="error" role="alert">{{ error.description|default:error.error }}</p>
+    <p class="muted">Return to the requesting application and try again.</p>
+  {% else %}
+    <h1 id="authorization-title">Authorize {{ application.name }}?</h1>
+    <p class="muted">Cognita is asking for access through this connector.</p>
+    {% if connector %}
+      <h2>Connector access</h2>
+      {% if connector.project_mode == "all" %}
+        <p>{{ connector.name }} includes enabled projects with {{ connector.default_access|capfirst }} default access unless a project is excluded from defaults. Explicit overrides are shown below, and future enabled projects are included unless excluded. Access settings are managed by your administrator and may change.</p>
+      {% else %}
+        <p>{{ connector.name }} is limited to the selected enabled projects below. Access settings are managed by your administrator and may change.</p>
+      {% endif %}
+      {% if connector.projects %}
+        <ul class="access-list">
+          {% for project in connector.projects %}
+            <li class="access-item"><span>{{ project.name }}</span><span class="access-mode">{{ project.access|capfirst }}</span></li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No enabled projects are currently available.</p>
+      {% endif %}
+    {% else %}
+      <p>This request does not identify an available Cognita connector.</p>
+    {% endif %}
+    <p class="muted">Review the request before continuing. You can deny access at any time.</p>
+    <form id="authorizationForm" method="post">
+      {% csrf_token %}
+      {% for field in form %}
+        {% if field.is_hidden %}{{ field }}{% endif %}
+      {% endfor %}
+      {% if form.non_field_errors %}<div class="error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+      {% for field in form.visible_fields %}
+        {% if field.errors %}<div class="error" role="alert">{{ field.errors }}</div>{% endif %}
+      {% endfor %}
+      <div class="actions">
+        <button type="submit" class="secondary" name="deny" value="Deny">Deny</button>
+        <button type="submit" name="allow" value="Authorize">Authorize</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

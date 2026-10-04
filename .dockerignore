@@ -1,0 +1,25 @@
+.git
+.codex
+.venv
+venv
+gpu-venv
+ocr-venv
+data
+logs
+models_cache
+models
+temp
+config/*.yaml
+config/*.token
+config/*.secret
+# 13.0: an installation's `config/` also holds credentials, keys, the OAuth
+# database and backups.  Nothing in any image needs them, and a build context
+# is whatever checkout the operator happens to be standing in, so they are
+# excluded here as well as named file-by-file in the Dockerfile COPY lines.
+config/*.json
+config/data
+config/master-keys
+config/backups
+certs
+*.pyc
+__pycache__

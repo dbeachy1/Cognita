@@ -1,0 +1,4 @@
+services:
+  cognita:
+    environment:
+      COGNITA_ACCELERATION_PROFILE: cpu

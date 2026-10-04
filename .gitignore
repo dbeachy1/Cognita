@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+# Optional GPU runtime environment.
+gpu-venv/
+# Optional OCR runtime and downloaded model weights.
+ocr-venv/
+/models/easyocr/
+# House rule: transient files (logs, scratch scripts, write-ups) live in temp/
+# and the whole directory is ignored, so no filename inside it needs its own
+# pattern — which is how one slipped past before.
+/temp/
+# The MIGraphX compiled-program cache: ~1.4 GB per shape, derived data, and
+# rebuildable by running the model once.
+migraphx-cache/
+env/
+
+# Cognita local state (never commit secrets or indexes)
+data/
+# 10.1: this package-data subtree is the committed synthetic Self-Test
+# allowlist, not runtime project state.
+!src/cognita/selftest_fixtures/data/
+!src/cognita/selftest_fixtures/data/manifest.json
+!src/cognita/selftest_fixtures/data/cognita-selftest/
+!src/cognita/selftest_fixtures/data/cognita-selftest/ocr/
+!src/cognita/selftest_fixtures/data/cognita-selftest/ocr/*
+logs/
+config/*.token
+config/cognita.yaml
+config/registry.yaml
+config/connectors.yaml
+config/state.yaml
+config/authentication.yaml
+*.log
+
+# Pre-change copies of the above keep the secrets they were copied from
+# (admin_password_sha256, token_sha256) — cover every suffix, not just the base name.
+config/cognita.yaml.*
+config/registry.yaml.*
+config/connectors.yaml.*
+config/authentication.yaml.*
+
+# TLS certificates and private keys.
+certs/
+
+# Downloaded embedding/reranker weights (GBs, refetchable)
+models_cache/
+
+# Downloaded build artifacts.
+build-artifacts/
+
+# Secrets / env
+.env
+*.token
+
+# Local operator notes may contain secrets; keep them out of Git.
+*.local.md
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# AI workspace
+.codex

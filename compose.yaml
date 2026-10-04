@@ -1,0 +1,176 @@
+name: cognita-12
+
+# Cognita CPU baseline.  AMD acceleration is an explicit override:
+#   docker compose -f compose.yaml -f compose.amd.yaml up -d --wait
+# Do not add host ports to postgres or workspace-runtime.  They are private
+# siblings on the internal network; only the gateway is externally reachable.
+x-cognita-logging: &cognita-logging
+  # Keep daemon-captured service logs bounded; application and guest job output
+  # retain their own bounded/structured paths and are not scavenged here.
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie@sha256:78bf48b801e792f99e3ac62b5036fd3876e9be48afda16c1e331af1c75ceb2ff
+    restart: unless-stopped
+    logging: *cognita-logging
+    user: "${COGNITA_SERVICE_UID:-1000}:${COGNITA_SERVICE_GID:-1000}"
+    environment:
+      POSTGRES_DB: cognita
+      POSTGRES_USER: cognita
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PGDATA: /var/lib/postgresql/18/docker
+    secrets:
+      - postgres_password
+    volumes:
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+      - type: bind
+        source: ${COGNITA_POSTGRES_DATA_ROOT:?COGNITA_POSTGRES_DATA_ROOT is required}
+        target: /var/lib/postgresql
+      # Superseded in 13.0: the migration restore mount and its one-time dump
+      # under <postgres-data-root>/restore are gone.  The index is derived and
+      # rebuildable, so a fresh cluster initializes empty and Cognita reindexes
+      # (DESIGN-13.0 section 8); nothing is restored at startup any more.
+    expose:
+      - "5432"
+    networks:
+      - cognita-internal
+    healthcheck:
+      # Superseded in 13.0: the restore-complete clause is gone with the
+      # restore mount above.  A cluster that answers pg_isready is ready; there
+      # is no migration dump left to wait for.
+      test: ["CMD-SHELL", "pg_isready -h /var/run/postgresql -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  cognita:
+    build:
+      context: .
+      dockerfile: containers/cognita/Dockerfile
+      # That Dockerfile's LAST stage is `test` (13.0 §7.1) and Docker builds
+      # the last stage when none is named, so the service image must select
+      # this one explicitly or a plain `docker compose build` would ship the
+      # test image.
+      target: app
+      args:
+        # 13.0 §4: release_identity.APPLICATION_VERSION is the only authority,
+        # so no version literal lives here.  scripts/release.py passes the
+        # build arg and names its own image; a hand-run build takes the value
+        # from the target's env file, which carries COGNITA_VERSION.
+        COGNITA_VERSION: "${COGNITA_VERSION:?COGNITA_VERSION is required}"
+    image: cognita:${COGNITA_VERSION:?COGNITA_VERSION is required}
+    restart: unless-stopped
+    logging: *cognita-logging
+    user: "${COGNITA_SERVICE_UID:-1000}:${COGNITA_SERVICE_GID:-1000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      COGNITA_DATA_ROOT: /app/config/data
+      COGNITA_CONFIG_PATH: /app/config/cognita.yaml
+      COGNITA_REGISTRY_PATH: /app/config/registry.yaml
+      COGNITA_CONNECTORS_PATH: /app/config/connectors.yaml
+      COGNITA_AUTHENTICATION_PATH: /app/config/authentication.yaml
+      COGNITA_LOG_DIR: /app/config/logs
+      COGNITA_MODELS_CACHE_DIR: /var/lib/cognita/models
+      # The numeric service user does not inherit the image user's home when
+      # Compose overrides USER. Keep every library cache in the persisted
+      # model-cache bind mount so Hugging Face/Xet and FastEmbed never fall
+      # back to /.cache or an image-only home directory.
+      HOME: /var/lib/cognita/models
+      XDG_CACHE_HOME: /var/lib/cognita/models/.cache
+      HF_HOME: /var/lib/cognita/models/.cache/huggingface
+      HF_HUB_CACHE: /var/lib/cognita/models/.cache/huggingface/hub
+      HF_XET_CACHE: /var/lib/cognita/models/.cache/huggingface/xet
+      HF_ASSETS_CACHE: /var/lib/cognita/models/.cache/huggingface/assets
+      TRANSFORMERS_CACHE: /var/lib/cognita/models/.cache/huggingface/transformers
+      COGNITA_PG_DSN_FILE: /run/secrets/postgres_dsn
+      COGNITA_MCP_HOST: 0.0.0.0
+      COGNITA_MCP_PORT: "8675"
+      COGNITA_ADMIN_HOST: 0.0.0.0
+      COGNITA_ADMIN_PORT: "8676"
+      # Deployment capability metadata only.  Knowledge/OCR policy belongs to
+      # /app/config/acceleration.yaml and is managed through Admin.
+      COGNITA_ACCELERATION_PROFILE: cpu
+      # Which deployment this container is (main / beta / test).  The app only
+      # uses it to print the exact reset command in a schema-mismatch message,
+      # so an empty value degrades that message and nothing else.
+      COGNITA_RELEASE_TARGET: ${COGNITA_RELEASE_TARGET:-}
+    volumes:
+      # Log timestamps use the process's local clock. On 2026-09-23, a container
+      # without the host time zone stamped UTC while adjacent host logs used
+      # local time. Mount the host's zone file read-only to keep them aligned.
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+      - type: bind
+        source: ${COGNITA_CONFIG_ROOT:?COGNITA_CONFIG_ROOT is required}
+        target: /app/config
+      - type: bind
+        source: ${COGNITA_PROJECTS_ROOT:?COGNITA_PROJECTS_ROOT is required}
+        target: ${COGNITA_PROJECTS_ROOT:?COGNITA_PROJECTS_ROOT is required}
+        bind:
+          propagation: rslave
+      - type: bind
+        source: ${COGNITA_MODEL_CACHE_ROOT:?COGNITA_MODEL_CACHE_ROOT is required}
+        target: /var/lib/cognita/models
+      - type: bind
+        source: ${COGNITA_TRANSFER_STAGING_ROOT:?COGNITA_TRANSFER_STAGING_ROOT is required}
+        target: /var/lib/cognita/transfers
+    secrets:
+      - postgres_dsn
+      - source: admin_tls_certfile
+        target: admin_tls_certfile
+        mode: 0444
+      - source: admin_tls_keyfile
+        target: admin_tls_keyfile
+        mode: 0444
+    ports:
+      - target: 8675
+        published: ${COGNITA_MCP_HOST_PORT:-9675}
+        host_ip: ${COGNITA_MCP_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+      - target: 8676
+        published: ${COGNITA_ADMIN_HOST_PORT:-9676}
+        host_ip: ${COGNITA_ADMIN_BIND_ADDRESS:-0.0.0.0}
+        protocol: tcp
+    networks:
+      - cognita-internal
+      - cognita-edge
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8675/healthz\", timeout=3)' "]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+networks:
+  cognita-internal:
+    internal: true
+  cognita-edge:
+    driver: bridge
+
+secrets:
+  postgres_password:
+    file: ${COGNITA_SECRETS_ROOT:?COGNITA_SECRETS_ROOT is required}/postgres.password
+  postgres_dsn:
+    file: ${COGNITA_SECRETS_ROOT:?COGNITA_SECRETS_ROOT is required}/postgres.dsn
+  admin_tls_certfile:
+    file: ${COGNITA_SECRETS_ROOT:?COGNITA_SECRETS_ROOT is required}/admin_tls_certfile
+  admin_tls_keyfile:
+    file: ${COGNITA_SECRETS_ROOT:?COGNITA_SECRETS_ROOT is required}/admin_tls_keyfile

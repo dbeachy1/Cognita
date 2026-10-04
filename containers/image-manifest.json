@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "platform": "linux/amd64",
+  "upstream": {
+    "microsandbox": {
+      "reference": "ghcr.io/superradcompany/microsandbox:0.7.0",
+      "index_digest": "sha256:fed39d2863121ac1fec25bdeaaeab9498f48ee381294faa8fe5805b0e9ac0fdc",
+      "linux_amd64_manifest": "sha256:77910d5201cd71ab05a1da65ea9ee9f5e4adbd9b4c7dfe1e363db8da72f08295",
+      "python_sdk": {
+        "version": "0.7.0",
+        "filename": "microsandbox-0.7.0-cp310-abi3-manylinux_2_28_x86_64.whl",
+        "sha256": "848eab6e23b3bc168934b3093baafe26b086348d2914ae710900884e7bb74470",
+        "runtime_root": "/opt/microsandbox/0.7.0"
+      }
+    },
+    "postgres": {
+      "reference": "pgvector/pgvector:0.8.6-pg18-trixie",
+      "index_digest": "sha256:78bf48b801e792f99e3ac62b5036fd3876e9be48afda16c1e331af1c75ceb2ff",
+      "linux_amd64_manifest": "sha256:ff8da7b0714e5efa413d77f43e24d93064dd66469d418d12608c1bbc91fcf045"
+    }
+  },
+  "built": {
+    "cognita": {
+      "context": ".",
+      "dockerfile": "containers/cognita/Dockerfile",
+      "base_reference": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e"
+    },
+    "cognita_amd": {
+      "context": ".",
+      "dockerfile": "containers/cognita-amd/Dockerfile",
+      "base_reference": "rocm/dev-ubuntu-24.04:7.1-complete@sha256:5d39ae42487f8f66a4eaa50fdcb82bf57f6a667faf0bb71b5efcd123d3dc3107",
+      "python_runtime_reference": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "embedding_python": "rocm-base:/usr/bin/python3 (cp312)",
+      "embedding_provider_wheel": {
+        "origin": "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.1/",
+        "filename": "onnxruntime_migraphx-1.23.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "ccbbcf44b06e57d6b1f103843649a6f6c2d01ed7655133cf25cb441ccde60e35"
+      },
+      "embedding_migraphx_deb": {
+        "origin": "https://repo.radeon.com/rocm/apt/7.1",
+        "version": "2.14.0.70100-20~24.04",
+        "sha256": "40e5aeeb6009c2e08dd7c3b10642835c3ff1aa9e321222a971ee43ba98c1d307"
+      }
+    },
+    "cognita_nvidia": {
+      "context": ".",
+      "dockerfile": "containers/cognita-nvidia/Dockerfile",
+      "base_reference": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "embedding_python": "base:/usr/local/bin/python (cp313)",
+      "embedding_lock": {
+        "path": "containers/embedding-nvidia-requirements.lock",
+        "sha256": "4de063616087db1d9ae895b324544f12d1994b5411bbd5918acb2ec0e54870e3"
+      },
+      "ocr_lock": {
+        "path": "containers/ocr-nvidia-requirements.lock",
+        "sha256": "5cf668f141e8625ef18e4c7e974124d65f6579d885b1f8b99b308325960f23a9"
+      }
+    },
+    "workspace_runtime": {
+      "context": ".",
+      "dockerfile": "containers/workspace-runtime/Dockerfile"
+    },
+    "workspace_toolbox": {
+      "context": ".",
+      "dockerfile": "containers/workspace-toolbox/Dockerfile",
+      "base_reference": "debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171"
+    }
+  },
+  "toolbox": {
+    "package_manifest": "containers/workspace-toolbox/packages.lock",
+    "credential_free": true,
+    "network_required_at_workspace_creation": false
+  }
+}

@@ -1,0 +1,316 @@
+{
+  "index_url": "https://pypi.org/simple",
+  "interpreters": {
+    "broker": {
+      "expected_python": "3.12",
+      "image": "ghcr.io/superradcompany/microsandbox:0.7.0@sha256:fed39d2863121ac1fec25bdeaaeab9498f48ee381294faa8fe5805b0e9ac0fdc",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/bin/python3",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    },
+    "build": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    },
+    "embedding": {
+      "expected_python": "3.12",
+      "image": "rocm/dev-ubuntu-24.04:7.1-complete@sha256:5d39ae42487f8f66a4eaa50fdcb82bf57f6a667faf0bb71b5efcd123d3dc3107",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/bin/python3",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    },
+    "ocr": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {
+        "torch": {
+          "filename": "torch-2.10.0+rocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "metadata_sha256": "8ce6f38291ea36ef21009682258cd1e4db58a3b7d177481c7b6b3b13b053ade2",
+          "name": "torch",
+          "platform": "manylinux_2_28_x86_64",
+          "python_abi": "cp313",
+          "sha256": "3f18b06f233d4871baaafdb8ba662ae69ff91ec11aa1bf76ca76dde31b43e9cd",
+          "url": "https://download.pytorch.org/whl/test/rocm7.1/torch-2.10.0%2Brocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "version": "2.10.0+rocm7.1",
+          "wheel_tags": [
+            "cp313-cp313-manylinux_2_28_x86_64"
+          ]
+        },
+        "torchvision": {
+          "filename": "torchvision-0.25.0+rocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "metadata_sha256": "e4f6afc2e7d207150698501a72b18bc5c530ebb3983b2bf684b8805fc2829a59",
+          "name": "torchvision",
+          "platform": "manylinux_2_28_x86_64",
+          "python_abi": "cp313",
+          "sha256": "54c06f29e20efa36522eedcc5a0fb6f03627ff0ff23cc7bef46f71a3042db074",
+          "url": "https://download.pytorch.org/whl/test/rocm7.1/torchvision-0.25.0%2Brocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+          "version": "0.25.0+rocm7.1",
+          "wheel_tags": [
+            "cp313-cp313-manylinux_2_28_x86_64"
+          ]
+        },
+        "triton-rocm": {
+          "filename": "triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+          "metadata_sha256": "5c924120cb0a24aa3979be779d0fa0d2945460dde676e56abb53fcc9244f52f7",
+          "name": "triton-rocm",
+          "platform": "linux_x86_64",
+          "python_abi": "cp313",
+          "sha256": "21c0d650cdcf91cb5ae1d18c6dfc027b8238d49cd08212b9fcf77f27cc04e752",
+          "url": "https://download.pytorch.org/whl/test/triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+          "version": "3.6.0",
+          "wheel_tags": [
+            "cp313-cp313-linux_x86_64"
+          ]
+        }
+      }
+    },
+    "service": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    },
+    "test": {
+      "expected_python": "3.13",
+      "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+      "indexes": [
+        "https://pypi.org/simple"
+      ],
+      "python": "/usr/local/bin/python",
+      "tool_version": "pip-compile, version 7.6.1",
+      "vendor_artifacts": {}
+    }
+  },
+  "operation": "dependency-refresh",
+  "platform": {
+    "architecture": "x86_64",
+    "os": "linux"
+  },
+  "roles": {
+    "broker": {
+      "input_sha256": "e492c87516a899cc92bb6ec78731d6e1cb7ddffe0b9f7eca4972e047fed97142",
+      "lock_sha256": "16eaabe4a1250c6732d91bef345032093c1f23c51e6cd9877f9f9d02391eac48",
+      "packages": 19,
+      "resolver": {
+        "expected_python": "3.12",
+        "image": "ghcr.io/superradcompany/microsandbox:0.7.0@sha256:fed39d2863121ac1fec25bdeaaeab9498f48ee381294faa8fe5805b0e9ac0fdc",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/bin/python3",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "containers/workspace-runtime/requirements.in",
+        "containers/workspace-runtime/microsandbox.lock"
+      ],
+      "source_sha256": {
+        "containers/workspace-runtime/microsandbox.lock": "ed6582838e78af8dd323ef80c8e646f8459f8ab8f9f0b6a5bcdec2bf6efa5f0a",
+        "containers/workspace-runtime/requirements.in": "e492c87516a899cc92bb6ec78731d6e1cb7ddffe0b9f7eca4972e047fed97142"
+      }
+    },
+    "build": {
+      "input_sha256": "3618ece88ace10c82c37eaac451a7fd61cfabed6eb83b88e7485bd356d442505",
+      "lock_sha256": "4e4e87b9a914fa22f02669c94da16245fcd2cbd22bf270965d4474dc7df84ded",
+      "packages": 1,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "pyproject.toml",
+        "containers/cognita/Dockerfile",
+        "containers/cognita-amd/Dockerfile",
+        "containers/workspace-runtime/Dockerfile",
+        "containers/workspace-toolbox/Dockerfile",
+        "containers/image-manifest.json"
+      ],
+      "source_sha256": {
+        "containers/cognita-amd/Dockerfile": "b767166cac89135546c670cefbc04aca36cc11381c4b2dde60b91a16e6c4a9b7",
+        "containers/cognita/Dockerfile": "61f91758c1c3bec7e6fcfb523f3d3077ac7e1b121fda29e3bf763eebb8bfeaaa",
+        "containers/image-manifest.json": "990eb5fcf210e5dbe9d5a8dc0572d34e3736f7593296935f8b96b077c03e6f64",
+        "containers/workspace-runtime/Dockerfile": "48bbe414feca53abd13386b22459290abb10bcc6374d45ff5a06b911197bc346",
+        "containers/workspace-toolbox/Dockerfile": "fd17eec7ff64f6817f4bf2d9849c217bc6f58507d38f14f99f878e47f68c3fcb",
+        "pyproject.toml": "72888ec205df6ed4a510aa6cbc816a484819fb8c914751c77ca88ca8909f3975"
+      }
+    },
+    "embedding": {
+      "input_sha256": "37411d7b82fb28098ac00df9d75b319918f1454d262ab0e24049e176b0621a0b",
+      "lock_sha256": "bbd99f3eb02688390f26a6130d49cee8244e192c0b28483a8a850a9d034f4991",
+      "packages": 32,
+      "resolver": {
+        "expected_python": "3.12",
+        "image": "rocm/dev-ubuntu-24.04:7.1-complete@sha256:5d39ae42487f8f66a4eaa50fdcb82bf57f6a667faf0bb71b5efcd123d3dc3107",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/bin/python3",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "containers/cognita-amd/Dockerfile",
+        "containers/cognita-amd/runtime-lock.json"
+      ],
+      "source_sha256": {
+        "containers/cognita-amd/Dockerfile": "b767166cac89135546c670cefbc04aca36cc11381c4b2dde60b91a16e6c4a9b7",
+        "containers/cognita-amd/runtime-lock.json": "5512fefe00539f9bb277697115dccd2f57ae8faf197482e6950969a5c25744a5"
+      }
+    },
+    "ocr": {
+      "input_sha256": "937339acde8187a0aae930e41bfe16134d86e2b7d59775ec8f6eb5bc0c2114c7",
+      "lock_sha256": "cdf0dc0dfaca512e48b719dc38500602ca29ac643eaad45618cf3633d1b77633",
+      "packages": 28,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {
+          "torch": {
+            "filename": "torch-2.10.0+rocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "metadata_sha256": "8ce6f38291ea36ef21009682258cd1e4db58a3b7d177481c7b6b3b13b053ade2",
+            "name": "torch",
+            "platform": "manylinux_2_28_x86_64",
+            "python_abi": "cp313",
+            "sha256": "3f18b06f233d4871baaafdb8ba662ae69ff91ec11aa1bf76ca76dde31b43e9cd",
+            "url": "https://download.pytorch.org/whl/test/rocm7.1/torch-2.10.0%2Brocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "version": "2.10.0+rocm7.1",
+            "wheel_tags": [
+              "cp313-cp313-manylinux_2_28_x86_64"
+            ]
+          },
+          "torchvision": {
+            "filename": "torchvision-0.25.0+rocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "metadata_sha256": "e4f6afc2e7d207150698501a72b18bc5c530ebb3983b2bf684b8805fc2829a59",
+            "name": "torchvision",
+            "platform": "manylinux_2_28_x86_64",
+            "python_abi": "cp313",
+            "sha256": "54c06f29e20efa36522eedcc5a0fb6f03627ff0ff23cc7bef46f71a3042db074",
+            "url": "https://download.pytorch.org/whl/test/rocm7.1/torchvision-0.25.0%2Brocm7.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+            "version": "0.25.0+rocm7.1",
+            "wheel_tags": [
+              "cp313-cp313-manylinux_2_28_x86_64"
+            ]
+          },
+          "triton-rocm": {
+            "filename": "triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+            "metadata_sha256": "5c924120cb0a24aa3979be779d0fa0d2945460dde676e56abb53fcc9244f52f7",
+            "name": "triton-rocm",
+            "platform": "linux_x86_64",
+            "python_abi": "cp313",
+            "sha256": "21c0d650cdcf91cb5ae1d18c6dfc027b8238d49cd08212b9fcf77f27cc04e752",
+            "url": "https://download.pytorch.org/whl/test/triton_rocm-3.6.0-cp313-cp313-linux_x86_64.whl",
+            "version": "3.6.0",
+            "wheel_tags": [
+              "cp313-cp313-linux_x86_64"
+            ]
+          }
+        }
+      },
+      "source_inputs": [
+        "containers/cognita-amd/Dockerfile",
+        "containers/cognita-amd/runtime-lock.json",
+        "docs/easyocr-qualification-dependencies.json"
+      ],
+      "source_sha256": {
+        "containers/cognita-amd/Dockerfile": "b767166cac89135546c670cefbc04aca36cc11381c4b2dde60b91a16e6c4a9b7",
+        "containers/cognita-amd/runtime-lock.json": "5512fefe00539f9bb277697115dccd2f57ae8faf197482e6950969a5c25744a5",
+        "docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
+      }
+    },
+    "service": {
+      "input_sha256": "318f46bff0ae1240a8273d7f11c92cabedb92c1375d676e36ab62c7daf96ee7c",
+      "lock_sha256": "22c72d6cd10c1a2617035e8dc731085ac2db58d104cd80e67a8b3ddd2d3dc943",
+      "packages": 115,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "pyproject.toml"
+      ],
+      "source_sha256": {
+        "pyproject.toml": "72888ec205df6ed4a510aa6cbc816a484819fb8c914751c77ca88ca8909f3975"
+      }
+    },
+    "test": {
+      "input_sha256": "a35e428a1604b08f53952ef7d38b32a86ed429b5f94842e9f2159f24bb6a9129",
+      "lock_sha256": "2d040a2aa3701eb2262039b2c5d4a93dbc0a09e5837e73c9caf21724e10272ef",
+      "packages": 7,
+      "resolver": {
+        "expected_python": "3.13",
+        "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
+        "indexes": [
+          "https://pypi.org/simple"
+        ],
+        "python": "/usr/local/bin/python",
+        "tool_version": "pip-compile, version 7.6.1",
+        "vendor_artifacts": {}
+      },
+      "source_inputs": [
+        "pyproject.toml",
+        "containers/workspace-toolbox/packages.lock"
+      ],
+      "source_sha256": {
+        "containers/workspace-toolbox/packages.lock": "81b64215774617bc435228c202b7061443c3226003ba048ff002628ed6759957",
+        "pyproject.toml": "72888ec205df6ed4a510aa6cbc816a484819fb8c914751c77ca88ca8909f3975"
+      }
+    }
+  },
+  "schema": 1,
+  "source": {
+    "branch": "codex/release-workflow-kei-run-20260920",
+    "commit": "fd0a1ebf885aeace5acea298441af5dfd7fcfe85",
+    "remote": "git@github.com:dbeachy1/Cognita.git",
+    "tree": "9a76217050a594907ec217475439343048aa423c"
+  },
+  "tool": {
+    "pip_compile": "container:python -m piptools",
+    "versions": {
+      "broker": "pip-compile, version 7.6.1",
+      "build": "pip-compile, version 7.6.1",
+      "embedding": "pip-compile, version 7.6.1",
+      "ocr": "pip-compile, version 7.6.1",
+      "service": "pip-compile, version 7.6.1",
+      "test": "pip-compile, version 7.6.1"
+    }
+  }
+}

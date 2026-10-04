@@ -1,0 +1,6 @@
+#!/bin/sh
+# Installed as /usr/local/libexec/cognita-keepalive. The Windows helper runs it as the
+# `cognita` user through wsl.exe (DESIGN-WINDOWS-INSTALLER §5.8): a WSL distro shuts down
+# when its last process exits, so this one process keeps the distro (and the Compose stack
+# under it) up until the helper stops it. It does nothing else.
+exec sleep infinity

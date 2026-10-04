@@ -1,0 +1,230 @@
+{
+  "fixtures": {
+    "blank.png": {
+      "exact": true,
+      "expected_lines": [],
+      "purpose": "no_text",
+      "regions": []
+    },
+    "canonical_clear.png": {
+      "exact": true,
+      "expected_lines": [
+        "Report-v2.txt",
+        "9.3.1",
+        "MixedCase Label: Alpha-42",
+        "12345!"
+      ],
+      "purpose": "exact multiline contract",
+      "regions": [
+        {
+          "bbox": [
+            40,
+            32,
+            464,
+            93
+          ],
+          "text": "Report-v2.txt"
+        },
+        {
+          "bbox": [
+            40,
+            128,
+            203,
+            177
+          ],
+          "text": "9.3.1"
+        },
+        {
+          "bbox": [
+            40,
+            223,
+            910,
+            285
+          ],
+          "text": "MixedCase Label: Alpha-42"
+        },
+        {
+          "bbox": [
+            40,
+            320,
+            271,
+            369
+          ],
+          "text": "12345!"
+        }
+      ]
+    },
+    "dark_ui.png": {
+      "exact": true,
+      "expected_lines": [
+        "ERROR 503",
+        "Retry-After: 120"
+      ],
+      "purpose": "dark UI contrast",
+      "regions": [
+        {
+          "bbox": [
+            40,
+            34,
+            454,
+            88
+          ],
+          "text": "ERROR 503"
+        },
+        {
+          "bbox": [
+            40,
+            140,
+            622,
+            210
+          ],
+          "text": "Retry-After: 120"
+        }
+      ]
+    },
+    "degraded.png": {
+      "exact": false,
+      "expected_lines": [
+        "Uncertain token: Q7-19"
+      ],
+      "purpose": "uncertainty honesty",
+      "regions": [],
+      "warnings_required": [
+        "low_confidence",
+        "partial_text"
+      ]
+    },
+    "multi_column.png": {
+      "exact": false,
+      "expected_lines": [
+        "LEFT",
+        "L-01",
+        "9.3.1",
+        "RIGHT",
+        "R-02",
+        "OK"
+      ],
+      "purpose": "column reading order",
+      "regions": [
+        {
+          "bbox": [
+            60,
+            53,
+            213,
+            100
+          ],
+          "text": "LEFT"
+        },
+        {
+          "bbox": [
+            60,
+            167,
+            201,
+            216
+          ],
+          "text": "L-01"
+        },
+        {
+          "bbox": [
+            60,
+            282,
+            223,
+            331
+          ],
+          "text": "9.3.1"
+        },
+        {
+          "bbox": [
+            1080,
+            52,
+            1281,
+            101
+          ],
+          "text": "RIGHT"
+        },
+        {
+          "bbox": [
+            1080,
+            167,
+            1229,
+            216
+          ],
+          "text": "R-02"
+        },
+        {
+          "bbox": [
+            1080,
+            282,
+            1174,
+            331
+          ],
+          "text": "OK"
+        }
+      ]
+    },
+    "small_font_desktop.png": {
+      "exact": true,
+      "expected_lines": [
+        "Desktop file: Report-v2.txt",
+        "Release 9.3.1",
+        "Mixed-case token Zeta-907"
+      ],
+      "purpose": "CER <= 2 percent",
+      "regions": [
+        {
+          "bbox": [
+            40,
+            28,
+            571,
+            66
+          ],
+          "text": "Desktop file: Report-v2.txt"
+        },
+        {
+          "bbox": [
+            40,
+            88,
+            314,
+            118
+          ],
+          "text": "Release 9.3.1"
+        },
+        {
+          "bbox": [
+            40,
+            148,
+            588,
+            178
+          ],
+          "text": "Mixed-case token Zeta-907"
+        }
+      ]
+    },
+    "transparent_ui.png": {
+      "exact": true,
+      "expected_lines": [
+        "Transparent Panel: Alpha-42"
+      ],
+      "purpose": "RGBA decoding and alpha compositing",
+      "regions": [
+        {
+          "bbox": [
+            69,
+            80,
+            902,
+            136
+          ],
+          "text": "Transparent Panel: Alpha-42"
+        }
+      ]
+    }
+  },
+  "font": {
+    "license": "DejaVu Sans; Bitstream Vera derivative; license text in docs/ocr-easyocr-qualification.md",
+    "path": "tests/fixtures/ocr_qualification/DejaVuSans.ttf",
+    "sha256": "b4c632e3cdf9acc7f28758fb5a323c8524d7fc6660d46904d9b6cbe2809c419c"
+  },
+  "generator": "scripts/generate_ocr_fixtures.py",
+  "generator_version": 1,
+  "platform": "Windows-11-10.0.26200-SP0"
+}

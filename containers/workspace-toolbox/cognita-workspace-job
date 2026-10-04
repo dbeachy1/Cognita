@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Small, bounded guest-side job supervisor for Cognita Workspaces.
+
+The broker invokes this file only with the fixed actions ``start``, ``status``,
+or ``cancel``.  Descriptors and state remain on the named Workspace volume so
+the detached microVM can be reconciled after a broker restart.  This program
+never evaluates an argv request through a shell; shell_script is the one
+explicit exception and is executed by the guest's /bin/bash.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import selectors
+import signal
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path("/workspace/.cognita/jobs")
+JOB_RE = re.compile(r"^[0-9a-fA-F-]{1,80}$")
+MAX_OUTPUT = 8 * 1024 * 1024
+READ_CHUNK = 64 * 1024
+CANCEL_MARKER = "cancel-requested"
+
+
+def _job_dir(job_id: str) -> Path:
+    if not JOB_RE.fullmatch(job_id):
+        raise SystemExit(2)
+    return ROOT / job_id
+
+
+def _read(path: Path, default: dict) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return dict(default)
+    return value if isinstance(value, dict) else dict(default)
+
+
+def _write(path: Path, value: dict) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, separators=(",", ":"), ensure_ascii=True), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
+def _token(pid: int) -> str:
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split()
+        return fields[21]
+    except (FileNotFoundError, OSError, IndexError):
+        return ""
+
+
+def _bounded_append(path: Path, data: bytes) -> None:
+    if not data:
+        return
+    with path.open("ab") as stream:
+        stream.write(data[-MAX_OUTPUT:])
+    size = path.stat().st_size
+    if size > MAX_OUTPUT:
+        raw = path.read_bytes()[-MAX_OUTPUT:]
+        path.write_bytes(raw)
+        os.chmod(path, 0o600)
+
+
+def _retain_tail(tail: bytearray, data: bytes) -> None:
+    """Retain at most MAX_OUTPUT bytes from an untrusted output stream."""
+    if len(data) >= MAX_OUTPUT:
+        tail[:] = data[-MAX_OUTPUT:]
+        return
+    tail.extend(data)
+    if len(tail) > MAX_OUTPUT:
+        del tail[:len(tail) - MAX_OUTPUT]
+
+
+def _drain_pipes(
+    selector: selectors.BaseSelector, tails: dict[str, bytearray], timeout: float,
+    output_paths: dict[str, Path] | None = None,
+) -> None:
+    """Drain ready pipe fragments and publish them while the job is running.
+
+    The supervisor used to retain every fragment in memory and write the
+    bounded tail only after the child exited.  That made a flushed line
+    invisible to ``job_get`` during a long-running job.  Keep the tail for
+    callers that need it while appending each fragment to its stream file so
+    readers can paginate output incrementally.
+    """
+    if not selector.get_map():
+        time.sleep(max(0.0, timeout))
+        return
+    for key, _events in selector.select(max(0.0, timeout)):
+        try:
+            data = os.read(key.fd, READ_CHUNK)
+        except BlockingIOError:
+            continue
+        if data:
+            _retain_tail(tails[key.data], data)
+            if output_paths is not None:
+                _bounded_append(output_paths[key.data], data)
+        else:
+            selector.unregister(key.fileobj)
+            key.fileobj.close()
+
+
+def _drain_until(
+    child: subprocess.Popen[bytes], selector: selectors.BaseSelector,
+    tails: dict[str, bytearray], *, seconds: float,
+    output_paths: dict[str, Path] | None = None,
+) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if child.poll() is not None and not selector.get_map():
+            return True
+        _drain_pipes(
+            selector, tails, min(0.1, deadline - time.monotonic()), output_paths,
+        )
+    return child.poll() is not None and not selector.get_map()
+
+
+def _stop_owned_group(
+    child: subprocess.Popen[bytes], selector: selectors.BaseSelector,
+    tails: dict[str, bytearray], *, graceful: bool,
+    output_paths: dict[str, Path] | None = None,
+) -> bool:
+    """Stop the exact process group while draining bounded tails, then reap."""
+    try:
+        os.killpg(child.pid, signal.SIGTERM if graceful else signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+    if _drain_until(
+        child, selector, tails, seconds=2.0 if graceful else 5.0,
+        output_paths=output_paths,
+    ):
+        return True
+    if graceful:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+        if _drain_until(child, selector, tails, seconds=5.0, output_paths=output_paths):
+            return True
+
+    # A descendant retaining a pipe must not make the guest supervisor hang.
+    for key in list(selector.get_map().values()):
+        selector.unregister(key.fileobj)
+        key.fileobj.close()
+    try:
+        child.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
+    return False
+
+
+def _monitor(job_id: str) -> int:
+    directory = _job_dir(job_id)
+    descriptor = _read(directory / "descriptor", {})
+    state_path = directory / "status"
+    state = _read(state_path, {"state": "lost"})
+    argv = descriptor.get("argv")
+    script = descriptor.get("shell_script")
+    if (isinstance(argv, list)) == (isinstance(script, str)):
+        return 2
+    if isinstance(argv, list):
+        command = [str(item) for item in argv]
+    else:
+        command = ["/bin/bash", "-c", script]
+    cwd = descriptor.get("cwd", "/workspace")
+    env = os.environ.copy()
+    env.update({str(k): str(v) for k, v in (descriptor.get("env") or {}).items()})
+    started = time.monotonic()
+    if (directory / CANCEL_MARKER).is_file():
+        state.update({"state": "canceled", "exit_code": None, "finished_at": time.time(),
+                      "duration_seconds": 0.0})
+        _write(state_path, state)
+        return 0
+    try:
+        child = subprocess.Popen(
+            command, cwd=cwd, env=env, start_new_session=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True,
+        )
+    except OSError:
+        state.update({"state": "failed", "exit_code": 127, "finished_at": time.time()})
+        _write(state_path, state)
+        return 127
+    state.update({"state": "running", "pid": child.pid, "process_start_token": _token(child.pid),
+                  "process_group_id": child.pid})
+    _write(state_path, state)
+    timeout = max(1, int(descriptor.get("timeout_seconds", 3600)))
+    deadline = started + timeout
+    tails = {"stdout": bytearray(), "stderr": bytearray()}
+    output_paths = {stream: directory / stream for stream in tails}
+    with selectors.DefaultSelector() as selector:
+        for stream_name, stream in (("stdout", child.stdout), ("stderr", child.stderr)):
+            if stream is not None:
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, stream_name)
+        while True:
+            if (directory / CANCEL_MARKER).is_file():
+                stopped = _stop_owned_group(
+                    child, selector, tails, graceful=True, output_paths=output_paths,
+                )
+                exit_code = child.returncode
+                terminal = "canceled" if stopped else "lost"
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stopped = _stop_owned_group(
+                    child, selector, tails, graceful=False, output_paths=output_paths,
+                )
+                exit_code = None
+                terminal = "timed_out" if stopped else "lost"
+                break
+            if child.poll() is not None and not selector.get_map():
+                exit_code = int(child.returncode)
+                terminal = "succeeded" if exit_code == 0 else "failed"
+                break
+            _drain_pipes(selector, tails, min(0.1, remaining), output_paths)
+    state.update({"state": terminal, "exit_code": exit_code, "finished_at": time.time(),
+                  "duration_seconds": round(time.monotonic() - started, 3)})
+    _write(state_path, state)
+    return 0
+
+
+def _start(job_id: str) -> int:
+    directory = _job_dir(job_id)
+    descriptor = directory / "descriptor"
+    if not descriptor.is_file():
+        return 2
+    status = directory / "status"
+    current = _read(status, {})
+    if current.get("state") in {"queued", "running"} and isinstance(current.get("pid"), int):
+        return 0
+    _write(status, {"state": "queued", "created_at": time.time()})
+    subprocess.Popen([sys.executable, str(Path(__file__)), "monitor", job_id],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    return 0
+
+
+def _status(job_id: str) -> int:
+    directory = _job_dir(job_id)
+    state = _read(directory / "status", {"state": "lost"})
+    state["stdout_bytes"] = min((directory / "stdout").stat().st_size if (directory / "stdout").exists() else 0, MAX_OUTPUT)
+    state["stderr_bytes"] = min((directory / "stderr").stat().st_size if (directory / "stderr").exists() else 0, MAX_OUTPUT)
+    print(json.dumps(state, separators=(",", ":")))
+    return 0
+
+
+def _cancel(job_id: str) -> int:
+    directory = _job_dir(job_id)
+    state_path = directory / "status"
+    state = _read(state_path, {"state": "lost"})
+    if state.get("state") in {"succeeded", "failed", "canceled", "timed_out", "lost"}:
+        return _status(job_id)
+    marker = directory / CANCEL_MARKER
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(marker, flags, 0o600)
+        os.close(descriptor)
+    except FileExistsError:
+        try:
+            marker_mode = marker.lstat().st_mode
+        except OSError:
+            return 2
+        if not stat.S_ISREG(marker_mode):
+            return 2
+    except OSError:
+        return 2
+
+    # Only the monitor owns and signals the Popen process group.  Waiting for
+    # its terminal write avoids a check-then-kill race with PID/PGID reuse.
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        current = _read(state_path, state)
+        if current.get("state") in {"succeeded", "failed", "canceled", "timed_out", "lost"}:
+            return _status(job_id)
+        time.sleep(0.05)
+    _status(job_id)
+    return 1
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 3 or argv[1] not in {"start", "status", "cancel", "monitor"}:
+        return 2
+    action, job_id = argv[1], argv[2]
+    if action == "start":
+        return _start(job_id)
+    if action == "status":
+        return _status(job_id)
+    if action == "cancel":
+        return _cancel(job_id)
+    return _monitor(job_id)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

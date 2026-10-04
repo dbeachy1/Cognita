@@ -1,0 +1,91 @@
+[project]
+name = "cognita"
+# 13.0 §4: the version is not spelled here. It is read from the single
+# authority, src/cognita/release_identity.py, so the wheel metadata cannot
+# disagree with what /healthz reports. See [tool.setuptools.dynamic] below.
+dynamic = ["version"]
+description = "Self-hosted, OAuth-secured MCP gateway serving isolated local knowledge bases to Claude and ChatGPT/Codex"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Douglas Beachy" }]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "argon2-cffi>=23.1",
+    "cryptography>=42.0",
+    "Django==6.1.1",
+    "django-oauth-toolkit==3.4.1",
+    "oauthlib==3.3.1",
+    "asyncpg>=0.30",
+    # 4.0 retrieval core (D4.3): the parse/embed libs the engine used, owned
+    # directly now. They first came in transitively via knowledge-rag, which
+    # 14.0.0 removed along with the `engine: workers` rollback path.
+    # DESIGN-6.0 §11: keep this exact pin aligned with build-gpu-venv.sh. The
+    # service and GPU worker have separate environments but share a model cache
+    # (§10.1). FastEmbed chooses ONNX artifacts from version-specific metadata;
+    # mismatched versions could use different artifacts in that shared cache.
+    # The former ">=0.7" service constraint matched the script's "==0.8.0" only
+    # by accident and could diverge after a dependency upgrade.
+    "fastembed==0.8.0",
+    # 14.0: the pinned reranker is fetched by exact revision through
+    # huggingface_hub directly (fastembed cannot pin one). Same range fastembed
+    # 0.8.0 declares, so resolution does not move.
+    "huggingface-hub>=0.20,<2.0",
+    # 14.0: PDF text. Replaces PyMuPDF (AGPL-3.0); PDFium is BSD-3-Clause.
+    "pypdfium2==5.13.0",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
+    "beautifulsoup4>=4.12",  # add_from_url HTML -> text (was knowledge-rag's dep)
+    "watchdog>=4",  # 4.0-M4 Cognita-side file watcher (was knowledge-rag's dep)
+    "jsonschema>=4.23",
+]
+
+[project.optional-dependencies]
+# `build`: test_oauth_service_runtime_gates builds a wheel with `python -m build`.
+# It used to reach the test image only through chromadb (knowledge-rag), which
+# 14.0 removed, so it is declared where it is actually used.
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "build>=1.2"]
+
+[project.scripts]
+cognita = "cognita.__main__:main"
+cognita-runtime-broker = "cognita.runtime_broker.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+# Read as an attribute, not by importing the package: release_identity.py is a
+# leaf of literals with no package imports, so a build never needs Cognita's
+# dependencies installed to learn the version.
+version = { attr = "cognita.release_identity.APPLICATION_VERSION" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"cognita.oauth_service" = ["templates/**/*.html"]
+"cognita" = ["web/*"]
+"cognita.selftest_fixtures" = ["data/manifest.json", "data/cognita-selftest/ocr/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# Pinned explicitly (13.0): ruff's default rule set changes between versions
+# (0.15 -> 0.16 went from 211 to 530 findings on the same tree), which made
+# "lint clean" mean different things in different venvs. These are the classic
+# defaults; widening them is a deliberate change, not an upgrade side effect.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

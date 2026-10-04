@@ -1,0 +1,230 @@
+# Cognita configuration template.
+# Copy to cognita.yaml (gitignored) and adjust. Any key can also be set via
+# environment variable COGNITA_<UPPERCASE_KEY>, which wins over this file.
+
+mcp_host: "127.0.0.1"     # cloudflared runs on this box; no LAN bind needed
+mcp_port: 8675            # public MCP endpoint (behind the tunnel)
+admin_host: "127.0.0.1"   # loopback by default. Bind non-loopback (LAN/public) ONLY
+                          # with an admin password set — startup refuses otherwise.
+admin_port: 8676
+# Optional native Admin HTTPS. When migrating a configured pair, migrate-12
+# validates both absolute PEM paths, copies them into owner-only target secrets,
+# and rewrites these values to /run/secrets/admin_tls_certfile and
+# /run/secrets/admin_tls_keyfile. Relative paths, links, missing files, and an
+# insecure private-key mode fail closed.
+# admin_tls_certfile: "/etc/cognita/certs/admin.crt"
+# admin_tls_keyfile: "/etc/cognita/certs/admin.key"
+# In-app form login for the admin UI/API. Empty password = localhost-only
+# default (no auth). To reach admin from another machine, set admin_host above AND
+# a password here. NEVER store the plaintext — set the Argon2id verifier with
+# scripts/set-admin-credentials.* (prompts for username + password, writes it here).
+# Credentials are read ONLY from this file, never from the environment.
+# Over a public bind, put TLS in front (the tunnel) or keep it on a trusted LAN.
+admin_username: "admin"
+admin_password_hash: ""
+data_root: "C:/cognita/data"
+models_cache_dir: "C:/cognita/models_cache"   # shared; avoids re-download
+remote_readonly: false    # emergency global read-only switch; connector policy is authoritative
+backup_keep_per_file: 20  # newest N backups kept per file; older pruned + logged. 0 = unlimited
+registry_path: "C:/cognita/config/registry.yaml"
+connectors_path: "C:/cognita/config/connectors.yaml"  # unified MCP connector policy
+# 11.0 OAuth/static-key policy. The live file is private and generated on first
+# startup; it contains hashes only, never raw static keys.
+authentication_path: "C:/cognita/config/authentication.yaml"
+public_base_url: ""       # canonical HTTPS origin, e.g. https://cognita.example.com
+oauth_enabled: true       # global default; per-project overrides live in authentication.yaml
+oauth_store_path: null    # null -> <data_root>/oauth.sqlite3 (OAuth service state)
+oauth_access_token_ttl_seconds: 3600
+oauth_allowed_client_hosts: ["claude.ai", "chatgpt.com", "openai.com", "127.0.0.1", "localhost"]
+# Legacy /mcp/<project> paths are retired after the 9.0 cutover. This flag only
+# exists for isolated test fixtures and is never honored in release mode.
+legacy_path_auth_enabled: false
+# Static private keys are configured write-only in the Admin Authentication card
+# and are honored in release mode through Authorization: Bearer.
+log_level: "INFO"
+# 13.2.10: wire capture for the connector MCP route. When true, every request
+# and response body is written whole to <log_dir>/mcp-wire/ (bearer token
+# redacted). The files hold whatever the tools returned — turn it on to look
+# at a problem, off afterwards. `keep` bounds the directory (newest files kept).
+mcp_wire_capture: false
+mcp_wire_capture_keep: 500
+
+# Filesystem reconciliation (11.4). Native events provide low latency and the
+# polling observer is the correctness backstop. Set poll interval to 0 only
+# when accepting native-only discovery risk.
+watch_enabled: true
+watch_debounce_s: 10.0
+watch_poll_interval_s: 5.0
+watch_max_pending_paths: 100000
+watch_retry_initial_s: 5.0
+watch_retry_max_s: 300.0
+
+# ---------------------------------------------------------------------------
+# Document tiers (4.4). Two allowlists decide what happens to a file:
+#   indexed_extensions    -> EMBEDDED: chunked, embedded, hybrid (semantic +
+#                            keyword) search. Prose and structured content.
+#   registered_extensions -> REGISTERED: stored whole, listed, readable,
+#                            writable, backed up and KEYWORD-searchable, but
+#                            never embedded. Code and config.
+# A registered document returns nothing at hybrid_alpha=1.0 (semantic-only),
+# because embeddings on code are noise that pollutes prose queries while exact
+# token matching on the same text is precise.
+#
+# An extension in BOTH lists resolves to REGISTERED (and warns at startup) —
+# the code extensions were already embedded before 4.4, so "embedded wins"
+# would make naming one here do nothing.
+#
+# Both lists can be overridden PER CONNECTOR in registry.yaml; these are only
+# the defaults. Omit either key to take the built-in default shown below.
+#
+# .json remains EMBEDDED because structured prose and application exports can
+# be content intended for semantic search rather than registered code.
+indexed_extensions:
+  [".csv", ".docx", ".ipynb", ".json", ".md", ".pdf", ".pptx", ".txt", ".xlsx", ".xml"]
+registered_extensions:
+  [".c", ".cpp", ".css", ".h", ".ini", ".js", ".json5", ".jsx", ".py", ".sh",
+   ".sql", ".toml", ".ts", ".tsx", ".yaml", ".yml"]
+
+# Engine model defaults for NEW projects (quality-first).
+# Note: fastembed does not ship bge-reranker-v2-m3; Cognita pins the ONNX export
+# itself (14.0.0; it replaced Jina v2, whose weights are CC-BY-NC). Any
+# fastembed-supported reranker name still works here.
+embedding_model: "BAAI/bge-large-en-v1.5"
+embedding_dimensions: 1024
+reranker_model: "BAAI/bge-reranker-v2-m3"
+
+# Escape hatches for a memory-constrained box. BOTH DEFAULTS MEAN "NO LIMIT" —
+# ORT sizes its own thread pool from the core count, and fastembed uses its own
+# batch size. You get the same behavior by not setting them at all.
+#
+# Do NOT reach for these to control memory. 5.8.0 did (threads 4, batch 32) and
+# it was the wrong trade: peak RSS is flat within 60 MB from 4 threads to
+# unbounded, so the throttle bought nothing and cost 2.3x rebuild throughput.
+# Indexing is allowed to take the memory it needs; the job is to give it back
+# afterwards, which is what release_to_os() and the ORT arena settings are for.
+#
+# embedding_threads: 0 = ORT decides. A positive value caps intra-op threads
+# and is clamped to the box's core count.
+embedding_threads: 0
+# Texts held in flight per embed() call. Bounds peak transient allocation during
+# a full_rebuild independently of how many chunks a single document has.
+embed_batch_size: 32
+
+# ---------------------------------------------------------------------------
+# Cognita 12.4 container acceleration policy is stored separately in the
+# owner-only Admin file `acceleration.yaml`.  Use Settings -> GPU acceleration
+# to change it; the legacy fields below are read once during migration only.
+# ---------------------------------------------------------------------------
+# GPU acceleration (6.0+). OPTIONAL. Cognita indexes perfectly well without a
+# GPU and every failure path falls back to the CPU, so the worst a wrong
+# setting here can do is make indexing slower — never wrong, never broken.
+#
+# It is off unless `gpu_venv_python` points at a Python that has the GPU
+# packages installed. That is a separate environment on purpose: the service
+# itself stays CPU-only, so a broken driver cannot take Cognita down with it.
+#
+# gpu_enabled: true
+# gpu_venv_python: "/home/you/Cognita/.venv-gpu/bin/python"
+
+# --- WHICH CARDS MAY COGNITA USE? ------------------------------------------
+#
+#   gpu_cards: all        every card that is present (the default)
+#   gpu_cards: none       no card at all — index on the CPU
+#   gpu_cards: 1          only the card Cognita lists as 1
+#   gpu_cards: [0, 2]     only those two, leaving the others alone
+#
+# The number is the `card` index Cognita prints. IT LISTS EVERY CARD IT CAN SEE
+# IN THE LOG AT STARTUP — look there first:
+#
+#   GPU cards   : 3 found, 2 usable  [gpu_cards=all]
+#      card 0  card1  0000:03:00.0    31.80 GB free   usable
+#      card 1  card2  0000:07:00.0    31.80 GB free   usable
+#      card 2  card3  0000:7e:00.0     1.86 GB free   unusable: vram_free=1.86GB<6.19GB
+#
+# The same numbering is in /healthz on a running server.
+#
+# 🔴 It is NOT the sysfs "cardN" name. The reference machine's cards are
+# card1, card2, card3 — there is no card0 — so those names are off by one from
+# the index, and the number your GPU tooling shows may be a third thing again.
+# Read the "card" field; do not count.
+#
+# The order is by PCI address and therefore stable across reboots: index 0 is
+# the same physical card tomorrow. Adding a card can renumber the ones after
+# it, so re-check after changing hardware.
+#
+# ⚠️ Selecting a card is a CEILING, not a reservation. A selected card still
+# has to pass the health gate — enough free VRAM for the batch plus
+# gpu_reserve_vram_gb, and not already busy — so pointing Cognita at a card
+# another application is using does not take it away from them. It just fails
+# the gate, and /healthz says so in `devices_skipped`.
+#
+# ⚠️ An index that does not exist is a WARNING, not an error, because the CPU
+# fallback would otherwise hide it completely: correct index, several times
+# slower, nothing in the output to say why. Check `gpu_cards_warnings` in
+# /healthz after editing this.
+#
+# Leaving one card free for other work is the common reason to change this.
+gpu_cards: all
+#
+# The expert form of the same choice, by PCI address instead of index. Empty
+# means "not used". If set it OVERRIDES gpu_cards — the more specific
+# statement wins. Prefer gpu_cards unless you specifically need addresses.
+# gpu_device_ids: ["0000:03:00.0"]
+
+# Tuning. Measured on the reference machine; change with a measurement, not by
+# feel — gpu_batch_size in particular is BOTH the bulk throughput knob AND the
+# floor on what a one-chunk write costs, and 6.3 found the old value of 64 was
+# the worst available at both ends.
+# gpu_batch_size: 4          # compiled tensor shape; every value costs a ~30s compile once
+# gpu_idle_linger_s: 30      # seconds a finished card stays warm for the next job
+# gpu_reserve_vram_gb: 4.0   # headroom left for everyone else on the card
+# gpu_max_busy_percent: 20   # a card busier than this is left alone (default: 20 on AMD, no limit on NVIDIA)
+
+# Cognita 12 container notes. Compose supplies the host roots and owner-only
+# secret files through cognita-compose.env.example:
+#   COGNITA_CONFIG_ROOT, COGNITA_PROJECTS_ROOT,
+#   COGNITA_POSTGRES_DATA_ROOT, COGNITA_WORKSPACE_DATA_ROOT,
+#   COGNITA_TRANSFER_STAGING_ROOT, COGNITA_SECRETS_ROOT,
+#   COGNITA_MODEL_CACHE_ROOT, COGNITA_TOOLBOX_IMAGE_CACHE_ROOT
+# The beta stack binds MCP/Admin to 9675/9676 and production promotion changes
+# only those host mappings to 8675/8676. PostgreSQL and workspace-runtime never
+# publish a host port. Workspace policy is stored in its private Admin database:
+# 4 GiB quota, 30-minute idle stop, 30-day retention, network off by default,
+# and host reserve max(20 GiB, 10% of the Workspace filesystem).
+#
+# migrate-12 requires an explicit SOURCE=TARGET map for every configured
+# existing folder root (registry documents_dir/data_dir, project root, data_root,
+# model/OCR/cache roots, and any other reported directory). Mapping is canonical
+# and longest-prefix; heuristic replacement is forbidden. The nonsecret migration
+# manifest records each root, mapping, count, bytes, and hash while excluding all
+# credential/key/password/DSN/token values.
+
+# Static PNG catalog/local-ingestion ceiling (10.0). Inline get_asset responses
+# retain their separate 1 MiB connector-safe ceiling.
+# asset_max_png_bytes: 16777216
+
+# Local static-PNG OCR (10.0). Model files are pre-provisioned; requests are
+# offline and cannot override these administrator-owned settings.
+# ocr_model_dir: "C:/cognita/models/easyocr"
+# ocr_python: "/home/you/Cognita/ocr-venv/bin/python"  # required; dedicated runtime, never service .venv
+# ocr_launcher: []             # optional argv prefix, e.g. a preconfigured systemd-run wrapper
+# Linux example: ["systemd-run", "--user", "--quiet", "--pipe", "--wait", "--collect", "--property=MemoryMax=2G"]
+# ocr_qualification_manifest: "/home/you/Cognita/docs/easyocr-qualification-dependencies.json"
+# ocr_enabled_languages: ["en"]
+# ocr_device: "cpu"              # deployment may set a qualified cuda device
+# ocr_gpu_device_ids: []           # ordered GPU-<UUID> pins; [] follows gpu_cards/probe order
+# ocr_gpu_device_id: ""           # legacy single-GPU pin; mutually exclusive with list above
+# ocr_gpu_required_vram_mb: 4096   # validated OCR weights + inference peak, excluding reserve
+# ocr_require_noatime: true
+# ocr_max_png_bytes: 16777216
+# ocr_max_pixels: 16777216
+# ocr_max_dimension: 8192          # effective limit is min(this, asset_max_dimension ceiling 4096)
+# ocr_max_result_bytes: 1048576
+# ocr_max_regions: 10000
+# ocr_asset.timeout_seconds is selected per call (default 120, range 10-600).
+# ocr_concurrency: 1
+# ocr_queue_size: 4
+# ocr_cpu_threads: 2
+# ocr_cpu_reserve_ram_mb: 1024
+# ocr_worker_memory_mb: 2048
+# ocr_low_confidence: 0.60

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Cognita launcher. No logic lives here (docs/DESIGN-LINUX-INSTALLER.md section 2.1): find the
+# repository root from this file's own path, make sure python3 is new enough, and hand every
+# argument to scripts/cognita_cli.py. It works from any directory inside the clone, and through
+# a symlink, because the root comes from the resolved path of this file and not the caller's cwd.
+set -eu
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+if ! command -v python3 >/dev/null 2>&1 \
+   || ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+  echo "Cognita's installer needs Python 3.11 or newer as python3. Install it with your" >&2
+  echo "distribution's package manager (Debian/Ubuntu: sudo apt-get install -y python3;" >&2
+  echo "Fedora: sudo dnf install -y python3; Arch: sudo pacman -S python), then run this again." >&2
+  exit 1
+fi
+exec python3 "$ROOT/scripts/cognita_cli.py" "$@"

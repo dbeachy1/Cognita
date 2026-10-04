@@ -1,0 +1,86 @@
+# Optional full-mode Workspace runtime. Cognita has no healthy dependency on this service.
+services:
+  cognita:
+    environment:
+      COGNITA_WORKSPACE_RUNTIME_URL: http://workspace-runtime:8080/v1
+      COGNITA_WORKSPACE_DATA_ROOT: ${COGNITA_WORKSPACE_DATA_ROOT:?COGNITA_WORKSPACE_DATA_ROOT is required}
+      COGNITA_WORKSPACE_CAPACITY_MARKER: /run/cognita/workspace-capacity.marker
+      COGNITA_INTERNAL_BEARER_FILE: /run/secrets/cognita_broker_secret
+    volumes:
+      - type: bind
+        source: ${COGNITA_WORKSPACE_DATA_ROOT:?COGNITA_WORKSPACE_DATA_ROOT is required}/.cognita-12-workspaces.json
+        target: /run/cognita/workspace-capacity.marker
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - cognita_broker_secret
+  workspace-runtime:
+    build:
+      context: .
+      dockerfile: containers/workspace-runtime/Dockerfile
+      args:
+        COGNITA_VERSION: "${COGNITA_VERSION:?COGNITA_VERSION is required}"
+        MICROSANDBOX_IMAGE: ghcr.io/superradcompany/microsandbox:0.7.0@sha256:fed39d2863121ac1fec25bdeaaeab9498f48ee381294faa8fe5805b0e9ac0fdc
+    image: cognita-workspace-runtime:${COGNITA_VERSION:?COGNITA_VERSION is required}
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Keep the broker aligned with the migrated owner. KVM access is granted
+    # only through the host's explicit kvm group; capabilities remain dropped.
+    user: "${COGNITA_SERVICE_UID:-1000}:${COGNITA_SERVICE_GID:-1000}"
+    group_add:
+      - "${COGNITA_KVM_GID:?COGNITA_KVM_GID is required}"
+    environment:
+      COGNITA_VERSION: "${COGNITA_VERSION:?COGNITA_VERSION is required}"
+      COGNITA_RUNTIME_BROKER_HOST: 0.0.0.0
+      COGNITA_RUNTIME_BROKER_PORT: "8080"
+      COGNITA_INTERNAL_BEARER_FILE: /run/secrets/cognita_broker_secret
+      COGNITA_BROKER_JOURNAL_PATH: /root/.microsandbox/cognita-broker-requests.sqlite3
+      COGNITA_BROKER_STATE_PATH: /root/.microsandbox/cognita-broker-state.sqlite3
+      # Compose overrides the pinned image's user with the migrated numeric
+      # service UID.  Keep the SDK's default ~/.microsandbox cache inside the
+      # same owner-only persistent bind mount as MSB_DATA_DIR; MSB_DATA_DIR is
+      # not consulted by Microsandbox's Python SDK cache resolver.
+      HOME: /root
+      MSB_DATA_DIR: /root/.microsandbox
+    volumes:
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+        read_only: true
+      - type: bind
+        source: ${COGNITA_WORKSPACE_DATA_ROOT:?COGNITA_WORKSPACE_DATA_ROOT is required}
+        target: /root/.microsandbox
+      - type: bind
+        source: ${COGNITA_TOOLBOX_IMAGE_CACHE_ROOT:-${COGNITA_WORKSPACE_DATA_ROOT:?COGNITA_WORKSPACE_DATA_ROOT is required}/toolbox-cache}
+        target: /var/lib/cognita/toolbox-cache
+    secrets:
+      - cognita_broker_secret
+    devices:
+      - /dev/kvm:/dev/kvm
+    expose:
+      - "8080"
+    networks:
+      - cognita-internal
+    healthcheck:
+      # 13.0: the probe asserts the broker's OWN readiness field, not merely a
+      # 200.  /healthz answers `{"status": ..., "runtime": "ready"|"unavailable",
+      # ...}` (runtime_broker/service.py), so a broker whose SDK runtime never
+      # came up used to be reported healthy here and the app would then meet it
+      # as a failed Workspace call instead of a failed start.
+      test: ["CMD-SHELL", "test -r /dev/kvm -a -w /dev/kvm && test -w /root/.microsandbox && test -s /run/secrets/cognita_broker_secret && python3 -c 'import json, urllib.request; raise SystemExit(0 if json.load(urllib.request.urlopen(\"http://127.0.0.1:8080/healthz\", timeout=3)).get(\"runtime\") == \"ready\" else 1)'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+secrets:
+  cognita_broker_secret:
+    file: ${COGNITA_SECRETS_ROOT:?COGNITA_SECRETS_ROOT is required}/broker.secret

@@ -1,0 +1,1 @@
+encrypted-user-password.pdf: generated once with PyMuPDF 1.28.0 (one page, text "cognita fixture", AES-256, user password "fixture-user", owner password "fixture-owner") via fitz `doc.save(..., encryption=fitz.PDF_ENCRYPT_AES_256, user_pw=..., owner_pw=...)`.

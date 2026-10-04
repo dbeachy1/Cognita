@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "project": "Self-Test",
+  "fixtures": [
+    {
+      "path": "cognita-selftest/ocr/canonical-clear.png",
+      "purpose": "deterministic English OCR and searchable-token fixture",
+      "sha256": "f371c0951f5ad07b2c039b4481ad23e746f2db18bee014e5d54a6de734bb8a63"
+    },
+    {
+      "path": "cognita-selftest/ocr/blank.png",
+      "purpose": "deterministic cached no_text fixture",
+      "sha256": "cf3adf0667963af8ed7a70f1902dcee28cb809f08f98853c59782e6b7021cebd"
+    },
+    {
+      "path": "cognita-selftest/ocr/malformed.png",
+      "purpose": "bounded malformed-PNG rejection",
+      "sha256": "ef6f8789db64e06d89a40f688167580849a5fde7a62a921036637d1d297a5fff"
+    },
+    {
+      "path": "cognita-selftest/ocr/animated.png",
+      "purpose": "bounded animated-PNG rejection",
+      "sha256": "75bc52600e4bb7c790569621dc1f22b8814755fa3bef94786108c28e3eafda14"
+    },
+    {
+      "path": "cognita-selftest/ocr/not-a-png.txt",
+      "purpose": "bounded wrong-media rejection",
+      "sha256": "ab5942ac996b7b5fa6d1f619cdc01ce9ef4158749633c72d48e6485aaf58a86a"
+    },
+    {
+      "path": "cognita-selftest/ocr/over-limit.png",
+      "purpose": "declared dimensions exceed the configured OCR boundary",
+      "sha256": "e8320adf84b0bc0bb82f75a616ab9586458ec5854a66be67750303d139b3d945"
+    }
+  ]
+}

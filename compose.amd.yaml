@@ -1,0 +1,23 @@
+services:
+  cognita:
+    # AMD is opt-in and only affects Knowledge/OCR.  Workspace guests remain
+    # CPU-only and the broker never receives these devices.
+    build:
+      context: .
+      dockerfile: containers/cognita-amd/Dockerfile
+      args:
+        # 13.0 §4: no version literal here either; see compose.yaml.
+        COGNITA_VERSION: "${COGNITA_VERSION:?COGNITA_VERSION is required}"
+    image: cognita-amd:${COGNITA_VERSION:?COGNITA_VERSION is required}
+    environment:
+      COGNITA_ACCELERATION_PROFILE: amd
+      # MIGraphX writes compiled .mxr programs from inside the service.  This
+      # is the persistent container path; a pre-container host path from an
+      # older cognita.yaml is not visible after the model-cache bind mount.
+      COGNITA_GPU_PROGRAM_CACHE_DIR: /var/lib/cognita/models/migraphx-cache
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${COGNITA_VIDEO_GID:-44}"
+      - "${COGNITA_RENDER_GID:-109}"

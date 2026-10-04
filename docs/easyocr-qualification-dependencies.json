@@ -1,0 +1,50 @@
+{
+  "qualification_date": "2026-09-15",
+  "engine": "easyocr==1.7.2",
+  "runtime": {
+    "torch": "2.10.0+rocm7.1",
+    "torchvision": "0.25.0+rocm7.1",
+    "Pillow": "11.3.0",
+    "opencv-python-headless": "4.12.0.88",
+    "numpy": "2.2.6",
+    "psutil": "7.0.0"
+  },
+  "package_artifact_fingerprints": {
+    "hash_type": "sha256 of sorted installed package paths and bytes (not a wheel hash)",
+    "easyocr": "2d7c1e971054bdcafa9b0bb5ca8969e1dda31a3743025554e107e602c21e6c76",
+    "torch": "fcea98ae89239396fc76e5423857d2d7486ab97e792de4e488a087f2c0e0ff89",
+    "torchvision": "96aeca16b9ba6039fcbce4c5da4e67f3f1cdee7d29bfdff206338879eb7bfa20",
+    "Pillow": "ddca4f3179d0918c197fbe5f78961f75f84535420cca12279b127fd2566246ed",
+    "opencv-python-headless": "272ef93e55cccd7a8eb7c159fbf43b548fb0d0a3e81d87fb6d54343efc36b2d8",
+    "numpy": "aed130aa5a5694322edbe1d4df00528ef738a4319d22331ad7f036dd8acb36ed",
+    "psutil": "9b0ceaee664c184dc0050411db489cf0f6eb63898afb7582dc6dba8c49386fd9"
+  },
+  "model_files": {
+    "model_directory": "EasyOCR local model directory",
+    "aggregate_sha256": "3f083948a0cd26d77c8be07f8fa38ee5a63f76cfab5bbe720b4d1d9bb5df3790",
+    "craft_mlt_25k.pth": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17",
+    "english_g2.pth": "e2272681d9d67a04e2dff396b6e95077bc19001f8f6d3593c307b9852e1c29e8",
+    "license": "EasyOCR model weights distributed by the EasyOCR project; preserve upstream notices and verify the upstream model license before redistribution.",
+    "source": "https://github.com/JaidedAI/EasyOCR"
+  },
+  "fixture_font": {
+    "file": "tests/fixtures/ocr_qualification/DejaVuSans.ttf",
+    "sha256": "b4c632e3cdf9acc7f28758fb5a323c8524d7fc6660d46904d9b6cbe2809c419c",
+    "license_file": "tests/fixtures/ocr_qualification/DEJAVU-LICENSE.txt"
+  },
+  "licenses": {
+    "easyocr": "Apache-2.0",
+    "torch": "BSD-3-Clause",
+    "torchvision": "BSD",
+    "Pillow": "HPND",
+    "opencv-python-headless": "Apache-2.0",
+    "numpy": "BSD-3-Clause (binary also contains separately licensed bundled libraries; retain upstream notice)",
+    "psutil": "BSD-3-Clause",
+    "fixture_font": "DejaVu Sans / Bitstream Vera derivative; retain upstream license notice (license text recorded in qualification report)"
+  },
+  "offline_policy": {
+    "download_enabled": false,
+    "model_directory_must_be_preprovisioned": true,
+    "runtime_network_guard": "socket.connect blocked during each qualification process; zero attempts observed"
+  }
+}

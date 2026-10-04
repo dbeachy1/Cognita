@@ -1,0 +1,25 @@
+{% extends "cognita/base.html" %}
+{% load i18n %}
+{% block title %}Sign in · Cognita{% endblock %}
+{% block content %}
+<section class="card" aria-labelledby="login-title">
+  <h1 id="login-title">Sign in to Cognita</h1>
+  <p class="muted">Sign in to continue authorizing this connection.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/oauth/login">
+    {% csrf_token %}
+    <input type="hidden" name=next value="{{ next }}">
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="actions">
+      <button type="submit">Continue</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
