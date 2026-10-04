@@ -514,6 +514,168 @@ french.passwordMismatch=Les deux mots de passe ne correspondent pas.
 german.passwordMismatch=Die beiden Kennwörter stimmen nicht überein.
 italian.passwordMismatch=Le due password non corrispondono.
 brazilianportuguese.passwordMismatch=As duas senhas não são iguais.
+english.summaryUpdate=Update Cognita %1 to %2.
+spanish.summaryUpdate=Actualizar Cognita de %1 a %2.
+french.summaryUpdate=Mettre à jour Cognita de %1 vers %2.
+german.summaryUpdate=Cognita von %1 auf %2 aktualisieren.
+italian.summaryUpdate=Aggiorna Cognita dalla versione %1 alla %2.
+brazilianportuguese.summaryUpdate=Atualizar o Cognita de %1 para %2.
+english.summaryUpdateNoVersion=Update Cognita to %1.
+spanish.summaryUpdateNoVersion=Actualizar Cognita a la versión %1.
+french.summaryUpdateNoVersion=Mettre Cognita à jour vers la version %1.
+german.summaryUpdateNoVersion=Cognita auf Version %1 aktualisieren.
+italian.summaryUpdateNoVersion=Aggiorna Cognita alla versione %1.
+brazilianportuguese.summaryUpdateNoVersion=Atualizar o Cognita para a versão %1.
+english.summaryRepair=Repair Cognita %1 (Setup runs the install again over what is there).
+spanish.summaryRepair=Reparar Cognita %1 (se volverá a ejecutar la instalación sobre la existente).
+french.summaryRepair=Réparer Cognita %1 (le programme relance l’installation sur la version existante).
+german.summaryRepair=Cognita %1 reparieren (das Setup installiert erneut über die vorhandene Version).
+italian.summaryRepair=Ripara Cognita %1 (il programma esegue di nuovo l’installazione su quella esistente).
+brazilianportuguese.summaryRepair=Reparar o Cognita %1 (a instalação será executada novamente sobre a versão atual).
+english.summaryReinstall=Reinstall Cognita %1 (your data is kept).
+spanish.summaryReinstall=Volver a instalar Cognita %1 (se conservan sus datos).
+french.summaryReinstall=Réinstaller Cognita %1 (vos données sont conservées).
+german.summaryReinstall=Cognita %1 erneut installieren (Ihre Daten bleiben erhalten).
+italian.summaryReinstall=Reinstalla Cognita %1 (i tuoi dati vengono conservati).
+brazilianportuguese.summaryReinstall=Reinstalar o Cognita %1 (seus dados serão mantidos).
+english.summaryFinish=Finish installing Cognita %1 (an earlier install did not complete; Setup continues it).
+spanish.summaryFinish=Terminar de instalar Cognita %1 (una instalación anterior no terminó; esta instalación la continuará).
+french.summaryFinish=Terminer l’installation de Cognita %1 (une installation précédente n’a pas abouti ; le programme la reprend).
+german.summaryFinish=Cognita %1 fertig installieren (eine frühere Installation wurde nicht abgeschlossen; das Setup setzt sie fort).
+italian.summaryFinish=Completa l’installazione di Cognita %1 (un’installazione precedente non è terminata; il programma la riprende).
+brazilianportuguese.summaryFinish=Concluir a instalação do Cognita %1 (uma instalação anterior não terminou; esta instalação continuará).
+english.summaryInstall=Install Cognita %1.
+spanish.summaryInstall=Instalar Cognita %1.
+french.summaryInstall=Installer Cognita %1.
+german.summaryInstall=Cognita %1 installieren.
+italian.summaryInstall=Installa Cognita %1.
+brazilianportuguese.summaryInstall=Instalar o Cognita %1.
+english.summaryFolder=Projects folder:  %1
+spanish.summaryFolder=Carpeta de proyectos:  %1
+french.summaryFolder=Dossier des projets :  %1
+german.summaryFolder=Projektordner:  %1
+italian.summaryFolder=Cartella dei progetti:  %1
+brazilianportuguese.summaryFolder=Pasta de projetos:  %1
+english.summaryAdmin=Admin sign-in:  %1
+spanish.summaryAdmin=Inicio de sesión de administrador:  %1
+french.summaryAdmin=Connexion Admin :  %1
+german.summaryAdmin=Admin-Anmeldung:  %1
+italian.summaryAdmin=Accesso Admin:  %1
+brazilianportuguese.summaryAdmin=Login Admin:  %1
+english.summaryPorts=Ports:  MCP %1, Admin %2
+spanish.summaryPorts=Puertos:  MCP %1, Admin %2
+french.summaryPorts=Ports :  MCP %1, Admin %2
+german.summaryPorts=Ports:  MCP %1, Admin %2
+italian.summaryPorts=Porte:  MCP %1, Admin %2
+brazilianportuguese.summaryPorts=Portas:  MCP %1, Admin %2
+english.summaryWorkspace=Workspace:  %1
+spanish.summaryWorkspace=Workspace:  %1
+french.summaryWorkspace=Workspace :  %1
+german.summaryWorkspace=Workspace:  %1
+italian.summaryWorkspace=Workspace:  %1
+brazilianportuguese.summaryWorkspace=Workspace:  %1
+english.summaryAcceleration=Acceleration:  %1
+spanish.summaryAcceleration=Aceleración:  %1
+french.summaryAcceleration=Accélération :  %1
+german.summaryAcceleration=Beschleunigung:  %1
+italian.summaryAcceleration=Accelerazione:  %1
+brazilianportuguese.summaryAcceleration=Aceleração:  %1
+english.summaryDataLocation=Cognita keeps its data in:  %1
+spanish.summaryDataLocation=Cognita guarda sus datos en:  %1
+french.summaryDataLocation=Cognita conserve ses données dans :  %1
+german.summaryDataLocation=Cognita speichert seine Daten hier:  %1
+italian.summaryDataLocation=Cognita conserva i dati in:  %1
+brazilianportuguese.summaryDataLocation=O Cognita mantém os dados em:  %1
+english.workspaceOn=on
+spanish.workspaceOn=activado
+french.workspaceOn=activé
+german.workspaceOn=aktiviert
+italian.workspaceOn=attivo
+brazilianportuguese.workspaceOn=ativado
+english.workspaceOff=off
+spanish.workspaceOff=desactivado
+french.workspaceOff=désactivé
+german.workspaceOff=deaktiviert
+italian.workspaceOff=disattivato
+brazilianportuguese.workspaceOff=desativado
+english.accelCpu=CPU
+spanish.accelCpu=CPU
+french.accelCpu=processeur
+german.accelCpu=CPU
+italian.accelCpu=CPU
+brazilianportuguese.accelCpu=CPU
+english.accelAmd=AMD GPU
+spanish.accelAmd=GPU AMD
+french.accelAmd=GPU AMD
+german.accelAmd=AMD-GPU
+italian.accelAmd=GPU AMD
+brazilianportuguese.accelAmd=GPU AMD
+english.accelNvidia=NVIDIA GPU
+spanish.accelNvidia=GPU NVIDIA
+french.accelNvidia=GPU NVIDIA
+german.accelNvidia=NVIDIA-GPU
+italian.accelNvidia=GPU NVIDIA
+brazilianportuguese.accelNvidia=GPU NVIDIA
+english.accelUnchanged=unchanged
+spanish.accelUnchanged=sin cambios
+french.accelUnchanged=inchangée
+german.accelUnchanged=unverändert
+italian.accelUnchanged=non modificata
+brazilianportuguese.accelUnchanged=inalterada
+english.accelReasonOld= (NVIDIA driver too old)
+spanish.accelReasonOld= (el controlador NVIDIA es demasiado antiguo)
+french.accelReasonOld= (pilote NVIDIA trop ancien)
+german.accelReasonOld= (NVIDIA-Treiber zu alt)
+italian.accelReasonOld= (driver NVIDIA troppo vecchio)
+brazilianportuguese.accelReasonOld= (driver NVIDIA muito antigo)
+english.accelReasonNoBuild= (no NVIDIA build in this version)
+spanish.accelReasonNoBuild= (esta versión no incluye una compilación NVIDIA)
+french.accelReasonNoBuild= (aucune version NVIDIA dans cette édition)
+german.accelReasonNoBuild= (keine NVIDIA-Version in dieser Ausgabe)
+italian.accelReasonNoBuild= (questa versione non include il pacchetto NVIDIA)
+brazilianportuguese.accelReasonNoBuild= (esta versão não inclui uma compilação para NVIDIA)
+english.accelReasonNoCard= (no NVIDIA graphics card found)
+spanish.accelReasonNoCard= (no se encontró ninguna tarjeta gráfica NVIDIA)
+french.accelReasonNoCard= (aucune carte graphique NVIDIA détectée)
+german.accelReasonNoCard= (keine NVIDIA-Grafikkarte gefunden)
+italian.accelReasonNoCard= (nessuna scheda grafica NVIDIA rilevata)
+brazilianportuguese.accelReasonNoCard= (nenhuma placa de vídeo NVIDIA encontrada)
+english.summaryDownloadsExisting=Setup downloads only what this PC does not already have (at most about %1) and needs about %2
+spanish.summaryDownloadsExisting=La instalación descarga solo lo que aún no está en este equipo (como máximo, unos %1) y necesita unos %2
+french.summaryDownloadsExisting=Le programme télécharge uniquement ce qui manque sur ce PC (environ %1 au maximum) et nécessite environ %2
+german.summaryDownloadsExisting=Das Setup lädt nur herunter, was auf diesem PC noch fehlt (höchstens etwa %1), und benötigt etwa %2
+italian.summaryDownloadsExisting=Il programma scarica solo ciò che manca sul PC (al massimo circa %1) e richiede circa %2
+brazilianportuguese.summaryDownloadsExisting=A instalação baixa somente o que ainda falta neste computador (no máximo cerca de %1) e precisa de cerca de %2
+english.summaryDownloadsFresh=Setup then downloads about %1 (Cognita and its search models) and needs about %2
+spanish.summaryDownloadsFresh=Después, la instalación descarga unos %1 (Cognita y sus modelos de búsqueda) y necesita unos %2
+french.summaryDownloadsFresh=Le programme télécharge ensuite environ %1 (Cognita et ses modèles de recherche) et nécessite environ %2
+german.summaryDownloadsFresh=Das Setup lädt anschließend etwa %1 herunter (Cognita und seine Suchmodelle) und benötigt etwa %2
+italian.summaryDownloadsFresh=Il programma scarica poi circa %1 (Cognita e i relativi modelli di ricerca) e richiede circa %2
+brazilianportuguese.summaryDownloadsFresh=Em seguida, a instalação baixa cerca de %1 (Cognita e seus modelos de pesquisa) e precisa de cerca de %2
+english.summaryFreeDisk=of free disk space. Pressing Install checks your ports and disk space again with these choices.
+spanish.summaryFreeDisk=de espacio libre en disco. Al pulsar Instalar, se volverán a comprobar los puertos y el espacio con estas opciones.
+french.summaryFreeDisk=d’espace disque libre. Le bouton Installer vérifie à nouveau les ports et l’espace avec ces choix.
+german.summaryFreeDisk=freien Speicherplatz. Mit einem Klick auf Installieren werden Ports und Speicherplatz mit diesen Einstellungen erneut geprüft.
+italian.summaryFreeDisk=di spazio libero. Premendo Installa verranno ricontrollati le porte e lo spazio disponibile.
+brazilianportuguese.summaryFreeDisk=de espaço livre em disco. Ao clicar em Instalar, as portas e o espaço serão verificados novamente com estas opções.
+english.summaryUpdateNote= An update keeps your ports and Workspace setting; to change them, run Setup again afterwards.
+spanish.summaryUpdateNote= Una actualización conserva los puertos y Workspace; para cambiarlos, vuelva a ejecutar la instalación después.
+french.summaryUpdateNote= Une mise à jour conserve les ports et le réglage Workspace ; pour les modifier, relancez ensuite le programme d’installation.
+german.summaryUpdateNote= Bei einer Aktualisierung bleiben Ports und Workspace-Einstellung erhalten. Führen Sie das Setup danach erneut aus, um sie zu ändern.
+italian.summaryUpdateNote= Un aggiornamento mantiene le porte e l’impostazione di Workspace; per modificarle, esegui di nuovo il programma in seguito.
+brazilianportuguese.summaryUpdateNote= Uma atualização mantém as portas e a configuração do Workspace; para alterá-las, execute a instalação novamente depois.
+english.summaryLockedNote= Use Advanced to change the ports or to turn Workspace off.
+spanish.summaryLockedNote= Use Avanzado para cambiar los puertos o desactivar Workspace.
+french.summaryLockedNote= Utilisez Avancé pour modifier les ports ou désactiver Workspace.
+german.summaryLockedNote= Unter Erweitert können Sie die Ports ändern oder Workspace deaktivieren.
+italian.summaryLockedNote= Usa Avanzate per modificare le porte o disattivare Workspace.
+brazilianportuguese.summaryLockedNote= Use Avançado para alterar as portas ou desativar o Workspace.
+english.summaryFreshNote= Use Advanced to change the ports, where Cognita keeps its data, or to turn Workspace off.
+spanish.summaryFreshNote= Use Avanzado para cambiar los puertos, la ubicación de los datos de Cognita o desactivar Workspace.
+french.summaryFreshNote= Utilisez Avancé pour modifier les ports, l’emplacement des données de Cognita ou désactiver Workspace.
+german.summaryFreshNote= Unter Erweitert können Sie Ports, Cognitas Datenspeicherort oder Workspace ändern.
+italian.summaryFreshNote= Usa Avanzate per modificare le porte, la posizione dei dati di Cognita o disattivare Workspace.
+brazilianportuguese.summaryFreshNote= Use Avançado para alterar as portas, o local dos dados do Cognita ou desativar o Workspace.
 english.removeTitle=Remove Cognita
 spanish.removeTitle=Quitar Cognita
 french.removeTitle=Supprimer Cognita
@@ -2739,7 +2901,7 @@ end;
   become one line break; every word stays. }
 function ReadySummary(const Tight: Boolean): String;
 var
-  Head, Gap, AccelText, Reason: String;
+  Head, Gap, AccelText, Reason, WorkspaceText, DownloadsText: String;
 begin
   Gap := #13#10#13#10;
   if Tight then
@@ -2747,55 +2909,70 @@ begin
   if InstallMode = ModeUpdate then
   begin
     if StLinuxVersion <> '' then
-      Head := 'Update Cognita ' + StLinuxVersion + ' to {#Version}.'
+      Head := FmtMessage(CustomMessage('summaryUpdate'), [StLinuxVersion, '{#Version}'])
     else
-      Head := 'Update Cognita to {#Version}.';
+      Head := FmtMessage(CustomMessage('summaryUpdateNoVersion'), ['{#Version}']);
   end
   else if InstallMode = ModeRepair then
-    Head := 'Repair Cognita {#Version} (Setup runs the install again over what is there).'
+    Head := FmtMessage(CustomMessage('summaryRepair'), ['{#Version}'])
   else if InstallMode = ModeReinstall then
-    Head := 'Reinstall Cognita {#Version} (your data is kept).'
+    Head := FmtMessage(CustomMessage('summaryReinstall'), ['{#Version}'])
   else if InstallMode = ModeFinish then
-    Head := 'Finish installing Cognita {#Version} (an earlier install did not complete; Setup continues it).'
+    Head := FmtMessage(CustomMessage('summaryFinish'), ['{#Version}'])
   else
-    Head := 'Install Cognita {#Version}.';
-  Result := Head + Gap +
-    'Projects folder:  ' + PageFolder.Values[0] + #13#10;
+    Head := FmtMessage(CustomMessage('summaryInstall'), ['{#Version}']);
+  Result := Head + Gap + FmtMessage(CustomMessage('summaryFolder'), [PageFolder.Values[0]]) + #13#10;
   { Design 19.2 item 14: a user name only when it is known (recorded by the helper) or really passed
     (fresh and finish). Over an installed Cognita that never told us the name, Setup does not know it and
     passes none, so the line is left out rather than showing a name that means nothing. }
   if AdminUser <> '' then
-    Result := Result + 'Admin sign-in:  ' + AdminUser + #13#10;
+    Result := Result + FmtMessage(CustomMessage('summaryAdmin'), [AdminUser]) + #13#10;
   { Design 22.1, 22.12 items 1(b), 1(c) and 10: the acceleration the install will have, in every mode; the
     reason in parentheses when the GPU was not offered; "unchanged" when the install keeps a profile Setup
     does not know. }
-  AccelText := AccelReadyValue(EffectiveAccel);
-  Reason := AccelReadyReason(AccelMode, InstallMode, NvState, EffectiveAccel);
+  if EffectiveAccel = 'nvidia' then
+    AccelText := CustomMessage('accelNvidia')
+  else if EffectiveAccel = 'amd' then
+    AccelText := CustomMessage('accelAmd')
+  else if EffectiveAccel = 'cpu' then
+    AccelText := CustomMessage('accelCpu')
+  else
+    AccelText := CustomMessage('accelUnchanged');
+  Reason := '';
+  if (InstallMode <> ModeUpdate) and (EffectiveAccel = 'cpu') then
+  begin
+    if AccelMode = AccelOldDriver then
+      Reason := CustomMessage('accelReasonOld')
+    else if AccelMode = AccelNoBuild then
+      Reason := CustomMessage('accelReasonNoBuild')
+    else if (AccelMode = AccelHidden) and (Lowercase(Trim(NvState)) = 'none') then
+      Reason := CustomMessage('accelReasonNoCard');
+  end;
   if Reason <> '' then
     AccelText := AccelText + ' ' + Reason;
+  WorkspaceText := CustomMessage('workspaceOff');
+  if ChosenWorkspaceOn then
+    WorkspaceText := CustomMessage('workspaceOn');
   Result := Result +
-    'Ports:  MCP ' + IntToStr(ChosenMcpPort) + ', Admin ' + IntToStr(ChosenAdminPort) + #13#10 +
-    'Workspace:  ' + OnOff(ChosenWorkspaceOn) + #13#10 +
-    'Acceleration:  ' + AccelText + #13#10 +
-    'Cognita keeps its data in:  ' + ChosenDataDir + Gap;
+    FmtMessage(CustomMessage('summaryPorts'), [IntToStr(ChosenMcpPort), IntToStr(ChosenAdminPort)]) + #13#10 +
+    FmtMessage(CustomMessage('summaryWorkspace'), [WorkspaceText]) + #13#10 +
+    FmtMessage(CustomMessage('summaryAcceleration'), [AccelText]) + #13#10 +
+    FmtMessage(CustomMessage('summaryDataLocation'), [ChosenDataDir]) + Gap;
   Log('ready page: acceleration line=[' + AccelText + '] effective=[' + EffectiveAccel + '] page_mode=' + IntToStr(AccelMode) +
     ' mode=' + IntToStr(InstallMode) + ' touched=' + IntToStr(Ord(AccelTouched)) + ' images_bytes=' + IntToStr(ImagesBytes));
   { Over an installed Cognita the images and models are already here, so only what changed is
     fetched; the compiled-in total would overstate it. }
   if RunsOverInstalled then
-    Result := Result + 'Setup downloads only what this PC does not already have (at most about ' +
-      FormatBytes(DownloadBytes) + ') and needs about '
+    DownloadsText := FmtMessage(CustomMessage('summaryDownloadsExisting'), [FormatBytes(DownloadBytes), FormatBytes(DiskNeededBytes)])
   else
-    Result := Result + 'Setup then downloads about ' + FormatBytes(DownloadBytes) +
-      ' (Cognita and its search models) and needs about ';
-  Result := Result + FormatBytes(DiskNeededBytes) + ' of free disk space. Pressing Install checks your ports and disk ' +
-    'space again with these choices.';
+    DownloadsText := FmtMessage(CustomMessage('summaryDownloadsFresh'), [FormatBytes(DownloadBytes), FormatBytes(DiskNeededBytes)]);
+  Result := Result + DownloadsText + ' ' + CustomMessage('summaryFreeDisk');
   if InstallMode = ModeUpdate then
-    Result := Result + ' An update keeps your ports and Workspace setting; to change them, run Setup again afterwards.'
+    Result := Result + CustomMessage('summaryUpdateNote')
   else if DataLocationLocked then
-    Result := Result + ' Use Advanced to change the ports or to turn Workspace off.'
+    Result := Result + ' ' + CustomMessage('summaryLockedNote')
   else
-    Result := Result + ' Use Advanced to change the ports, where Cognita keeps its data, or to turn Workspace off.';
+    Result := Result + ' ' + CustomMessage('summaryFreshNote');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
