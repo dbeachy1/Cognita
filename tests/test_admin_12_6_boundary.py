@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from cognita.localization import load_catalog
+
 ROOT = Path(__file__).parents[1]
 ADMIN = (ROOT / "src/cognita/admin_api.py").read_text(encoding="utf-8")
 WORKSPACE_ADMIN = (ROOT / "src/cognita/workspace_admin.py").read_text(encoding="utf-8")
@@ -41,13 +43,16 @@ def test_workspace_rows_expose_bounded_owner_error_and_usage_fields():
     for field in ("owner_status", "desired_state", "last_error_code", "runtime_generation",
                   "path_status", "measured_at", "usage_status"):
         assert field in WORKSPACE_ADMIN
-    assert "Diagnostics" in JS
-    assert "Retry" in JS
+    assert 't("admin.workspace.action.diagnostics")' in JS
+    assert 't("admin.workspace.action.retry")' in JS
 
 
 def test_remove_confirmation_shows_exact_workspace_facts_and_bulk_preview_does_not_infer_them():
-    for label in ("Last real activity", "Actual measured", "Apparent measured", "Measured at"):
-        assert label in JS
+    assert 't("admin.workspace.remove.confirm.body"' in JS
+    english = load_catalog("en-US")
+    for label in ("Last real activity", "Actual", "Apparent", "Measured at"):
+        assert label in english["admin.workspace.remove.confirm.body"]
+    assert "cannot be undone" in english["admin.workspace.remove.confirm.body"]
     assert "workspaceMeasuredValue(record, \"actual_bytes\", \"measured_allocated_bytes\")" in JS
     assert "workspaceMeasuredValue(record, \"apparent_bytes\", \"measured_apparent_bytes\")" in JS
     assert "reclaimEstimateVerified" in JS

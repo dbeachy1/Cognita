@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Abandonner et réduire",
   "admin.authentication.repair_failed": "Échec de la réparation de la stratégie d’authentification",
   "admin.action.copied": "Clé copiée.",
-  "admin.action.copy_failed": "Échec de la copie ; sélectionnez la clé manuellement."
+  "admin.action.copy_failed": "Échec de la copie ; sélectionnez la clé manuellement.",
+  "admin.workspace.diagnostics.title": "Diagnostics Workspace",
+  "admin.workspace.diagnostics.failed": "Diagnostics indisponibles",
+  "admin.workspace.removal_unavailable.title": "Suppression indisponible",
+  "admin.workspace.removal_unavailable.body": "Le runtime n’a pas vérifié cette cible Workspace. Actualisez les diagnostics avant de la supprimer.",
+  "admin.workspace.remove.confirm.title": "Supprimer le Workspace",
+  "admin.workspace.remove.confirm.body": "Cible Workspace : {id}\nIdentifiant : {credential}\nÉtat : {state}\nÉtat souhaité : {desired_state}\nPropriétaire : {owner}\nDernière activité réelle : {last_activity}\nMesure réelle : {actual}\nMesure apparente : {apparent}\nMesuré le : {measured_at}\nChemin ({path_status}) : {path}\n\nCela supprime le disque Workspace associé et ne peut pas être annulé.",
+  "admin.workspace.remove.confirm.button": "Supprimer le Workspace",
+  "admin.workspace.bulk.preview_failed": "Échec de l’aperçu de suppression groupée",
+  "admin.workspace.bulk.preview_rejected": "Aperçu de suppression groupée rejeté",
+  "admin.workspace.bulk.preview_rejected.body": "Le serveur n’a pas renvoyé une liste complète et exacte des cibles Workspace. Aucune suppression n’a eu lieu ; actualisez et demandez un nouvel aperçu.",
+  "admin.workspace.bulk.confirm.title": "Confirmer la suppression groupée",
+  "admin.workspace.bulk.confirm.body": "Le serveur a vérifié exactement les cibles suivantes :\n{targets}\n\nEspace récupéré estimé : {estimate}\nCette opération peut réussir partiellement ; les éléments en échec pourront être réessayés.",
+  "admin.workspace.bulk.remove.button": "Supprimer la sélection",
+  "admin.workspace.bulk.remove_failed": "Échec de la suppression groupée",
+  "admin.workspace.operation_failed": "Échec de l’opération Workspace"
 }

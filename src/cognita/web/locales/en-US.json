@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Discard and collapse",
   "admin.authentication.repair_failed": "Authentication policy repair failed",
   "admin.action.copied": "Key copied.",
-  "admin.action.copy_failed": "Copy failed; select the key manually."
+  "admin.action.copy_failed": "Copy failed; select the key manually.",
+  "admin.workspace.diagnostics.title": "Workspace diagnostics",
+  "admin.workspace.diagnostics.failed": "Diagnostics unavailable",
+  "admin.workspace.removal_unavailable.title": "Removal unavailable",
+  "admin.workspace.removal_unavailable.body": "The runtime has not verified this Workspace target. Refresh diagnostics before removing it.",
+  "admin.workspace.remove.confirm.title": "Remove Workspace",
+  "admin.workspace.remove.confirm.body": "Workspace target: {id}\nCredential: {credential}\nState: {state}\nDesired state: {desired_state}\nOwner: {owner}\nLast real activity: {last_activity}\nActual measured: {actual}\nApparent measured: {apparent}\nMeasured at: {measured_at}\nPath ({path_status}): {path}\n\nThis deletes the owned Workspace disk and cannot be undone.",
+  "admin.workspace.remove.confirm.button": "Remove Workspace",
+  "admin.workspace.bulk.preview_failed": "Bulk removal preview failed",
+  "admin.workspace.bulk.preview_rejected": "Bulk removal preview rejected",
+  "admin.workspace.bulk.preview_rejected.body": "The server did not return a complete, exact Workspace target list. Nothing was removed; refresh and request a new preview.",
+  "admin.workspace.bulk.confirm.title": "Confirm bulk removal",
+  "admin.workspace.bulk.confirm.body": "The server verified these exact targets:\n{targets}\n\nEstimated reclaim: {estimate}\nThis is a partial-success operation; failed items remain retryable.",
+  "admin.workspace.bulk.remove.button": "Remove selected",
+  "admin.workspace.bulk.remove_failed": "Bulk removal failed",
+  "admin.workspace.operation_failed": "Workspace operation failed"
 }

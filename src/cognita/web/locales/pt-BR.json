@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Descartar e recolher",
   "admin.authentication.repair_failed": "Falha ao reparar a política de autenticação",
   "admin.action.copied": "Chave copiada.",
-  "admin.action.copy_failed": "Falha ao copiar; selecione a chave manualmente."
+  "admin.action.copy_failed": "Falha ao copiar; selecione a chave manualmente.",
+  "admin.workspace.diagnostics.title": "Diagnóstico do Workspace",
+  "admin.workspace.diagnostics.failed": "Diagnóstico indisponível",
+  "admin.workspace.removal_unavailable.title": "Remoção indisponível",
+  "admin.workspace.removal_unavailable.body": "O runtime não verificou este destino do Workspace. Atualize o diagnóstico antes de removê-lo.",
+  "admin.workspace.remove.confirm.title": "Remover Workspace",
+  "admin.workspace.remove.confirm.body": "Destino do Workspace: {id}\nCredencial: {credential}\nEstado: {state}\nEstado desejado: {desired_state}\nProprietário: {owner}\nÚltima atividade real: {last_activity}\nMedição real: {actual}\nMedição aparente: {apparent}\nMedido em: {measured_at}\nCaminho ({path_status}): {path}\n\nIsso exclui o disco do Workspace sob sua propriedade e não pode ser desfeito.",
+  "admin.workspace.remove.confirm.button": "Remover Workspace",
+  "admin.workspace.bulk.preview_failed": "Falha na prévia da remoção em lote",
+  "admin.workspace.bulk.preview_rejected": "Prévia da remoção em lote rejeitada",
+  "admin.workspace.bulk.preview_rejected.body": "O servidor não retornou uma lista completa e exata dos destinos do Workspace. Nada foi removido; atualize e solicite uma nova prévia.",
+  "admin.workspace.bulk.confirm.title": "Confirmar remoção em lote",
+  "admin.workspace.bulk.confirm.body": "O servidor verificou estes destinos exatos:\n{targets}\n\nRecuperação estimada: {estimate}\nA operação pode ter sucesso parcial; os itens com falha poderão ser tentados novamente.",
+  "admin.workspace.bulk.remove.button": "Remover selecionados",
+  "admin.workspace.bulk.remove_failed": "Falha na remoção em lote",
+  "admin.workspace.operation_failed": "Falha na operação do Workspace"
 }

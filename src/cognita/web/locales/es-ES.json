@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Descartar y contraer",
   "admin.authentication.repair_failed": "No se pudo reparar la política de autenticación",
   "admin.action.copied": "Clave copiada.",
-  "admin.action.copy_failed": "No se pudo copiar; selecciona la clave manualmente."
+  "admin.action.copy_failed": "No se pudo copiar; selecciona la clave manualmente.",
+  "admin.workspace.diagnostics.title": "Diagnóstico de Workspace",
+  "admin.workspace.diagnostics.failed": "Diagnóstico no disponible",
+  "admin.workspace.removal_unavailable.title": "Eliminación no disponible",
+  "admin.workspace.removal_unavailable.body": "El entorno no ha verificado este Workspace. Actualiza el diagnóstico antes de eliminarlo.",
+  "admin.workspace.remove.confirm.title": "Eliminar Workspace",
+  "admin.workspace.remove.confirm.body": "Workspace: {id}\nCredencial: {credential}\nEstado: {state}\nEstado deseado: {desired_state}\nPropietario: {owner}\nÚltima actividad real: {last_activity}\nMedición real: {actual}\nMedición aparente: {apparent}\nMedido el: {measured_at}\nRuta ({path_status}): {path}\n\nEsto elimina el disco de Workspace y no se puede deshacer.",
+  "admin.workspace.remove.confirm.button": "Eliminar Workspace",
+  "admin.workspace.bulk.preview_failed": "Falló la vista previa de eliminación masiva",
+  "admin.workspace.bulk.preview_rejected": "Se rechazó la vista previa de eliminación masiva",
+  "admin.workspace.bulk.preview_rejected.body": "El servidor no devolvió una lista completa y exacta de destinos Workspace. No se eliminó nada; actualiza y solicita una vista previa nueva.",
+  "admin.workspace.bulk.confirm.title": "Confirmar eliminación masiva",
+  "admin.workspace.bulk.confirm.body": "El servidor verificó exactamente estos destinos:\n{targets}\n\nRecuperación estimada: {estimate}\nLa operación puede completarse parcialmente; se puede volver a intentar con los elementos fallidos.",
+  "admin.workspace.bulk.remove.button": "Eliminar seleccionados",
+  "admin.workspace.bulk.remove_failed": "Falló la eliminación masiva",
+  "admin.workspace.operation_failed": "Falló la operación de Workspace"
 }

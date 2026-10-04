@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Annulla e comprimi",
   "admin.authentication.repair_failed": "Riparazione criteri di autenticazione non riuscita",
   "admin.action.copied": "Chiave copiata.",
-  "admin.action.copy_failed": "Copia non riuscita; seleziona manualmente la chiave."
+  "admin.action.copy_failed": "Copia non riuscita; seleziona manualmente la chiave.",
+  "admin.workspace.diagnostics.title": "Diagnostica Workspace",
+  "admin.workspace.diagnostics.failed": "Diagnostica non disponibile",
+  "admin.workspace.removal_unavailable.title": "Rimozione non disponibile",
+  "admin.workspace.removal_unavailable.body": "Il runtime non ha verificato questo Workspace. Aggiorna la diagnostica prima di rimuoverlo.",
+  "admin.workspace.remove.confirm.title": "Rimuovi Workspace",
+  "admin.workspace.remove.confirm.body": "Destinazione Workspace: {id}\nCredenziale: {credential}\nStato: {state}\nStato desiderato: {desired_state}\nProprietario: {owner}\nUltima attività reale: {last_activity}\nMisurato effettivo: {actual}\nMisurato apparente: {apparent}\nMisurato il: {measured_at}\nPercorso ({path_status}): {path}\n\nQuesta operazione elimina il disco Workspace associato e non può essere annullata.",
+  "admin.workspace.remove.confirm.button": "Rimuovi Workspace",
+  "admin.workspace.bulk.preview_failed": "Anteprima rimozione in blocco non riuscita",
+  "admin.workspace.bulk.preview_rejected": "Anteprima rimozione in blocco rifiutata",
+  "admin.workspace.bulk.preview_rejected.body": "Il server non ha restituito un elenco completo ed esatto delle destinazioni Workspace. Non è stato rimosso nulla; aggiorna e richiedi una nuova anteprima.",
+  "admin.workspace.bulk.confirm.title": "Conferma rimozione in blocco",
+  "admin.workspace.bulk.confirm.body": "Il server ha verificato queste destinazioni esatte:\n{targets}\n\nSpazio recuperabile stimato: {estimate}\nL’operazione può avere esito parziale; gli elementi non riusciti potranno essere riprovati.",
+  "admin.workspace.bulk.remove.button": "Rimuovi selezionati",
+  "admin.workspace.bulk.remove_failed": "Rimozione in blocco non riuscita",
+  "admin.workspace.operation_failed": "Operazione Workspace non riuscita"
 }

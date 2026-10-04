@@ -399,5 +399,20 @@
   "admin.authentication.discard.confirm": "Verwerfen und einklappen",
   "admin.authentication.repair_failed": "Reparatur der Authentifizierungsrichtlinie fehlgeschlagen",
   "admin.action.copied": "Schlüssel kopiert.",
-  "admin.action.copy_failed": "Kopieren fehlgeschlagen; markieren Sie den Schlüssel manuell."
+  "admin.action.copy_failed": "Kopieren fehlgeschlagen; markieren Sie den Schlüssel manuell.",
+  "admin.workspace.diagnostics.title": "Workspace-Diagnose",
+  "admin.workspace.diagnostics.failed": "Diagnose nicht verfügbar",
+  "admin.workspace.removal_unavailable.title": "Entfernen nicht verfügbar",
+  "admin.workspace.removal_unavailable.body": "Die Laufzeit hat dieses Workspace-Ziel nicht überprüft. Aktualisieren Sie die Diagnose, bevor Sie es entfernen.",
+  "admin.workspace.remove.confirm.title": "Workspace entfernen",
+  "admin.workspace.remove.confirm.body": "Workspace-Ziel: {id}\nZugangsdaten: {credential}\nStatus: {state}\nGewünschter Status: {desired_state}\nBesitzer: {owner}\nLetzte tatsächliche Aktivität: {last_activity}\nTatsächlich gemessen: {actual}\nScheinbar gemessen: {apparent}\nGemessen am: {measured_at}\nPfad ({path_status}): {path}\n\nDadurch wird der zugehörige Workspace-Datenträger gelöscht. Dieser Vorgang kann nicht rückgängig gemacht werden.",
+  "admin.workspace.remove.confirm.button": "Workspace entfernen",
+  "admin.workspace.bulk.preview_failed": "Vorschau für Massenentfernung fehlgeschlagen",
+  "admin.workspace.bulk.preview_rejected": "Vorschau für Massenentfernung abgelehnt",
+  "admin.workspace.bulk.preview_rejected.body": "Der Server hat keine vollständige, genaue Liste der Workspace-Ziele zurückgegeben. Es wurde nichts entfernt; aktualisieren Sie und fordern Sie eine neue Vorschau an.",
+  "admin.workspace.bulk.confirm.title": "Massenentfernung bestätigen",
+  "admin.workspace.bulk.confirm.body": "Der Server hat genau diese Ziele überprüft:\n{targets}\n\nGeschätzter Speichergewinn: {estimate}\nDieser Vorgang kann teilweise erfolgreich sein; fehlgeschlagene Elemente können erneut versucht werden.",
+  "admin.workspace.bulk.remove.button": "Ausgewählte entfernen",
+  "admin.workspace.bulk.remove_failed": "Massenentfernung fehlgeschlagen",
+  "admin.workspace.operation_failed": "Workspace-Vorgang fehlgeschlagen"
 }

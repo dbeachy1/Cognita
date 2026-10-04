@@ -2400,30 +2400,42 @@ $("#workspaces-body").addEventListener("click", async (event) => {
       const result = await api(`/api/workspaces/${encodeURIComponent(row.dataset.workspaceId)}/diagnostics`);
       // Keep the durable metadata visible alongside the best-effort runtime
       // probe.  A broker failure must not hide the stored owner/state/error.
-      await uiNotice({ title: "Workspace diagnostics", body: JSON.stringify({
+      await uiNotice({ title: t("admin.workspace.diagnostics.title"), body: JSON.stringify({
         workspace: result && (result.workspace || result.metadata) || null,
         runtime: result && result.runtime || null,
       }, null, 2) });
-    } catch (err) { await uiNotice({ title: "Diagnostics unavailable", body: err.message }); }
+    } catch (err) { await uiNotice({ title: t("admin.workspace.diagnostics.failed"), body: err.message }); }
     return;
   }
   if (action === "remove") {
     if (!["verified", "absent"].includes(record.path_status)) {
-      await uiNotice({ title: "Removal unavailable", body: "The runtime has not verified this Workspace target. Refresh diagnostics before removing it." });
+      await uiNotice({ title: t("admin.workspace.removal_unavailable.title"), body: t("admin.workspace.removal_unavailable.body") });
       return;
     }
-    const exactPath = record.host_path || "(path unavailable)";
-    const lastActivity = record.last_activity_at || record.last_accessed_at || "Not reported";
+    const exactPath = record.host_path || t("admin.status.unavailable");
+    const lastActivity = record.last_activity_at || record.last_accessed_at ? when(record.last_activity_at || record.last_accessed_at) : t("admin.credential.target.not_reported");
     const actualBytes = formatMaybeBytes(workspaceMeasuredValue(record, "actual_bytes", "measured_allocated_bytes"));
     const apparentBytes = formatMaybeBytes(workspaceMeasuredValue(record, "apparent_bytes", "measured_apparent_bytes"));
-    const measuredAt = record.measured_at || "Not reported";
-    const confirmation = await uiConfirm({ title: "Remove Workspace", body: `Workspace target: ${record.workspace_id}\nCredential: ${record.credential_label || record.credential_id || "Not reported"}\nState: ${record.state || "Not reported"}\nDesired state: ${record.desired_state || "Not reported"}\nOwner: ${record.owner_status || "Not reported"}\nLast real activity: ${lastActivity}\nActual measured: ${actualBytes}\nApparent measured: ${apparentBytes}\nMeasured at: ${measuredAt}\nPath (${record.path_status}): ${exactPath}\n\nThis deletes the owned Workspace disk and cannot be undone.`, confirmLabel: "Remove Workspace", danger: true });
+    const measuredAt = record.measured_at ? when(record.measured_at) : t("admin.credential.target.not_reported");
+    const confirmation = await uiConfirm({ title: t("admin.workspace.remove.confirm.title"), body: t("admin.workspace.remove.confirm.body", {
+      id: record.workspace_id,
+      credential: record.credential_label || record.credential_id || t("admin.credential.target.not_reported"),
+      state: record.state || t("admin.credential.target.not_reported"),
+      desired_state: record.desired_state || t("admin.credential.target.not_reported"),
+      owner: record.owner_status || t("admin.credential.target.not_reported"),
+      last_activity: lastActivity,
+      actual: actualBytes,
+      apparent: apparentBytes,
+      measured_at: measuredAt,
+      path_status: record.path_status,
+      path: exactPath,
+    }), confirmLabel: t("admin.workspace.remove.confirm.button"), danger: true });
     if (!confirmation.ok) return;
   }
   try {
     await api(`/api/workspaces/${encodeURIComponent(row.dataset.workspaceId)}/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: record.revision, confirm: action === "remove", idempotency_token: crypto.randomUUID() }) });
     await refreshAdminMutation(`workspace:${action}`);
-  } catch (err) { await uiNotice({ title: "Workspace operation failed", body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.operation_failed"), body: err.message }); }
 });
 $("#workspace-bulk-remove").addEventListener("click", async () => {
   const records = state.workspaces.filter((item) => document.querySelector(`[data-workspace-id="${CSS.escape(String(item.workspace_id || item.id))}"] [data-workspace-select]:checked`));
@@ -2432,7 +2444,7 @@ $("#workspace-bulk-remove").addEventListener("click", async () => {
   let preview;
   try {
     preview = await api("/api/workspaces/bulk-delete/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", workspace_ids: records.map((item) => String(item.workspace_id || item.id)), expected_revisions: expectedRevisions }) });
-  } catch (err) { await uiNotice({ title: "Bulk removal preview failed", body: err.message }); return; }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.preview_failed"), body: err.message }); return; }
   const previewTargets = Array.isArray(preview && preview.targets) ? preview.targets : null;
   const selectedIds = records.map((item) => String(item.workspace_id || item.id));
   const targetIds = previewTargets && previewTargets.map((item) => item && String(item.workspace_id || item.id || ""));
@@ -2442,26 +2454,26 @@ $("#workspace-bulk-remove").addEventListener("click", async () => {
     targetIds.every((id, index) => id && targetSet.size === targetIds.length && selectedIds.includes(id) &&
       typeof previewTargets[index].state === "string" && previewTargets[index].state.length > 0);
   if (!previewValid) {
-    await uiNotice({ title: "Bulk removal preview rejected", body: "The server did not return a complete, exact Workspace target list. Nothing was removed; refresh and request a new preview." });
+    await uiNotice({ title: t("admin.workspace.bulk.preview_rejected"), body: t("admin.workspace.bulk.preview_rejected.body") });
     return;
   }
   const reclaimBytes = preview && preview.reclaim_estimate_bytes;
   const reclaimEstimateVerified = isVerifiedReclaimEstimate(
     preview.reclaim_estimate_status, reclaimBytes,
   );
-  const estimate = reclaimEstimateVerified ? formatMaybeBytes(reclaimBytes) : "Unavailable";
+  const estimate = reclaimEstimateVerified ? formatMaybeBytes(reclaimBytes) : t("admin.status.unavailable");
   const targetSummary = previewTargets.map((item) => {
     const actual = formatMaybeBytes(item.actual_bytes);
     const apparent = formatMaybeBytes(item.apparent_bytes);
-    const lastActivity = item.last_activity_at || item.last_accessed_at || "Not reported";
-    return `${item.credential_label || item.credential_id || item.workspace_id} [${item.workspace_id}] — state: ${item.state}; owner: ${item.owner_status || "Not reported"}; last activity: ${lastActivity}; actual: ${actual}; apparent: ${apparent}`;
+    const lastActivity = item.last_activity_at || item.last_accessed_at ? when(item.last_activity_at || item.last_accessed_at) : t("admin.credential.target.not_reported");
+    return `${item.credential_label || item.credential_id || item.workspace_id} [${item.workspace_id}] — ${t("admin.workspace.column.state")}: ${item.state}; ${t("admin.workspace.field.owner")}: ${item.owner_status || t("admin.credential.target.not_reported")}; ${t("admin.workspace.field.last_activity")}: ${lastActivity}; ${t("admin.workspace.field.actual")}: ${actual}; ${t("admin.workspace.field.apparent")}: ${apparent}`;
   }).join("\n");
-  const confirmation = await uiConfirm({ title: "Confirm bulk removal", body: `The server verified these exact targets:\n${targetSummary}\n\nEstimated reclaim: ${estimate}\nThis is a partial-success operation; failed items remain retryable.`, confirmLabel: "Remove selected", danger: true });
+  const confirmation = await uiConfirm({ title: t("admin.workspace.bulk.confirm.title"), body: t("admin.workspace.bulk.confirm.body", { targets: targetSummary, estimate }), confirmLabel: t("admin.workspace.bulk.remove.button"), danger: true });
   if (!confirmation.ok) return;
   try {
     await api("/api/workspaces/bulk-delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "remove", workspace_ids: targetIds, expected_revisions: expectedRevisions, preview_token: preview.preview_token, confirm: true, idempotency_token: crypto.randomUUID() }) });
     await refreshAdminMutation("workspace:remove");
-  } catch (err) { await uiNotice({ title: "Bulk removal failed", body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.bulk.remove_failed"), body: err.message }); }
 });
 $("#workspace-network-add-rule").addEventListener("click", () => {
   state.workspaceNetworkEditorRules.push({ domain: "", ports: [80, 443], suffix: false });
