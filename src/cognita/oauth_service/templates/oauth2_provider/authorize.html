@@ -34,10 +34,7 @@
       {% for field in form %}
         {% if field.is_hidden %}{{ field }}{% endif %}
       {% endfor %}
-      {% if form.non_field_errors %}<div class="error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
-      {% for field in form.visible_fields %}
-        {% if field.errors %}<div class="error" role="alert">{{ field.errors }}</div>{% endif %}
-      {% endfor %}
+      {% if form.errors %}<div class="error" role="alert">{{ ui.error_invalid_request }}</div>{% endif %}
       <div class="actions">
         <button type="submit" class="secondary" name="deny" value="Deny">{{ ui.deny }}</button>
         <button type="submit" name="allow" value="Authorize">{{ ui.authorize }}</button>

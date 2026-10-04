@@ -136,6 +136,14 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     assert "oauth2_provider/css/oauth2_provider.css" not in rejected_authorization.text
     assert "<Client & Test>" not in rejected_authorization.text
 
+    invalid_login_request = client.get(
+        "/oauth/login", HTTP_ACCEPT_LANGUAGE="fr-FR, en-US;q=0.8"
+    )
+    assert invalid_login_request.status_code == 400
+    assert 'lang="fr-FR"' in invalid_login_request.text
+    assert "La demande d’autorisation n’a pas pu être validée." in invalid_login_request.text
+    assert '"error_description"' not in invalid_login_request.text
+
     login_redirect = client.get("/oauth/authorize", authorization)
     assert login_redirect.status_code == 302
     login_page = client.get(login_redirect["Location"])
@@ -182,6 +190,11 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     assert "<Client & Test>" not in consent.text
     assert "future enabled projects are included unless excluded" in consent.text
     assert "includes all enabled projects" not in consent.text
+
+    malformed_consent = client.post("/oauth/authorize", {"allow": "1"})
+    assert malformed_consent.status_code == 200
+    assert "The authorization request could not be validated." in malformed_consent.text
+    assert "This field is required." not in malformed_consent.text
 
     # Language selection is a separate CSRF-protected POST. It changes only the
     # host-only UI cookie and revalidates the same authorization request.

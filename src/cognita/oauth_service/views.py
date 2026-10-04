@@ -18,7 +18,7 @@ from urllib.parse import urlencode, urlparse, urlsplit
 from django.contrib.auth import get_user_model, login, logout
 from django.contrib.auth.hashers import check_password
 from django.db import transaction
-from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse, QueryDict
+from django.http import HttpRequest, HttpResponse, JsonResponse, QueryDict
 from django.shortcuts import redirect, render
 from django.utils import timezone
 from django.views import View
@@ -153,14 +153,37 @@ def _set_language_cookie(response: HttpResponse, locale: str) -> HttpResponse:
     return response
 
 
+def _authorization_error_page(
+    request: HttpRequest,
+    message_id: str = "oauth.consent.error_invalid_request",
+    *,
+    status: int = 400,
+) -> HttpResponse:
+    """Render a localized browser error without exposing protocol prose."""
+    page = _language_page_context(request)
+    locale = page["locale"]
+    page["ui"] = {
+        "title_error": _message(locale, "oauth.consent.title_error"),
+        "heading_error": _message(locale, "oauth.consent.heading_error"),
+        "error_return": _message(locale, "oauth.consent.error_return"),
+        "error_message": _message(locale, message_id),
+    }
+    return render(
+        request,
+        "oauth2_provider/authorize.html",
+        {**page, "error": True},
+        status=status,
+    )
+
+
 def _language_switch(request: HttpRequest, *, login_page: bool = False) -> HttpResponse:
     locale = request.POST.get("language", "")
     target = request.POST.get("next", "")
     if locale not in SUPPORTED_LOCALES:
-        return HttpResponseBadRequest("Invalid language.")
+        return _authorization_error_page(request)
     validated = _validated_next(request, target)
     if validated is None:
-        return HttpResponseBadRequest("Authorization request is invalid.")
+        return _authorization_error_page(request)
     destination = f"/oauth/login?{urlencode({'next': validated})}" if login_page else validated
     return _set_language_cookie(redirect(destination), locale)
 
@@ -314,7 +337,7 @@ class LoginView(View):
     def get(self, request: HttpRequest) -> HttpResponse:
         next_url = _validated_next(request, request.GET.get("next", ""))
         if next_url is None:
-            return _json_error("invalid_request", "Authorization request is invalid.")
+            return _authorization_error_page(request)
         return self._page(request, next_url)
 
 
@@ -325,7 +348,7 @@ class LoginView(View):
         password = request.POST.get("password", "")
         next_url = _validated_next(request, request.POST.get("next", ""))
         if next_url is None:
-            return _json_error("invalid_request", "Authorization request is invalid.")
+            return _authorization_error_page(request)
         address = _client_address(request)
         if _login_blocked(address):
             log.warning("OAuth login rejected reason=login_rate_limit remote=%s", address)
@@ -369,6 +392,7 @@ class CognitaAuthorizationView(AuthorizationView):
             "review": _message(locale, "oauth.consent.review"),
             "deny": _message(locale, "oauth.consent.deny"),
             "authorize": _message(locale, "oauth.consent.authorize"),
+            "error_invalid_request": _message(locale, "oauth.consent.error_invalid_request"),
         }
         application = context_data.get("application")
         if application is not None:
@@ -430,25 +454,14 @@ class CognitaAuthorizationView(AuthorizationView):
         """
         response = super().error_response(error, application, **kwargs)
         if response.status_code >= 400 and response.get("Content-Type", "").startswith("text/html"):
-            page = _language_page_context(self.request)
             code = getattr(getattr(error, "error", None), "error", "")
             error_id = (
                 "oauth.consent.error_invalid_request"
                 if code == "invalid_request"
                 else "oauth.consent.error_unknown"
             )
-            locale = page["locale"]
-            page["ui"] = {
-                "title_error": _message(locale, "oauth.consent.title_error"),
-                "heading_error": _message(locale, "oauth.consent.heading_error"),
-                "error_return": _message(locale, "oauth.consent.error_return"),
-                "error_message": _message(locale, error_id),
-            }
-            response = render(
-                self.request,
-                "oauth2_provider/authorize.html",
-                {**page, "error": True},
-                status=response.status_code,
+            response = _authorization_error_page(
+                self.request, error_id, status=response.status_code
             )
         location = response.get("Location")
         if location and oauth2_settings.COMPLIANT_BCP_RFC9700_AUTHZ_RESPONSE_ISS:
@@ -469,14 +482,14 @@ class CognitaAuthorizationView(AuthorizationView):
                 ).first()
                 if application is not None and application.skip_authorization:
                     return _browser_security(
-                        _json_error("invalid_request", "Authorization approval is required.")
+                        _authorization_error_page(request)
                     )
             except OAuthToolkitError as error:
                 return _browser_security(self.error_response(error, application=None))
             except Exception as exc:
                 log.error("OAuth authorization prevalidation failed type=%s", type(exc).__name__)
                 return _browser_security(
-                    _json_error("invalid_request", "Authorization request is invalid.")
+                    _authorization_error_page(request)
                 )
         return _browser_security(super().dispatch(request, *args, **kwargs))
 
@@ -487,13 +500,13 @@ class CognitaAuthorizationView(AuthorizationView):
                 client_id=credentials.get("client_id")
             ).first()
             if application is not None and application.skip_authorization:
-                return _json_error("invalid_request", "Authorization approval is required.")
+                return _authorization_error_page(request)
             return super().get(request, *args, **kwargs)
         except OAuthToolkitError:
             return super().get(request, *args, **kwargs)
         except Exception as exc:
             log.error("OAuth authorization request failed type=%s", type(exc).__name__)
-            return _json_error("invalid_request", "Authorization request is invalid.")
+            return _authorization_error_page(request)
 
 
     def form_valid(self, form):
