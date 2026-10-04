@@ -12,19 +12,21 @@
   <main class="container">
     <div id="session-bar" style="display:flex; justify-content:flex-end; align-items:center; gap:.75rem; min-height:1.5rem; margin-bottom:.25rem;">
       <span id="session-user" class="muted" style="font-size:.85rem;"></span>
+      <label class="language-label" for="language-picker" data-i18n="admin.language.label">Language</label>
+      <select id="language-picker" class="language-picker" data-language-picker></select>
       <button id="logout-btn" class="secondary outline" style="margin:0; padding:.2rem .7rem; font-size:.8rem; display:none;">Log out</button>
     </div>
     <hgroup>
       <h1>Cognita <span id="cognita-version">__COGNITA_VERSION__</span></h1>
-      <p>Multi-project MCP gateway — local admin</p>
+      <p data-i18n="admin.shell.tagline">Multi-project MCP gateway — local admin</p>
     </hgroup>
 
     <nav class="admin-tabs" role="tablist" aria-label="Admin sections">
-      <button id="tab-projects" role="tab" aria-controls="panel-projects" aria-selected="true" tabindex="0" data-route="#projects/view">Projects</button>
-      <button id="tab-connectors" role="tab" aria-controls="panel-connectors" aria-selected="false" tabindex="-1" data-route="#connectors/setup">Connectors</button>
-      <button id="tab-authentication" role="tab" aria-controls="panel-authentication" aria-selected="false" tabindex="-1" data-route="#authentication">Authentication</button>
-      <button id="tab-workspaces" role="tab" aria-controls="panel-workspaces" aria-selected="false" tabindex="-1" data-route="#workspaces/runtime">Workspaces</button>
-      <button id="tab-settings" role="tab" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-route="#settings/gpu-acceleration">Settings</button>
+      <button id="tab-projects" role="tab" aria-controls="panel-projects" aria-selected="true" tabindex="0" data-route="#projects/view" data-i18n="admin.nav.projects">Projects</button>
+      <button id="tab-connectors" role="tab" aria-controls="panel-connectors" aria-selected="false" tabindex="-1" data-route="#connectors/setup" data-i18n="admin.nav.connectors">Connectors</button>
+      <button id="tab-authentication" role="tab" aria-controls="panel-authentication" aria-selected="false" tabindex="-1" data-route="#authentication" data-i18n="admin.nav.authentication">Authentication</button>
+      <button id="tab-workspaces" role="tab" aria-controls="panel-workspaces" aria-selected="false" tabindex="-1" data-route="#workspaces/runtime" data-i18n="admin.nav.workspaces">Workspaces</button>
+      <button id="tab-settings" role="tab" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-route="#settings/gpu-acceleration" data-i18n="admin.nav.settings">Settings</button>
     </nav>
 
     <section id="panel-projects" class="admin-panel" role="tabpanel" aria-labelledby="tab-projects">
@@ -301,7 +303,13 @@
   <dialog id="modal" x-data="modal" x-ref="dlg" @cancel.prevent="cancel()"><article style="min-width:24rem; max-width:34rem;"><header><strong x-text="title"></strong></header><p x-text="body" style="white-space:pre-line;"></p><template x-for="field in fields" :key="field.name"><label><span x-text="field.label"></span><template x-if="field.type === 'select'"><select x-model="values[field.name]"><template x-for="option in field.options" :key="option.value"><option :value="option.value" x-text="option.label"></option></template></select></template><template x-if="field.type !== 'select'"><input :type="field.type || 'text'" x-model="values[field.name]" :maxlength="field.maxlength || 120" autocomplete="off" @keydown.enter.prevent="ok()"></template></label></template><label x-show="checkboxLabel"><input type="checkbox" x-model="checked"> <span x-text="checkboxLabel"></span></label><footer><button class="secondary outline" x-show="mode === 'confirm' || mode === 'form'" @click="cancel()">Cancel</button><button :class="danger ? 'contrast' : ''" @click="ok()" x-text="confirmLabel"></button></footer></article></dialog>
 
   <script src="/static/admin-state.js?v=__COGNITA_VERSION__"></script>
-  <script src="/static/app.js?v=__COGNITA_VERSION__"></script>
-  <script defer src="/static/alpine.min.js?v=__COGNITA_VERSION__"></script>
+  <script src="/static/admin-locale.js?v=__COGNITA_VERSION__"></script>
+  <script>
+    window.CognitaAdminLocale.ready.then(() => {
+      for (const source of ["/static/app.js?v=__COGNITA_VERSION__", "/static/alpine.min.js?v=__COGNITA_VERSION__"]) {
+        const script = document.createElement("script"); script.async = false; script.src = source; document.body.append(script);
+      }
+    }).catch((error) => { console.error("Admin localization could not start", error); });
+  </script>
 </body>
 </html>

@@ -15,36 +15,41 @@
     .brand p { margin: 0; color: var(--pico-muted-color); font-size: .85rem; }
     #error { color: var(--pico-del-color, #b3261e); font-size: .9rem; min-height: 1.2rem; margin: .25rem 0 .5rem; }
     button { margin-top: .5rem; }
+    .language-choice { display: flex; justify-content: flex-end; align-items: center; gap: .5rem; margin-bottom: .75rem; }
+    .language-choice label { margin: 0; font-size: .85rem; }
   </style>
 </head>
 <body>
   <main>
+    <div class="language-choice"><label for="language-picker" data-i18n="admin.language.label">Language</label><select id="language-picker" data-language-picker></select></div>
     <div class="brand">
       <img src="/static/favicon.svg?v=__COGNITA_VERSION__" alt="">
       <h1>Cognita <span id="cognita-version">__COGNITA_VERSION__</span></h1>
-      <p>Admin — sign in</p>
+      <p data-i18n="admin.login.title">Admin — sign in</p>
     </div>
     <article>
       <form id="login-form">
         <label>
-          Username
+          <span data-i18n="admin.login.username">Username</span>
           <input name="username" autocomplete="username" autofocus required>
         </label>
         <label>
-          Password
+          <span data-i18n="admin.login.password">Password</span>
           <input name="password" type="password" autocomplete="current-password" required>
         </label>
         <p id="error" role="alert"></p>
-        <button type="submit">Sign in</button>
+        <button type="submit" data-i18n="admin.login.submit">Sign in</button>
       </form>
     </article>
   </main>
 
+  <script src="/static/admin-locale.js?v=__COGNITA_VERSION__"></script>
   <script>
     "use strict";
+    window.CognitaAdminLocale.ready.then((locale) => {
     fetch("/api/bootstrap", { cache: "no-store" }).then((res) => res.ok ? res.json() : null).then((data) => {
       if (!data || typeof data.version !== "string") return;
-      document.title = `Cognita ${data.version} Admin — Sign in`;
+      document.title = `Cognita ${data.version} ${locale.t("admin.login.title")}`;
       const version = document.getElementById("cognita-version");
       if (version) version.textContent = data.version;
     }).catch(() => {});
@@ -69,18 +74,19 @@
           window.location.href = "/";
           return;
         }
-        let detail = "Invalid username or password";
+        let detail = locale.t("admin.login.invalid_credentials");
         try { detail = (await res.json()).detail || detail; } catch { /* no body */ }
         errEl.textContent = detail;
         form.password.value = "";
         form.password.focus();
       } catch (err) {
-        errEl.textContent = "Could not reach the server. Try again.";
+        errEl.textContent = locale.t("admin.login.server_unreachable");
       } finally {
         btn.removeAttribute("aria-busy");
         btn.disabled = false;
       }
     });
+    }).catch((error) => { console.error("Admin localization could not start", error); });
   </script>
 </body>
 </html>

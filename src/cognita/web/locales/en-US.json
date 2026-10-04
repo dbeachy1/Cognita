@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Language",
+  "admin.login.title": "Admin — sign in",
+  "admin.login.username": "Username",
+  "admin.login.password": "Password",
+  "admin.login.submit": "Sign in",
+  "admin.login.invalid_credentials": "Invalid username or password",
+  "admin.login.server_unreachable": "Could not reach the server. Try again.",
+  "admin.shell.tagline": "Multi-project MCP gateway — local admin",
+  "admin.nav.projects": "Projects",
+  "admin.nav.connectors": "Connectors",
+  "admin.nav.authentication": "Authentication",
+  "admin.nav.workspaces": "Workspaces",
+  "admin.nav.settings": "Settings",
+  "admin.loading": "Loading…",
+  "admin.action.failed": "The action could not be completed.",
+  "admin.action.completed": "The action completed.",
+  "admin.technical_detail": "Technical detail",
+  "admin.project.folder_invalid": "The folder {folder} is invalid.",
+  "admin.project.path_checked": "The folder {folder} is available."
+}

@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Sprache",
+  "admin.login.title": "Administration — anmelden",
+  "admin.login.username": "Benutzername",
+  "admin.login.password": "Passwort",
+  "admin.login.submit": "Anmelden",
+  "admin.login.invalid_credentials": "Benutzername oder Passwort ist ungültig",
+  "admin.login.server_unreachable": "Der Server ist nicht erreichbar. Bitte erneut versuchen.",
+  "admin.shell.tagline": "Multiprojekt-MCP-Gateway — lokale Administration",
+  "admin.nav.projects": "Projekte",
+  "admin.nav.connectors": "Connectors",
+  "admin.nav.authentication": "Authentifizierung",
+  "admin.nav.workspaces": "Arbeitsbereiche",
+  "admin.nav.settings": "Einstellungen",
+  "admin.loading": "Wird geladen …",
+  "admin.action.failed": "Die Aktion konnte nicht abgeschlossen werden.",
+  "admin.action.completed": "Die Aktion wurde abgeschlossen.",
+  "admin.technical_detail": "Technische Details",
+  "admin.project.folder_invalid": "Der Ordner {folder} ist ungültig.",
+  "admin.project.path_checked": "Der Ordner {folder} ist verfügbar."
+}

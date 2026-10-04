@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Lingua",
+  "admin.login.title": "Amministrazione — accesso",
+  "admin.login.username": "Nome utente",
+  "admin.login.password": "Password",
+  "admin.login.submit": "Accedi",
+  "admin.login.invalid_credentials": "Nome utente o password non validi",
+  "admin.login.server_unreachable": "Impossibile raggiungere il server. Riprova.",
+  "admin.shell.tagline": "Gateway MCP multiprogetto — amministrazione locale",
+  "admin.nav.projects": "Progetti",
+  "admin.nav.connectors": "Connettori",
+  "admin.nav.authentication": "Autenticazione",
+  "admin.nav.workspaces": "Workspace",
+  "admin.nav.settings": "Impostazioni",
+  "admin.loading": "Caricamento…",
+  "admin.action.failed": "Impossibile completare l’azione.",
+  "admin.action.completed": "Azione completata.",
+  "admin.technical_detail": "Dettagli tecnici",
+  "admin.project.folder_invalid": "La cartella {folder} non è valida.",
+  "admin.project.path_checked": "La cartella {folder} è disponibile."
+}

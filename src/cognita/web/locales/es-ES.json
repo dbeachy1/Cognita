@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Idioma",
+  "admin.login.title": "Administración — iniciar sesión",
+  "admin.login.username": "Usuario",
+  "admin.login.password": "Contraseña",
+  "admin.login.submit": "Iniciar sesión",
+  "admin.login.invalid_credentials": "El usuario o la contraseña no son válidos",
+  "admin.login.server_unreachable": "No se pudo conectar con el servidor. Inténtalo de nuevo.",
+  "admin.shell.tagline": "Pasarela MCP multiproyecto — administración local",
+  "admin.nav.projects": "Proyectos",
+  "admin.nav.connectors": "Conectores",
+  "admin.nav.authentication": "Autenticación",
+  "admin.nav.workspaces": "Espacios de trabajo",
+  "admin.nav.settings": "Configuración",
+  "admin.loading": "Cargando…",
+  "admin.action.failed": "No se pudo completar la acción.",
+  "admin.action.completed": "La acción se completó.",
+  "admin.technical_detail": "Detalle técnico",
+  "admin.project.folder_invalid": "La carpeta {folder} no es válida.",
+  "admin.project.path_checked": "La carpeta {folder} está disponible."
+}

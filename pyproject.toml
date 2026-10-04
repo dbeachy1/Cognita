@@ -72,7 +72,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "cognita.oauth_service" = ["templates/**/*.html"]
-"cognita" = ["web/*"]
+"cognita" = ["web/*", "web/locales/*.json"]
 "cognita.selftest_fixtures" = ["data/manifest.json", "data/cognita-selftest/ocr/*"]
 
 [tool.ruff]

@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Langue",
+  "admin.login.title": "Administration — connexion",
+  "admin.login.username": "Nom d’utilisateur",
+  "admin.login.password": "Mot de passe",
+  "admin.login.submit": "Se connecter",
+  "admin.login.invalid_credentials": "Nom d’utilisateur ou mot de passe invalide",
+  "admin.login.server_unreachable": "Impossible de joindre le serveur. Réessayez.",
+  "admin.shell.tagline": "Passerelle MCP multiprojet — administration locale",
+  "admin.nav.projects": "Projets",
+  "admin.nav.connectors": "Connecteurs",
+  "admin.nav.authentication": "Authentification",
+  "admin.nav.workspaces": "Espaces de travail",
+  "admin.nav.settings": "Paramètres",
+  "admin.loading": "Chargement…",
+  "admin.action.failed": "L’action n’a pas pu être terminée.",
+  "admin.action.completed": "L’action est terminée.",
+  "admin.technical_detail": "Détail technique",
+  "admin.project.folder_invalid": "Le dossier {folder} n’est pas valide.",
+  "admin.project.path_checked": "Le dossier {folder} est disponible."
+}

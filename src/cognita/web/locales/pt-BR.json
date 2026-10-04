@@ -1,0 +1,21 @@
+{
+  "admin.language.label": "Idioma",
+  "admin.login.title": "Administração — entrar",
+  "admin.login.username": "Nome de usuário",
+  "admin.login.password": "Senha",
+  "admin.login.submit": "Entrar",
+  "admin.login.invalid_credentials": "Nome de usuário ou senha inválidos",
+  "admin.login.server_unreachable": "Não foi possível acessar o servidor. Tente novamente.",
+  "admin.shell.tagline": "Gateway MCP multiprojeto — administração local",
+  "admin.nav.projects": "Projetos",
+  "admin.nav.connectors": "Conectores",
+  "admin.nav.authentication": "Autenticação",
+  "admin.nav.workspaces": "Espaços de trabalho",
+  "admin.nav.settings": "Configurações",
+  "admin.loading": "Carregando…",
+  "admin.action.failed": "Não foi possível concluir a ação.",
+  "admin.action.completed": "A ação foi concluída.",
+  "admin.technical_detail": "Detalhes técnicos",
+  "admin.project.folder_invalid": "A pasta {folder} é inválida.",
+  "admin.project.path_checked": "A pasta {folder} está disponível."
+}
