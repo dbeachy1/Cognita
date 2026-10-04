@@ -17,7 +17,9 @@ from httpx import ASGITransport, AsyncClient
 from cognita import prefetch_models
 from cognita.admin_api import create_admin_app
 from cognita.config import CognitaConfig
+from cognita.document_roots import display_for
 from cognita.engine_local import LocalEngineHost
+from cognita.localization import load_catalog
 from cognita.registry import Project, Registry
 from cognita.retrieval import RetrievalCore
 from cognita.store import reset_command_for
@@ -221,7 +223,12 @@ async def test_path_info_absolute_form_is_unchanged(admin):
     app, root = admin
     (root / "one.txt").write_bytes(b"abc")
     r = await _probe(app, documents_dir=str(root))
-    assert r.json() == {"status": "ok", "path": str(root.resolve()), "file_count": 1, "total_bytes": 3}
+    payload = r.json()
+    assert {key: payload[key] for key in ("status", "path", "file_count", "total_bytes")} == {
+        "status": "ok", "path": str(root.resolve()), "file_count": 1, "total_bytes": 3,
+    }
+    assert payload["presentation_id"] == "admin.project.path_checked"
+    assert payload["presentation_values"] == {"folder": display_for(payload["path"])}
 
 
 async def test_new_project_form_ships_the_root_and_folder_controls(admin):
@@ -231,8 +238,11 @@ async def test_new_project_form_ships_the_root_and_folder_controls(admin):
         script = (await c.get("/static/app.js")).text
     for needle in ('name="documents_root"', 'name="documents_folder"', 'id="documents-root-fields"'):
         assert needle in page
-    for needle in ("/api/document-roots", "Test folder", "currentDocumentsDir"):
-        assert needle in script
+    catalog = load_catalog("en-US")
+    assert 'data-i18n="admin.projects.test_path"' in page
+    assert "/api/document-roots" in script and "currentDocumentsDir" in script
+    assert 't("admin.projects.test_folder")' in script
+    assert catalog["admin.projects.test_folder"] == "Test folder"
 
 
 # ---------------------------------------------------------------------------

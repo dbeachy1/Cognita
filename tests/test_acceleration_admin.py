@@ -880,17 +880,23 @@ def test_the_detected_card_row_shows_the_uuid_the_ocr_box_asks_for():
     to run `nvidia-smi -L` elsewhere to fill it in. Design §15 step 6 expects the
     row to carry the UUID."""
     js = (Path(__file__).resolve().parents[1] / "src/cognita/web/app.js").read_text(encoding="utf-8")
-    row = next(line for line in js.splitlines() if "<h3>Detected cards</h3>" in line)
+    row = next(line for line in js.splitlines() if "card.gpu_uuid" in line)
     assert "card.gpu_uuid" in row and "esc(card.gpu_uuid)" in row
+    assert 't("admin.gpu.detected_cards")' in row
+    html = (Path(__file__).resolve().parents[1] / "src/cognita/web/index.html").read_text(encoding="utf-8")
+    assert 'data-i18n="admin.gpu.uuid_priority"' in html
 
 def test_the_admin_page_has_words_for_every_reason_the_status_can_report():
     """15.0.3: the page printed raw tokens (runtime_missing, model_unqualified)."""
-    import re
-
     from cognita.acceleration import FALLBACK_REASONS
+    from cognita.localization import load_catalog
 
     source = (Path(__file__).resolve().parents[1] / "src" / "cognita" / "web" / "app.js").read_text(encoding="utf-8")
-    table = source[source.index("const GPU_REASON_TEXT"):source.index("});", source.index("const GPU_REASON_TEXT"))]
-    worded = set(re.findall(r"^\s+([a-z_]+):", table, re.MULTILINE))
-    assert FALLBACK_REASONS <= worded, sorted(FALLBACK_REASONS - worded)
-    assert "not checked since restart" in source
+    catalog = load_catalog("en-US")
+    table = source[source.index("const GPU_REASON_IDS"):source.index("});", source.index("const GPU_REASON_IDS"))]
+    mapped = {reason for reason in FALLBACK_REASONS if f'{reason}: "admin.gpu.reason.{reason}"' in table}
+    assert mapped == FALLBACK_REASONS, sorted(FALLBACK_REASONS - mapped)
+    assert all(catalog[f"admin.gpu.reason.{reason}"] != reason for reason in FALLBACK_REASONS)
+    assert 'const id = GPU_REASON_IDS[reason];' in source and 'return id ? t(id) : reason;' in source
+    assert 't("admin.gpu.unverified")' in source
+    assert "not checked since restart" in catalog["admin.gpu.unverified"]

@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from cognita.admin_api import create_admin_app
 from cognita.auth_policy import CredentialAdminService, CredentialPolicyStore, CredentialWorkspaceConflict
 from cognita.config import CognitaConfig
+from cognita.localization import load_catalog
 from cognita.oauth_service.principal import OAuthPrincipalStore
 from cognita.registry import Registry
 from cognita.tokens import hash_token
@@ -198,7 +199,9 @@ def test_workspace_admin_ui_exposes_runtime_provenance_and_cursor_search_contrac
     app = Path("src/cognita/web/app.js").read_text(encoding="utf-8")
     assert "measurement_reason" in app
     assert "measurement_source" in app
-    assert '"Measured at"' in app
+    assert 't("admin.workspace.metric.measured_at")' in app
+    assert load_catalog("en-US")["admin.workspace.metric.measured_at"] == "Measured at"
+    assert 'when(workspaceValue(storage, "measured_at"))' in app
     assert 'measurement_status: "stale"' in app
     assert "fetchCredentialWorkspaceTarget" in app
     assert "workspaceCursorStack" in app

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from cognita.localization import load_catalog
 
 ROOT = Path(__file__).parents[1]
 HTML = (ROOT / "src/cognita/web/index.html").read_text(encoding="utf-8")
@@ -23,7 +24,8 @@ def test_key_lifecycle_is_immediate_and_one_time():
     assert "/static-key/" in JS
     assert 'action === "generate"' in JS and 'action === "revoke"' in JS
     assert 'static_key_action: "unchanged"' in JS
-    assert "The key may have been replaced, but its value was not received" in JS
+    assert 't("admin.authentication.key_uncertain.body")' in JS
+    assert "The key may have been replaced, but its value was not received" in load_catalog("en-US")["admin.authentication.key_uncertain.body"]
     assert 'navigator.clipboard.writeText("")' not in JS
     assert 'id="copy-auth-key"' in HTML
     assert ">Copy key</button>" in HTML
@@ -39,6 +41,9 @@ def test_project_oauth_edits_are_persisted_as_drafts_before_render():
 
 def test_key_modal_clears_secret_on_every_close_path():
     assert '$("#key-dialog").addEventListener("close"' in JS
+    assert 'authState.oneTimeKey = raw || ""' in JS
+    assert '$("#new-auth-key").textContent = authState.oneTimeKey' in JS
+    assert '$("#new-auth-key").textContent = ""' in JS
 
 
 def test_project_create_and_deep_link_controls_exist():

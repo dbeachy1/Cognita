@@ -37,8 +37,11 @@ def test_shell_assets_and_aria_panels_are_cache_busted():
     html = INDEX_HTML.read_text(encoding="utf-8")
     assert 'href="/static/admin.css?v=__COGNITA_VERSION__"' in html
     assert 'src="/static/admin-state.js?v=__COGNITA_VERSION__"' in html
-    assert 'src="/static/app.js?v=__COGNITA_VERSION__"' in html
-    assert 'src="/static/alpine.min.js?v=__COGNITA_VERSION__"' in html
+    assert 'src="/static/admin-locale.js?v=__COGNITA_VERSION__"' in html
+    assert '"/static/app.js?v=__COGNITA_VERSION__"' in html
+    assert "window.CognitaAdminLocale.ready.then(() =>" in html
+    assert "document.createElement(\"script\")" in html and "document.body.append(script)" in html
+    assert '"/static/alpine.min.js?v=__COGNITA_VERSION__"' in html
     # Connector entity and function tablists are dynamic; their panels remain
     # explicit ARIA tabpanels in the static shell.
     assert html.count('role="tablist"') == 5
