@@ -682,7 +682,7 @@ french.welcomeResume=Le programme reprend après le redémarrage. Cliquez sur Su
 german.welcomeResume=Das Setup wird nach dem Neustart fortgesetzt. Klicken Sie auf Weiter, um diesen PC erneut zu prüfen und die Cognita-Installation abzuschließen.
 italian.welcomeResume=L’installazione riprende dopo il riavvio. Premi Avanti per controllare di nuovo questo PC e completare l’installazione di Cognita.
 brazilianportuguese.welcomeResume=A instalação continuará após a reinicialização. Clique em Avançar para verificar este computador novamente e concluir a instalação do Cognita.
-english.welcomeUpdate=COGNITA %1 is installed. This Setup updates it to %2. Press Next to check this PC.
+english.welcomeUpdate=Cognita %1 is installed. This Setup updates it to %2. Press Next to check this PC.
 spanish.welcomeUpdate=Está instalado Cognita %1. Esta instalación lo actualiza a %2. Pulse Siguiente para comprobar este equipo.
 french.welcomeUpdate=Cognita %1 est installé. Ce programme le met à jour vers %2. Cliquez sur Suivant pour vérifier ce PC.
 german.welcomeUpdate=Cognita %1 ist installiert. Dieses Setup aktualisiert es auf %2. Klicken Sie auf Weiter, um diesen PC zu prüfen.
@@ -790,6 +790,66 @@ french.remoteSetup=Configurer maintenant l’accès à distance avec Tailscale F
 german.remoteSetup=Fernzugriff jetzt mit Tailscale Funnel einrichten (empfohlen)
 italian.remoteSetup=Configura ora l’accesso remoto con Tailscale Funnel (consigliato)
 brazilianportuguese.remoteSetup=Configurar o acesso remoto com o Tailscale Funnel agora (recomendado)
+english.remoteNeedStep=Remote access needs one more step from you: open the link below and follow it, then press Retry, or press Next to continue without remote access.
+spanish.remoteNeedStep=El acceso remoto requiere un paso más: abra el enlace siguiente y siga las instrucciones. Después, pulse Reintentar o Siguiente para continuar sin acceso remoto.
+french.remoteNeedStep=L’accès à distance nécessite une étape supplémentaire : ouvrez le lien ci-dessous et suivez les instructions, puis cliquez sur Réessayer ou sur Suivant pour continuer sans accès à distance.
+german.remoteNeedStep=Für den Fernzugriff ist noch ein Schritt erforderlich: Öffnen Sie den folgenden Link und folgen Sie den Anweisungen. Klicken Sie danach auf Wiederholen oder Weiter, um ohne Fernzugriff fortzufahren.
+italian.remoteNeedStep=Per l’accesso remoto serve un altro passaggio: apri il link qui sotto e segui le istruzioni, poi premi Riprova oppure Avanti per continuare senza accesso remoto.
+brazilianportuguese.remoteNeedStep=O acesso remoto precisa de mais uma etapa: abra o link abaixo e siga as instruções. Depois, clique em Tentar novamente ou Avançar para continuar sem acesso remoto.
+english.remotePortConflict=Tailscale Funnel on this PC already uses public port 443 for something else, and Setup will not replace it.%n%nUse public port %1 for Cognita instead? Its address will then end in :%1.
+spanish.remotePortConflict=Tailscale Funnel ya usa el puerto público 443 de este equipo para otra cosa y la instalación no lo reemplazará.%n%n¿Usar el puerto público %1 para Cognita? La dirección terminará en :%1.
+french.remotePortConflict=Tailscale Funnel utilise déjà le port public 443 de ce PC pour autre chose ; le programme ne le remplacera pas.%n%nUtiliser plutôt le port public %1 pour Cognita ? Son adresse se terminera par :%1.
+german.remotePortConflict=Tailscale Funnel verwendet auf diesem PC den öffentlichen Port 443 bereits für etwas anderes. Das Setup ersetzt diese Zuordnung nicht.%n%nSoll Cognita stattdessen den öffentlichen Port %1 verwenden? Die Adresse endet dann auf :%1.
+italian.remotePortConflict=Tailscale Funnel usa già la porta pubblica 443 di questo PC per altro e l’installazione non la sostituirà.%n%nVuoi usare la porta pubblica %1 per Cognita? L’indirizzo terminerà con :%1.
+brazilianportuguese.remotePortConflict=O Tailscale Funnel já usa a porta pública 443 deste computador para outra coisa, e a instalação não substituirá essa configuração.%n%nUsar a porta pública %1 para o Cognita? O endereço terminará em :%1.
+english.remoteSkipped=Remote access was skipped: port 443 of your Funnel is in use. Run cognita remote-access to choose another port.
+spanish.remoteSkipped=Se omitió el acceso remoto porque el puerto 443 de Funnel está en uso. Ejecute cognita remote-access para elegir otro puerto.
+french.remoteSkipped=L’accès à distance a été ignoré car le port 443 de votre Funnel est utilisé. Exécutez cognita remote-access pour choisir un autre port.
+german.remoteSkipped=Der Fernzugriff wurde übersprungen, weil Port 443 Ihres Funnels belegt ist. Führen Sie cognita remote-access aus, um einen anderen Port auszuwählen.
+italian.remoteSkipped=Accesso remoto saltato: la porta 443 del Funnel è in uso. Esegui cognita remote-access per scegliere un’altra porta.
+brazilianportuguese.remoteSkipped=O acesso remoto foi ignorado porque a porta 443 do Funnel está em uso. Execute cognita remote-access para escolher outra porta.
+english.remoteOnNext=Remote access is on. Press Next to finish.
+spanish.remoteOnNext=El acceso remoto está activado. Pulse Siguiente para terminar.
+french.remoteOnNext=L’accès à distance est activé. Cliquez sur Suivant pour terminer.
+german.remoteOnNext=Der Fernzugriff ist aktiviert. Klicken Sie auf Weiter, um den Vorgang abzuschließen.
+italian.remoteOnNext=L’accesso remoto è attivo. Premi Avanti per terminare.
+brazilianportuguese.remoteOnNext=O acesso remoto está ativado. Clique em Avançar para concluir.
+english.remoteOnNote=Remote access is on.
+spanish.remoteOnNote=El acceso remoto está activado.
+french.remoteOnNote=L’accès à distance est activé.
+german.remoteOnNote=Der Fernzugriff ist aktiviert.
+italian.remoteOnNote=L’accesso remoto è attivo.
+brazilianportuguese.remoteOnNote=O acesso remoto está ativado.
+english.remoteSkippedNext=Remote access was skipped. Press Next to finish.
+spanish.remoteSkippedNext=Se omitió el acceso remoto. Pulse Siguiente para terminar.
+french.remoteSkippedNext=L’accès à distance a été ignoré. Cliquez sur Suivant pour terminer.
+german.remoteSkippedNext=Der Fernzugriff wurde übersprungen. Klicken Sie auf Weiter, um den Vorgang abzuschließen.
+italian.remoteSkippedNext=Accesso remoto saltato. Premi Avanti per terminare.
+brazilianportuguese.remoteSkippedNext=O acesso remoto foi ignorado. Clique em Avançar para concluir.
+english.remoteFailed=Remote access was not set up.%n%n%1%nCognita itself is installed and working. You can try again later with: cognita remote-access
+spanish.remoteFailed=No se configuró el acceso remoto.%n%n%1%nCognita está instalado y funciona. Puede volver a intentarlo más tarde con: cognita remote-access
+french.remoteFailed=L’accès à distance n’a pas été configuré.%n%n%1%nCognita est installé et fonctionne. Vous pourrez réessayer plus tard avec : cognita remote-access
+german.remoteFailed=Der Fernzugriff wurde nicht eingerichtet.%n%n%1%nCognita ist installiert und funktioniert. Sie können es später mit cognita remote-access erneut versuchen.
+italian.remoteFailed=Accesso remoto non configurato.%n%n%1%nCognita è installato e funziona. Puoi riprovare più tardi con: cognita remote-access
+brazilianportuguese.remoteFailed=O acesso remoto não foi configurado.%n%n%1%nO Cognita está instalado e funcionando. Você pode tentar novamente depois com: cognita remote-access
+english.remoteFailurePrefix=Remote access was not set up:
+spanish.remoteFailurePrefix=No se configuró el acceso remoto:
+french.remoteFailurePrefix=L’accès à distance n’a pas été configuré :
+german.remoteFailurePrefix=Der Fernzugriff wurde nicht eingerichtet:
+italian.remoteFailurePrefix=Accesso remoto non configurato:
+brazilianportuguese.remoteFailurePrefix=O acesso remoto não foi configurado:
+english.remoteTryLater=You can try again any time with: cognita remote-access
+spanish.remoteTryLater=Puede volver a intentarlo cuando quiera con: cognita remote-access
+french.remoteTryLater=Vous pourrez réessayer quand vous le souhaitez avec : cognita remote-access
+german.remoteTryLater=Sie können es jederzeit mit cognita remote-access erneut versuchen.
+italian.remoteTryLater=Puoi riprovare in qualsiasi momento con: cognita remote-access
+brazilianportuguese.remoteTryLater=Você pode tentar novamente a qualquer momento com: cognita remote-access
+english.remoteUnavailable=Remote access was not set up because Setup could not start its helper in time. Run cognita remote-access later.
+spanish.remoteUnavailable=No se configuró el acceso remoto porque la instalación no pudo iniciar su asistente a tiempo. Ejecute cognita remote-access más tarde.
+french.remoteUnavailable=L’accès à distance n’a pas été configuré, car le programme n’a pas pu démarrer son assistant à temps. Exécutez cognita remote-access plus tard.
+german.remoteUnavailable=Der Fernzugriff wurde nicht eingerichtet, weil das Setup seinen Helfer nicht rechtzeitig starten konnte. Führen Sie später cognita remote-access aus.
+italian.remoteUnavailable=Accesso remoto non configurato perché l’installazione non è riuscita ad avviare l’assistente in tempo. Esegui cognita remote-access più tardi.
+brazilianportuguese.remoteUnavailable=O acesso remoto não foi configurado porque a instalação não conseguiu iniciar o auxiliar a tempo. Execute cognita remote-access mais tarde.
 english.restartHeading=A restart is needed
 spanish.restartHeading=Es necesario reiniciar
 french.restartHeading=Un redémarrage est nécessaire
@@ -844,6 +904,12 @@ french.failedStep=Étape en échec :  %1
 german.failedStep=Fehlgeschlagener Schritt:  %1
 italian.failedStep=Passaggio non riuscito:  %1
 brazilianportuguese.failedStep=Etapa que falhou:  %1
+english.whatToDo=What to do:
+spanish.whatToDo=Qué hacer:
+french.whatToDo=Que faire :
+german.whatToDo=Was zu tun ist:
+italian.whatToDo=Cosa fare:
+brazilianportuguese.whatToDo=O que fazer:
 english.showFile=Show the file
 spanish.showFile=Mostrar el archivo
 french.showFile=Afficher le fichier
@@ -904,6 +970,48 @@ french.browseDataTitle=Choisissez l’emplacement des données de Cognita
 german.browseDataTitle=Speicherort der Cognita-Daten auswählen
 italian.browseDataTitle=Scegli dove Cognita conserva i dati
 brazilianportuguese.browseDataTitle=Escolher onde o Cognita mantém os dados
+english.dataDriveRoot=Choose a folder on that drive, not the whole drive (for example %1Cognita).
+spanish.dataDriveRoot=Elija una carpeta de esa unidad, no la unidad completa (por ejemplo, %1Cognita).
+french.dataDriveRoot=Choisissez un dossier sur ce lecteur, pas le lecteur entier (par exemple %1Cognita).
+german.dataDriveRoot=Wählen Sie einen Ordner auf diesem Laufwerk statt des gesamten Laufwerks (zum Beispiel %1Cognita).
+italian.dataDriveRoot=Scegli una cartella sull’unità, non l’intera unità (ad esempio %1Cognita).
+brazilianportuguese.dataDriveRoot=Escolha uma pasta nessa unidade, não a unidade inteira (por exemplo, %1Cognita).
+english.dataOwnDrive=Choose a data folder on one of this PC's own drives (a full path that starts with a drive letter).
+spanish.dataOwnDrive=Elija una carpeta de datos en una unidad local de este equipo (una ruta completa que empiece con una letra de unidad).
+french.dataOwnDrive=Choisissez un dossier de données sur l’un des lecteurs de ce PC (un chemin complet commençant par une lettre de lecteur).
+german.dataOwnDrive=Wählen Sie einen Datenordner auf einem lokalen Laufwerk dieses PCs (einen vollständigen Pfad, der mit einem Laufwerksbuchstaben beginnt).
+italian.dataOwnDrive=Scegli una cartella dati su una delle unità locali di questo PC (un percorso completo che inizia con una lettera di unità).
+brazilianportuguese.dataOwnDrive=Escolha uma pasta de dados em uma das unidades deste computador (um caminho completo que comece com uma letra de unidade).
+english.dataOneDrive=Cognita's data cannot live in a OneDrive folder.
+spanish.dataOneDrive=Los datos de Cognita no pueden estar en una carpeta de OneDrive.
+french.dataOneDrive=Les données de Cognita ne peuvent pas se trouver dans un dossier OneDrive.
+german.dataOneDrive=Cognita-Daten dürfen nicht in einem OneDrive-Ordner liegen.
+italian.dataOneDrive=I dati di Cognita non possono trovarsi in una cartella OneDrive.
+brazilianportuguese.dataOneDrive=Os dados do Cognita não podem ficar em uma pasta do OneDrive.
+english.dataFolderNotEmpty=Choose a new or empty folder. That folder already holds files, and Cognita's data must not be mixed with them.
+spanish.dataFolderNotEmpty=Elija una carpeta nueva o vacía. Esa carpeta ya contiene archivos y los datos de Cognita no deben mezclarse con ellos.
+french.dataFolderNotEmpty=Choisissez un dossier nouveau ou vide. Ce dossier contient déjà des fichiers ; les données de Cognita ne doivent pas y être mélangées.
+german.dataFolderNotEmpty=Wählen Sie einen neuen oder leeren Ordner. Dieser Ordner enthält bereits Dateien; Cognita-Daten dürfen nicht damit vermischt werden.
+italian.dataFolderNotEmpty=Scegli una cartella nuova o vuota. Questa cartella contiene già file e i dati di Cognita non devono essere mescolati con essi.
+brazilianportuguese.dataFolderNotEmpty=Escolha uma pasta nova ou vazia. Ela já contém arquivos, e os dados do Cognita não devem ser misturados a eles.
+english.dataCheckFailed=Setup could not check that folder.
+spanish.dataCheckFailed=La instalación no pudo comprobar esa carpeta.
+french.dataCheckFailed=Le programme n’a pas pu vérifier ce dossier.
+german.dataCheckFailed=Das Setup konnte diesen Ordner nicht prüfen.
+italian.dataCheckFailed=L’installazione non è riuscita a controllare questa cartella.
+brazilianportuguese.dataCheckFailed=A instalação não conseguiu verificar essa pasta.
+english.dataFolderInvalid=The data folder cannot contain a double quote.
+spanish.dataFolderInvalid=La carpeta de datos no puede contener comillas dobles.
+french.dataFolderInvalid=Le dossier de données ne peut pas contenir de guillemet double.
+german.dataFolderInvalid=Der Datenordner darf kein doppeltes Anführungszeichen enthalten.
+italian.dataFolderInvalid=La cartella dei dati non può contenere virgolette doppie.
+brazilianportuguese.dataFolderInvalid=A pasta de dados não pode conter aspas duplas.
+english.dataFolderUnsupported=Cognita cannot use that folder.
+spanish.dataFolderUnsupported=Cognita no puede usar esa carpeta.
+french.dataFolderUnsupported=Cognita ne peut pas utiliser ce dossier.
+german.dataFolderUnsupported=Cognita kann diesen Ordner nicht verwenden.
+italian.dataFolderUnsupported=Cognita non può usare questa cartella.
+brazilianportuguese.dataFolderUnsupported=O Cognita não pode usar essa pasta.
 english.advancedWorkspace=Turn on Workspace (Cognita can run code for you in a sandbox)
 spanish.advancedWorkspace=Activar Workspace (Cognita puede ejecutar código en un entorno aislado)
 french.advancedWorkspace=Activer Workspace (Cognita peut exécuter du code dans un environnement isolé)
@@ -928,6 +1036,162 @@ french.portsDifferent=Le port MCP et le port Admin doivent être différents.
 german.portsDifferent=MCP-Port und Admin-Port müssen unterschiedlich sein.
 italian.portsDifferent=La porta MCP e la porta Admin devono essere diverse.
 brazilianportuguese.portsDifferent=As portas MCP e Admin devem ser diferentes.
+english.diagnosticsSaved=Diagnostics were saved to:%n%1%n%nThey contain logs and settings but no passwords, tokens or documents. Nothing was sent anywhere.%n%nTo get help, attach this file to a new issue at%n%2%n%nOpen that page now?
+spanish.diagnosticsSaved=Los diagnósticos se guardaron en:%n%1%n%nIncluyen registros y configuración, pero no contraseñas, tokens ni documentos. No se envió nada.%n%nPara obtener ayuda, adjunte este archivo a un nuevo informe en%n%2%n%n¿Abrir esa página ahora?
+french.diagnosticsSaved=Les diagnostics ont été enregistrés dans :%n%1%n%nIls contiennent des journaux et des paramètres, mais aucun mot de passe, jeton ni document. Rien n’a été envoyé.%n%nPour obtenir de l’aide, joignez ce fichier à un nouveau ticket sur%n%2%n%nOuvrir cette page maintenant ?
+german.diagnosticsSaved=Diagnosedaten wurden gespeichert unter:%n%1%n%nSie enthalten Protokolle und Einstellungen, aber keine Kennwörter, Tokens oder Dokumente. Es wurde nichts gesendet.%n%nWenn Sie Hilfe benötigen, hängen Sie diese Datei an ein neues Problem an unter%n%2%n%nDiese Seite jetzt öffnen?
+italian.diagnosticsSaved=La diagnostica è stata salvata in:%n%1%n%nContiene registri e impostazioni, ma non password, token o documenti. Non è stato inviato nulla.%n%nPer ricevere assistenza, allega questo file a una nuova segnalazione su%n%2%n%nAprire la pagina ora?
+brazilianportuguese.diagnosticsSaved=Os diagnósticos foram salvos em:%n%1%n%nEles contêm registros e configurações, mas não senhas, tokens ou documentos. Nada foi enviado.%n%nPara obter ajuda, anexe este arquivo a um novo problema em%n%2%n%nAbrir essa página agora?
+english.diagnosticsFailure=Saving diagnostics failed.%n%n%1%n%2
+spanish.diagnosticsFailure=No se pudieron guardar los diagnósticos.%n%n%1%n%2
+french.diagnosticsFailure=L’enregistrement des diagnostics a échoué.%n%n%1%n%2
+german.diagnosticsFailure=Diagnosedaten konnten nicht gespeichert werden.%n%n%1%n%2
+italian.diagnosticsFailure=Salvataggio della diagnostica non riuscito.%n%n%1%n%2
+brazilianportuguese.diagnosticsFailure=Falha ao salvar os diagnósticos.%n%n%1%n%2
+english.diagnosticsSavedSentence=Diagnostics were saved to:%n%1%nNothing was sent anywhere. To get help, attach that file to a new issue at %2 (Report a problem).
+spanish.diagnosticsSavedSentence=Los diagnósticos se guardaron en:%n%1%nNo se envió nada. Para obtener ayuda, adjunte el archivo a un nuevo informe en %2 (Informar de un problema).
+french.diagnosticsSavedSentence=Les diagnostics ont été enregistrés dans :%n%1%nRien n’a été envoyé. Pour obtenir de l’aide, joignez ce fichier à un nouveau ticket sur %2 (Signaler un problème).
+german.diagnosticsSavedSentence=Diagnosedaten wurden gespeichert unter:%n%1%nEs wurde nichts gesendet. Wenn Sie Hilfe benötigen, hängen Sie die Datei unter %2 an ein neues Problem an (Problem melden).
+italian.diagnosticsSavedSentence=La diagnostica è stata salvata in:%n%1%nNon è stato inviato nulla. Per ricevere assistenza, allega il file a una nuova segnalazione su %2 (Segnala un problema).
+brazilianportuguese.diagnosticsSavedSentence=Os diagnósticos foram salvos em:%n%1%nNada foi enviado. Para obter ajuda, anexe o arquivo a um novo problema em %2 (Relatar um problema).
+english.diagnosticsFailedSentence=Nothing was sent anywhere. Saving diagnostics did not work; the logs are in %1. To get help, attach them to a new issue at %2 (Report a problem).
+spanish.diagnosticsFailedSentence=No se envió nada. No se pudieron guardar los diagnósticos; los registros están en %1. Para obtener ayuda, adjúntelos a un nuevo informe en %2 (Informar de un problema).
+french.diagnosticsFailedSentence=Rien n’a été envoyé. L’enregistrement des diagnostics a échoué ; les journaux se trouvent dans %1. Pour obtenir de l’aide, joignez-les à un nouveau ticket sur %2 (Signaler un problème).
+german.diagnosticsFailedSentence=Es wurde nichts gesendet. Diagnosedaten konnten nicht gespeichert werden; die Protokolle befinden sich unter %1. Wenn Sie Hilfe benötigen, hängen Sie sie unter %2 an ein neues Problem an (Problem melden).
+italian.diagnosticsFailedSentence=Non è stato inviato nulla. Non è stato possibile salvare la diagnostica; i registri si trovano in %1. Per ricevere assistenza, allegali a una nuova segnalazione su %2 (Segnala un problema).
+brazilianportuguese.diagnosticsFailedSentence=Nada foi enviado. Não foi possível salvar os diagnósticos; os registros estão em %1. Para obter ajuda, anexe-os a um novo problema em %2 (Relatar um problema).
+english.wslUnavailable=WSL is still not available. Run Setup again after restarting Windows.
+spanish.wslUnavailable=WSL aún no está disponible. Vuelva a ejecutar la instalación después de reiniciar Windows.
+french.wslUnavailable=WSL n’est toujours pas disponible. Relancez le programme après avoir redémarré Windows.
+german.wslUnavailable=WSL ist weiterhin nicht verfügbar. Starten Sie Windows neu und führen Sie das Setup erneut aus.
+italian.wslUnavailable=WSL non è ancora disponibile. Esegui di nuovo l’installazione dopo aver riavviato Windows.
+brazilianportuguese.wslUnavailable=O WSL ainda não está disponível. Execute a instalação novamente após reiniciar o Windows.
+english.restartContinue=Setup will continue after your next restart.
+spanish.restartContinue=La instalación continuará después del próximo reinicio.
+french.restartContinue=Le programme reprendra après votre prochain redémarrage.
+german.restartContinue=Das Setup wird nach dem nächsten Neustart fortgesetzt.
+italian.restartContinue=L’installazione continuerà dopo il prossimo riavvio.
+brazilianportuguese.restartContinue=A instalação continuará após a próxima reinicialização.
+english.powerShellMissing=Windows PowerShell 5.1 was not found at %1. Cognita Setup needs it.
+spanish.powerShellMissing=No se encontró Windows PowerShell 5.1 en %1. La instalación de Cognita lo necesita.
+french.powerShellMissing=Windows PowerShell 5.1 est introuvable à l’emplacement %1. Le programme d’installation de Cognita en a besoin.
+german.powerShellMissing=Windows PowerShell 5.1 wurde unter %1 nicht gefunden. Das Cognita-Setup benötigt es.
+italian.powerShellMissing=Windows PowerShell 5.1 non è stato trovato in %1. L’installazione di Cognita ne ha bisogno.
+brazilianportuguese.powerShellMissing=O Windows PowerShell 5.1 não foi encontrado em %1. A instalação do Cognita precisa dele.
+english.helperUnpackFailed=Setup could not unpack its helper script:%n%1
+spanish.helperUnpackFailed=La instalación no pudo extraer su script auxiliar:%n%1
+french.helperUnpackFailed=Le programme n’a pas pu extraire son script auxiliaire :%n%1
+german.helperUnpackFailed=Das Setup konnte sein Hilfsskript nicht entpacken:%n%1
+italian.helperUnpackFailed=L’installazione non è riuscita a estrarre lo script ausiliario:%n%1
+brazilianportuguese.helperUnpackFailed=A instalação não conseguiu extrair o script auxiliar:%n%1
+english.stateReadFailed=Setup could not read the current state of this PC.%n%n%1%nSetup log: %2
+spanish.stateReadFailed=La instalación no pudo leer el estado actual de este equipo.%n%n%1%nRegistro de instalación: %2
+french.stateReadFailed=Le programme n’a pas pu lire l’état actuel de ce PC.%n%n%1%nJournal d’installation : %2
+german.stateReadFailed=Das Setup konnte den aktuellen Zustand dieses PCs nicht lesen.%n%n%1%nSetup-Protokoll: %2
+italian.stateReadFailed=L’installazione non è riuscita a leggere lo stato attuale del PC.%n%n%1%nRegistro dell’installazione: %2
+brazilianportuguese.stateReadFailed=A instalação não conseguiu ler o estado atual deste computador.%n%n%1%nRegistro da instalação: %2
+english.uninstallCleanupFailed=Cognita's own files are being removed, but part of the cleanup did not finish.%n%n%1%nLogs: %2
+spanish.uninstallCleanupFailed=Se están quitando los archivos propios de Cognita, pero no terminó parte de la limpieza.%n%n%1%nRegistros: %2
+french.uninstallCleanupFailed=Les fichiers de Cognita sont en cours de suppression, mais une partie du nettoyage n’a pas abouti.%n%n%1%nJournaux : %2
+german.uninstallCleanupFailed=Die Cognita-Dateien werden entfernt, aber ein Teil der Bereinigung wurde nicht abgeschlossen.%n%n%1%nProtokolle: %2
+italian.uninstallCleanupFailed=I file di Cognita vengono rimossi, ma una parte della pulizia non è stata completata.%n%n%1%nRegistri: %2
+brazilianportuguese.uninstallCleanupFailed=Os arquivos próprios do Cognita estão sendo removidos, mas parte da limpeza não foi concluída.%n%n%1%nRegistros: %2
+english.uninstallDataFailed=Cognita was removed, but its data could not be deleted. Logs: %1
+spanish.uninstallDataFailed=Se quitó Cognita, pero no se pudieron eliminar sus datos. Registros: %1
+french.uninstallDataFailed=Cognita a été supprimé, mais ses données n’ont pas pu l’être. Journaux : %1
+german.uninstallDataFailed=Cognita wurde entfernt, seine Daten konnten jedoch nicht gelöscht werden. Protokolle: %1
+italian.uninstallDataFailed=Cognita è stato rimosso, ma non è stato possibile eliminare i dati. Registri: %1
+brazilianportuguese.uninstallDataFailed=O Cognita foi removido, mas não foi possível excluir os dados. Registros: %1
+english.failurePreflight=Cognita cannot be installed on this PC yet.
+spanish.failurePreflight=Todavía no se puede instalar Cognita en este equipo.
+french.failurePreflight=Cognita ne peut pas encore être installé sur ce PC.
+german.failurePreflight=Cognita kann auf diesem PC noch nicht installiert werden.
+italian.failurePreflight=Cognita non può ancora essere installato su questo PC.
+brazilianportuguese.failurePreflight=O Cognita ainda não pode ser instalado neste computador.
+english.failureWsl=Setup could not turn on WSL.
+spanish.failureWsl=La instalación no pudo activar WSL.
+french.failureWsl=Le programme n’a pas pu activer WSL.
+german.failureWsl=Das Setup konnte WSL nicht aktivieren.
+italian.failureWsl=L’installazione non è riuscita ad attivare WSL.
+brazilianportuguese.failureWsl=A instalação não conseguiu ativar o WSL.
+english.failureRestart=Setup could not restart Windows.
+spanish.failureRestart=La instalación no pudo reiniciar Windows.
+french.failureRestart=Le programme n’a pas pu redémarrer Windows.
+german.failureRestart=Das Setup konnte Windows nicht neu starten.
+italian.failureRestart=L’installazione non è riuscita a riavviare Windows.
+brazilianportuguese.failureRestart=A instalação não conseguiu reiniciar o Windows.
+english.failureResume=Setup could not save where it stopped.
+spanish.failureResume=La instalación no pudo guardar el punto donde se detuvo.
+french.failureResume=Le programme n’a pas pu enregistrer son point d’arrêt.
+german.failureResume=Das Setup konnte seine letzte Position nicht speichern.
+italian.failureResume=L’installazione non è riuscita a salvare il punto in cui si è fermata.
+brazilianportuguese.failureResume=A instalação não conseguiu salvar o ponto em que parou.
+english.failureFolder=Setup could not check that folder.
+spanish.failureFolder=La instalación no pudo comprobar esa carpeta.
+french.failureFolder=Le programme n’a pas pu vérifier ce dossier.
+german.failureFolder=Das Setup konnte diesen Ordner nicht prüfen.
+italian.failureFolder=L’installazione non è riuscita a controllare questa cartella.
+brazilianportuguese.failureFolder=A instalação não conseguiu verificar essa pasta.
+english.failureUpdateChoices=Setup cannot update with the current state of this PC. Fix the problem and try again.
+spanish.failureUpdateChoices=La instalación no puede actualizar con el estado actual de este equipo. Corrija el problema y vuelva a intentarlo.
+french.failureUpdateChoices=Le programme ne peut pas effectuer la mise à jour dans l’état actuel de ce PC. Corrigez le problème et réessayez.
+german.failureUpdateChoices=Das Setup kann mit dem aktuellen Zustand dieses PCs nicht aktualisieren. Beheben Sie das Problem und versuchen Sie es erneut.
+italian.failureUpdateChoices=L’installazione non può aggiornare con lo stato attuale del PC. Correggi il problema e riprova.
+brazilianportuguese.failureUpdateChoices=A instalação não pode atualizar com o estado atual deste computador. Corrija o problema e tente novamente.
+english.failureInstallChoices=Setup cannot install with these choices. Change them under Advanced, or fix the problem, and try again.
+spanish.failureInstallChoices=La instalación no puede continuar con estas opciones. Cámbielas en Avanzado o corrija el problema y vuelva a intentarlo.
+french.failureInstallChoices=Le programme ne peut pas installer avec ces choix. Modifiez-les dans Avancé ou corrigez le problème, puis réessayez.
+german.failureInstallChoices=Das Setup kann mit diesen Einstellungen nicht installieren. Ändern Sie sie unter Erweitert oder beheben Sie das Problem und versuchen Sie es erneut.
+italian.failureInstallChoices=L’installazione non può procedere con queste scelte. Modificale in Avanzate o correggi il problema, poi riprova.
+brazilianportuguese.failureInstallChoices=A instalação não pode continuar com estas opções. Altere-as em Avançado ou corrija o problema e tente novamente.
+english.selfTestsSkipped=The self-tests were skipped. To run them later, run this Setup again.
+spanish.selfTestsSkipped=Se omitieron las pruebas automáticas. Para ejecutarlas más adelante, vuelva a iniciar esta instalación.
+french.selfTestsSkipped=Les autotests ont été ignorés. Pour les exécuter plus tard, relancez ce programme d’installation.
+german.selfTestsSkipped=Die Selbsttests wurden übersprungen. Führen Sie dieses Setup später erneut aus, um sie zu starten.
+italian.selfTestsSkipped=I test automatici sono stati saltati. Per eseguirli più tardi, avvia di nuovo questa installazione.
+brazilianportuguese.selfTestsSkipped=Os autotestes foram ignorados. Para executá-los depois, inicie esta instalação novamente.
+english.finishedDailyIntro=Every day: use the Start menu (Cognita Admin, Cognita Status, Cognita Diagnostics), or type these in a terminal window:
+spanish.finishedDailyIntro=Para el uso diario: use el menú Inicio (Cognita Admin, Cognita Status, Cognita Diagnostics) o escriba estos comandos en una terminal:
+french.finishedDailyIntro=Au quotidien : utilisez le menu Démarrer (Cognita Admin, Cognita Status, Cognita Diagnostics) ou saisissez ces commandes dans un terminal :
+german.finishedDailyIntro=Für den täglichen Gebrauch: Verwenden Sie das Startmenü (Cognita Admin, Cognita Status, Cognita Diagnostics) oder geben Sie diese Befehle in einem Terminal ein:
+italian.finishedDailyIntro=Per l’uso quotidiano: usa il menu Start (Cognita Admin, Cognita Status, Cognita Diagnostics) oppure digita questi comandi in un terminale:
+brazilianportuguese.finishedDailyIntro=No dia a dia: use o menu Iniciar (Cognita Admin, Cognita Status, Cognita Diagnostics) ou digite estes comandos em um terminal:
+english.finishedUpdate=Update: run a newer Cognita Setup.
+spanish.finishedUpdate=Actualizar: ejecute una instalación más reciente de Cognita.
+french.finishedUpdate=Mise à jour : exécutez une version plus récente du programme d’installation de Cognita.
+german.finishedUpdate=Aktualisieren: Führen Sie ein neueres Cognita-Setup aus.
+italian.finishedUpdate=Aggiornamento: esegui una versione più recente dell’installazione di Cognita.
+brazilianportuguese.finishedUpdate=Atualização: execute uma instalação mais recente do Cognita.
+english.finishedUninstall=Uninstall: Settings > Apps > Installed apps.
+spanish.finishedUninstall=Desinstalar: Configuración > Aplicaciones > Aplicaciones instaladas.
+french.finishedUninstall=Désinstallation : Paramètres > Applications > Applications installées.
+german.finishedUninstall=Deinstallieren: Einstellungen > Apps > Installierte Apps.
+italian.finishedUninstall=Disinstallazione: Impostazioni > App > App installate.
+brazilianportuguese.finishedUninstall=Desinstalar: Configurações > Aplicativos > Aplicativos instalados.
+english.publicLabel=Public:
+spanish.publicLabel=Público:
+french.publicLabel=Public :
+german.publicLabel=Öffentlich:
+italian.publicLabel=Pubblico:
+brazilianportuguese.publicLabel=Público:
+english.logFolderLabel=Log folder:
+spanish.logFolderLabel=Carpeta de registros:
+french.logFolderLabel=Dossier des journaux :
+german.logFolderLabel=Protokollordner:
+italian.logFolderLabel=Cartella dei registri:
+brazilianportuguese.logFolderLabel=Pasta de registros:
+english.setupLogLabel=Setup log:
+spanish.setupLogLabel=Registro de instalación:
+french.setupLogLabel=Journal d’installation :
+german.setupLogLabel=Setup-Protokoll:
+italian.setupLogLabel=Registro dell’installazione:
+brazilianportuguese.setupLogLabel=Registro da instalação:
+english.failureContinue=Nothing is lost: run Setup again to continue.
+spanish.failureContinue=No se pierde nada: vuelva a ejecutar la instalación para continuar.
+french.failureContinue=Rien n’est perdu : relancez le programme pour continuer.
+german.failureContinue=Es geht nichts verloren: Führen Sie das Setup erneut aus, um fortzufahren.
+italian.failureContinue=Non si perde nulla: esegui di nuovo l’installazione per continuare.
+brazilianportuguese.failureContinue=Nada será perdido: execute a instalação novamente para continuar.
 english.removeTitle=Remove Cognita
 spanish.removeTitle=Quitar Cognita
 french.removeTitle=Supprimer Cognita
@@ -1626,7 +1890,7 @@ begin
     FailFix := Fix;
     FailText := FailText + Msg;
     if Fix <> '' then
-      FailText := FailText + #13#10 + 'What to do: ' + Fix;
+      FailText := FailText + #13#10 + CustomMessage('whatToDo') + ' ' + Fix;
     FailText := FailText + #13#10#13#10;
   end
   else if St = 'warning' then
@@ -1699,7 +1963,7 @@ begin
     end;
     if FailFix = '' then
       FailFix := 'Choose Save diagnostics. To get help, attach the file to a new issue at {#SupportUrl}';
-    FailText := FailMessage + #13#10 + 'What to do: ' + FailFix + #13#10#13#10;
+    FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
   end;
 end;
 
@@ -2093,16 +2357,13 @@ begin
     { The helper has already opened Explorer with the file selected. Nothing is sent: the user
       decides whether to attach it anywhere, so the box says where they can and offers the page. }
     Zip := ResultValue(LastResult, 'zip');
-    if MsgBox('Diagnostics were saved to:' + #13#10#13#10 + Zip + #13#10#13#10 +
-      'They contain logs and settings but no passwords, tokens or documents. Nothing was sent ' +
-      'anywhere.' + #13#10#13#10 + 'To get help, attach this file to a new issue at' + #13#10 +
-      '{#SupportUrl}' + #13#10#13#10 + 'Open that page now?', mbInformation, MB_YESNO) = IDYES then
+    if MsgBox(FmtMessage(CustomMessageWithLines('diagnosticsSaved'), [Zip, '{#SupportUrl}']),
+      mbInformation, MB_YESNO) = IDYES then
       ReportProblemClick(nil);
   end
   else
-    MsgBox('Saving diagnostics failed.' + #13#10#13#10 + FailText + #13#10 +
-      'The logs are still in ' + LogsDir + '. To get help, attach them to a new issue at ' +
-      '{#SupportUrl}', mbError, MB_OK);
+    MsgBox(FmtMessage(CustomMessageWithLines('diagnosticsFailure'), [FailText,
+      FmtMessage(CustomMessage('diagnosticsFailedSentence'), [LogsDir, '{#SupportUrl}'])]), mbError, MB_OK);
 end;
 
 { On any failure Setup saves the diagnostics zip to the Desktop by itself (Doug, 2026-09-29: the user
@@ -2130,11 +2391,9 @@ end;
 function DiagnosticsSentence(const Zip: String): String;
 begin
   if Zip <> '' then
-    Result := 'Diagnostics were saved to:' + #13#10 + Zip + #13#10 + 'Nothing was sent anywhere. To get help, ' +
-      'attach that file to a new issue at {#SupportUrl} (Report a problem).'
+    Result := FmtMessage(CustomMessageWithLines('diagnosticsSavedSentence'), [Zip, '{#SupportUrl}'])
   else
-    Result := 'Nothing was sent anywhere. Saving diagnostics did not work; the logs are in ' + LogsDir +
-      '. To get help, attach them to a new issue at {#SupportUrl} (Report a problem).';
+    Result := FmtMessage(CustomMessage('diagnosticsFailedSentence'), [LogsDir, '{#SupportUrl}']);
 end;
 
 procedure ShowFileInExplorer(const Path: String);
@@ -2202,23 +2461,23 @@ begin
     OpenLogs.Parent := Form;
     OpenLogs.Left := ScaleX(14);
     OpenLogs.Top := ScaleY(224);
-    OpenLogs.Caption := 'Open the log folder';
+    OpenLogs.Caption := CustomMessage('openLogs');
     StyleAsLink(OpenLogs);
     OpenLogs.OnClick := @OpenLogsClick;
     Report := TNewStaticText.Create(Form);
     Report.Parent := Form;
     Report.Left := OpenLogs.Left + OpenLogs.Width + ScaleX(24);
     Report.Top := OpenLogs.Top;
-    Report.Caption := 'Report a problem';
+    Report.Caption := CustomMessage('reportProblem');
     StyleAsLink(Report);
     Report.OnClick := @ReportProblemClick;
     DiagB := TNewButton.Create(Form);
     DiagB.Parent := Form;
     { The zip is already on the Desktop: the button shows it. When saving failed it tries again. }
     if Zip <> '' then
-      DiagB.Caption := 'Show the file'
+      DiagB.Caption := CustomMessage('showFile')
     else
-      DiagB.Caption := 'Save diagnostics';
+      DiagB.Caption := CustomMessage('saveDiagnostics');
     DiagB.Left := ScaleX(14);
     DiagB.Top := Form.ClientHeight - ScaleY(25 + 14);
     DiagB.Width := ScaleX(120);
@@ -2226,7 +2485,7 @@ begin
     DiagB.ModalResult := mrYes;
     OkB := TNewButton.Create(Form);
     OkB.Parent := Form;
-    OkB.Caption := 'OK';
+    OkB.Caption := SetupMessage(msgButtonOK);
     OkB.Left := Form.ClientWidth - ScaleX(80 + 14);
     OkB.Top := Form.ClientHeight - ScaleY(25 + 14);
     OkB.Width := ScaleX(80);
@@ -2284,26 +2543,26 @@ var
 begin
   Result := '';
   if HasBadArgChar(Dir) then
-    Result := 'The data folder cannot contain a double quote.'
+    Result := CustomMessage('dataFolderInvalid')
   else if IsDriveRoot(Dir) then
-    Result := 'Choose a folder on that drive, not the whole drive (for example ' + AddBackslash(Dir) + 'Cognita).'
+    Result := FmtMessage(CustomMessage('dataDriveRoot'), [AddBackslash(Dir)])
   else if (Length(Dir) < 3) or (Copy(Dir, 2, 2) <> ':\') then
-    Result := 'Choose a data folder on one of this PC''s own drives (a full path that starts with a drive letter).'
+    Result := CustomMessage('dataOwnDrive')
   else if IsOneDrivePath(Dir, GetEnv('OneDrive'), GetEnv('OneDriveConsumer'), GetEnv('OneDriveCommercial')) then
-    Result := 'Cognita''s data cannot live in a OneDrive folder.'
+    Result := CustomMessage('dataOneDrive')
   else if DirExists(Dir) and (not DirIsEmpty(Dir)) then
-    Result := 'Choose a new folder or an empty one. That folder already holds files, and Cognita''s data must not be mixed with them.'
+    Result := CustomMessage('dataFolderNotEmpty')
   else if not RunHelperBusy('Checking the data folder', 'roots', '--validate ' + QuoteArg(PageFolder.Values[0]) +
     ' --data-dir ' + QuoteArg(Dir)) then
   begin
     Log('advanced: roots --validate failed internally for data_dir=' + Dir);
-    Result := 'Setup could not check that folder.' + #13#10#13#10 + FailText;
+    Result := CustomMessage('dataCheckFailed') + #13#10#13#10 + FailText;
   end
   else if ResultValue(LastResult, 'ok') = '0' then
   begin
     Reason := ResultValue(LastResult, 'reason');
     if Reason = '' then
-      Reason := 'Cognita cannot use that folder.';
+      Reason := CustomMessage('dataFolderUnsupported');
     Result := Reason;
   end;
   if Result <> '' then
@@ -2560,8 +2819,7 @@ begin
   RemoteStage := 1;
   RemoteLinkUrl := Link;
   RemoteLabel.Height := ScaleY(48);
-  RemoteLabel.Caption := 'Remote access needs one more step from you: open the link below and follow it, ' +
-    'then press Retry, or press Next to carry on without remote access.';
+  RemoteLabel.Caption := CustomMessage('remoteNeedStep');
   RemoteSkip.Visible := False;
   RemoteSetUp.Visible := False;
   RemoteLinkLabel.Top := ScaleY(56);
@@ -2603,7 +2861,7 @@ begin
   Ok := RemoteAttempt(Extra, 'Setting up remote access', Handed);
   if not Handed then
   begin
-    RemoteNote := 'Remote access was not set up: Setup could not hand the password to its helper (the Setup helper did not start in time). Run "cognita remote-access" later.';
+    RemoteNote := CustomMessage('remoteUnavailable');
     Exit;
   end;
   { Section 9 step 4: the helper never replaces a Funnel that already serves something else on
@@ -2616,15 +2874,14 @@ begin
     Log('remote access: public port 443 is taken; offered ' + AltPort);
     if Pos(',', AltPort) > 0 then
       AltPort := Copy(AltPort, 1, Pos(',', AltPort) - 1);
-    if (AltPort <> '') and (MsgBox('Tailscale Funnel on this PC already uses public port 443 for something ' +
-      'else, and Setup will not replace it.' + #13#10#13#10 + 'Use public port ' + AltPort + ' for Cognita ' +
-      'instead? Its address will then end in :' + AltPort + '.', mbConfirmation, MB_YESNO) = IDYES) then
+    if (AltPort <> '') and (MsgBox(FmtMessage(CustomMessageWithLines('remotePortConflict'), [AltPort, AltPort]),
+      mbConfirmation, MB_YESNO) = IDYES) then
     begin
       RemoteFunnelPort := AltPort;
       Ok := RemoteAttempt(' --funnel-port ' + AltPort, 'Setting up remote access on port ' + AltPort, Handed);
       if not Handed then
       begin
-        RemoteNote := 'Remote access was not set up: Setup could not hand the password to its helper (the Setup helper did not start in time). Run "cognita remote-access" later.';
+        RemoteNote := CustomMessage('remoteUnavailable');
         Exit;
       end;
       PortBusy := (not Ok) and (ResultValue(LastResult, 'reason') = 'funnel-port-busy');
@@ -2638,12 +2895,12 @@ begin
     EnsureFailureText builds must not be shown either. }
   if PortBusy then
   begin
-    RemoteNote := 'Remote access was skipped: port 443 of your Funnel is in use. Run cognita remote-access to choose another port.';
+    RemoteNote := CustomMessage('remoteSkipped');
     Log('remote access: skipped; ' + RemoteNote);
     if RemoteStage = 1 then
     begin
       HideRemoteLinkStage;
-      RemoteLabel.Caption := RemoteNote + ' Press Next to finish.';
+      RemoteLabel.Caption := RemoteNote + #13#10 + CustomMessage('remoteSkippedNext');
     end;
     RemoteStage := 2;
     Exit;
@@ -2651,29 +2908,28 @@ begin
   if Ok then
   begin
     PublicUrl := ResultValue(LastResult, 'public_url');
-    RemoteNote := 'Remote access is on.';
+    RemoteNote := CustomMessage('remoteOnNote');
     Log('remote access: on; public_url_set=' + IntToStr(Ord(PublicUrl <> '')));
     if RemoteStage = 1 then
     begin
       { A Retry that worked: say so on the page and let Next carry on. }
       HideRemoteLinkStage;
-      RemoteLabel.Caption := 'Remote access is on. Press Next to finish.';
+      RemoteLabel.Caption := CustomMessage('remoteOnNext');
     end;
     RemoteStage := 2;
   end
   else
   begin
     Link := ResultValue(LastResult, 'link');
-    RemoteNote := 'Remote access was not set up: ' + FailMessage;
+    RemoteNote := CustomMessage('remoteFailurePrefix') + ' ' + FailMessage;
     if FailFix <> '' then
       RemoteNote := RemoteNote + ' ' + FailFix;
-    RemoteNote := RemoteNote + ' You can try again any time with: cognita remote-access';
+    RemoteNote := RemoteNote + ' ' + CustomMessage('remoteTryLater');
     Log('remote access: failed; reason=' + ResultValue(LastResult, 'reason') + ' link_set=' + IntToStr(Ord(Link <> '')));
     if Link <> '' then
       ShowRemoteLinkStage(Link)
     else
-      MsgBox('Remote access was not set up.' + #13#10#13#10 + FailText + 'Cognita itself is installed and working. ' +
-        'You can try again later with: cognita remote-access', mbInformation, MB_OK);
+      MsgBox(FmtMessage(CustomMessageWithLines('remoteFailed'), [FailText]), mbInformation, MB_OK);
   end;
 end;
 
@@ -2954,7 +3210,7 @@ begin
   RemoteCopyButton.Top := RemoteLinkEdit.Top - ScaleY(2);
   RemoteCopyButton.Width := ScaleX(84);
   RemoteCopyButton.Height := ScaleY(25);
-  RemoteCopyButton.Caption := 'Copy link';
+  RemoteCopyButton.Caption := CustomMessage('copyLink');
   RemoteCopyButton.OnClick := @RemoteCopyClick;
   RemoteCopyButton.Visible := False;
   RemoteRetryButton := TNewButton.Create(PageRemote);
@@ -3002,7 +3258,7 @@ begin
   FinMcpLink := NewFinishedText('');
   StyleAsLink(FinMcpLink);
   FinMcpLink.OnClick := @FinMcpClick;
-  FinPubPre := NewFinishedText('Public:');
+  FinPubPre := NewFinishedText(CustomMessage('publicLabel'));
   FinPubLink := NewFinishedText('');
   StyleAsLink(FinPubLink);
   FinPubLink.OnClick := @FinPubClick;
@@ -3040,7 +3296,7 @@ begin
   end;
   if not FileExists(PsExe) then
   begin
-    MsgBox('Windows PowerShell 5.1 was not found at ' + PsExe + '. Cognita Setup needs it.', mbError, MB_OK);
+    MsgBox(FmtMessage(CustomMessage('powerShellMissing'), [PsExe]), mbError, MB_OK);
     Exit;
   end;
   try
@@ -3053,7 +3309,7 @@ begin
     ExtractTemporaryFile('windows-setup.pt-BR.json');
   except
     Log('setup: could not extract the helper: ' + GetExceptionMessage);
-    MsgBox('Setup could not unpack its helper script: ' + GetExceptionMessage, mbError, MB_OK);
+    MsgBox(FmtMessage(CustomMessageWithLines('helperUnpackFailed'), [GetExceptionMessage]), mbError, MB_OK);
     Exit;
   end;
   HelperFolder := ExpandConstant('{tmp}');
@@ -3061,8 +3317,7 @@ begin
     Log('setup: could not set COGNITA_LANG for helper processes');
   if not RunHelper('state', '') then
   begin
-    MsgBox('Setup could not read the current state of this PC.' + #13#10#13#10 + FailText +
-      'Setup log: ' + ExpandConstant('{log}'), mbError, MB_OK);
+    MsgBox(FmtMessage(CustomMessageWithLines('stateReadFailed'), [FailText, ExpandConstant('{log}')]), mbError, MB_OK);
     Exit;
   end;
   ReadState;
@@ -3262,7 +3517,7 @@ end;
 procedure LayoutFinishedSuccess;
 var
   X, Y, W, Bottom: Integer;
-  Cap, WsText, UserText, Notes, AccelText: String;
+  Cap, WsText, UserText, Notes, AccelText, AccelProfile: String;
 begin
   X := WizardForm.FinishedLabel.Left;
   W := WizardForm.FinishedLabel.Width;
@@ -3276,12 +3531,32 @@ begin
     Ready choice (for example Workspace turned off because this PC's WSL has no /dev/kvm). Only when
     the result said nothing does the choice stand in for it. }
   if ResultWorkspace <> '' then
-    WsText := ResultWorkspace
+  begin
+    if Lowercase(ResultWorkspace) = 'on' then
+      WsText := CustomMessage('workspaceOn')
+    else if Lowercase(ResultWorkspace) = 'off' then
+      WsText := CustomMessage('workspaceOff')
+    else
+      WsText := ResultWorkspace;
+  end
   else
-    WsText := OnOff(ChosenWorkspaceOn);
+  begin
+    WsText := CustomMessage('workspaceOff');
+    if ChosenWorkspaceOn then
+      WsText := CustomMessage('workspaceOn');
+  end;
   Cap := Cap + #13#10 + FmtMessage(CustomMessage('finishedWorkspace'), [WsText]);
   { Design 22.7 and 22.12 item 11: the Acceleration line comes only from the result; no line when it did not say. }
-  AccelText := AccelFinishedLine(ResultAccel);
+  AccelProfile := '';
+  if AccelKnown(ResultAccel) = 'cpu' then
+    AccelProfile := CustomMessage('accelCpu')
+  else if AccelKnown(ResultAccel) = 'amd' then
+    AccelProfile := CustomMessage('accelAmd')
+  else if AccelKnown(ResultAccel) = 'nvidia' then
+    AccelProfile := CustomMessage('accelNvidia');
+  AccelText := '';
+  if AccelProfile <> '' then
+    AccelText := FmtMessage(CustomMessage('summaryAcceleration'), [AccelProfile]);
   if AccelText <> '' then
     Cap := Cap + #13#10 + AccelText;
   Log('finished page: acceleration=[' + AccelText + '] from_result=' + IntToStr(Ord(ResultAccel <> '')) +
@@ -3305,7 +3580,7 @@ begin
   FinConnectLabel.Caption := CustomMessage('finishedConnect');
   { Design 21.4: one line after the addresses when the self-tests were skipped; nothing else here changes. }
   if FinProofSkipped then
-    FinConnectLabel.Caption := FinConnectLabel.Caption + #13#10 + SkippedProofNote;
+    FinConnectLabel.Caption := FinConnectLabel.Caption + #13#10 + CustomMessage('selfTestsSkipped');
   Log('finished page: skipped-self-tests note shown=' + IntToStr(Ord(FinProofSkipped)));
   FinConnectLabel.AdjustHeight;
   FinConnectLabel.Visible := True;
@@ -3329,8 +3604,7 @@ begin
   Notes := '';
   if Trim(InstallWarnText) <> '' then
     Notes := CustomMessage('pleaseNote') + #13#10#13#10 + InstallWarnText;
-  FinMemo.Text := Notes + 'Every day: use the Start menu (Cognita Admin, Cognita Status, Cognita Diagnostics), or type ' +
-    'these in a terminal window:' + #13#10 +
+  FinMemo.Text := Notes + CustomMessage('finishedDailyIntro') + #13#10 +
     '  cognita status' + #13#10 +
     '  cognita logs app -f' + #13#10 +
     '  cognita start | stop | restart' + #13#10 +
@@ -3338,8 +3612,8 @@ begin
     '  cognita add-folder' + #13#10 +
     '  cognita remote-access' + #13#10 +
     '  cognita diagnostics' + #13#10#13#10 +
-    'Update: run a newer Cognita Setup.' + #13#10 +
-    'Uninstall: Settings > Apps > Installed apps.';
+    CustomMessage('finishedUpdate') + #13#10 +
+    CustomMessage('finishedUninstall');
   FinMemo.Visible := True;
   Log('finished page: success layout label_h=' + IntToStr(WizardForm.FinishedLabel.Height) + ' memo_top=' + IntToStr(Y) +
     ' memo_h=' + IntToStr(FinMemo.Height) + ' page_h=' + IntToStr(WizardForm.FinishedPage.ClientHeight) +
@@ -3615,8 +3889,9 @@ begin
       if FinMemo.Height < ScaleY(48) then
         FinMemo.Height := ScaleY(48);
       { (A source line may not START with #13#10: ISPP reads a leading # as a preprocessor directive.) }
-      FinMemo.Text := FailText + 'Log folder:  ' + LogsDir + #13#10 + 'Setup log:  ' + ExpandConstant('{log}') + #13#10#13#10 +
-        'Nothing is lost: run Setup again to continue.' + #13#10#13#10 + DiagnosticsSentence(FinDiagZip);
+      FinMemo.Text := FailText + CustomMessage('logFolderLabel') + '  ' + LogsDir + #13#10 +
+        CustomMessage('setupLogLabel') + '  ' + ExpandConstant('{log}') + #13#10#13#10 +
+        CustomMessage('failureContinue') + #13#10#13#10 + DiagnosticsSentence(FinDiagZip);
       FinMemo.Visible := True;
       Log('finished page: failure layout mode=' + IntToStr(InstallMode) + ' heading=[' + FailHeading(InstallMode) +
         '] still_there=' + IntToStr(Ord(StillThereText(InstallMode) <> '')) + ' memo_h=' + IntToStr(FinMemo.Height) +
@@ -3639,7 +3914,7 @@ begin
   Result := RunHelperBusy('Checking this PC', 'check', '--phase preflight');
   if not Result then
   begin
-    ShowFailuresWithHelp('Cognita cannot be installed on this PC yet.');
+    ShowFailuresWithHelp(CustomMessage('failurePreflight'));
     Exit;
   end;
   WslState := Lowercase(ResultValue(LastResult, 'wsl'));
@@ -3666,7 +3941,7 @@ begin
   if (WarnText <> '') and (not PreflightWarned) then
   begin
     PreflightWarned := True;
-    MsgBox('Please note:' + #13#10#13#10 + WarnText, mbInformation, MB_OK);
+    MsgBox(CustomMessage('pleaseNote') + #13#10#13#10 + WarnText, mbInformation, MB_OK);
   end;
 end;
 
@@ -3683,7 +3958,7 @@ begin
       if CheckPreflight then
       begin
         if (WslState = 'missing') or (WslState = 'old') then
-          MsgBox('WSL is still not available. Run Setup again after restarting Windows.', mbError, MB_OK)
+          MsgBox(CustomMessage('wslUnavailable'), mbError, MB_OK)
         else
           Result := True;
       end;
@@ -3702,7 +3977,7 @@ begin
       Log('wsl page: restart required; asking Restart now or Later');
       Exit;
     end;
-    ShowFailuresWithHelp('Setup could not turn on WSL.');
+    ShowFailuresWithHelp(CustomMessage('failureWsl'));
     Exit;
   end;
   { Stage 1: Restart now or Later. Both write the RunOnce value and the resume record through
@@ -3715,7 +3990,7 @@ begin
     if not RunHelperBusy('Restarting Windows', 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}')) +
       ' --now --after-pid ' + IntToStr(Integer(GetCurrentProcessId))) then
     begin
-      ShowFailuresWithHelp('Setup could not restart Windows.');
+      ShowFailuresWithHelp(CustomMessage('failureRestart'));
       Exit;
     end;
   end
@@ -3724,10 +3999,10 @@ begin
     Log('wsl page: later chosen');
     if not RunHelperBusy('Saving your place', 'restart-for-wsl', '--setup-exe ' + QuoteArg(ExpandConstant('{srcexe}'))) then
     begin
-      ShowFailuresWithHelp('Setup could not save where it stopped.');
+      ShowFailuresWithHelp(CustomMessage('failureResume'));
       Exit;
     end;
-    MsgBox('Setup will continue after your next restart.', mbInformation, MB_OK);
+    MsgBox(CustomMessage('restartContinue'), mbInformation, MB_OK);
   end;
   CloseQuietly := True;
   WizardForm.Close;
@@ -3765,7 +4040,7 @@ begin
   begin
     Log('folder page: roots --validate failed internally for ' + Path);
     { Design 19 (18.5 extended): an internal error here offers Save diagnostics like the other failures. }
-    ShowFailuresWithHelp('Setup could not check that folder.');
+    ShowFailuresWithHelp(CustomMessage('failureFolder'));
     Exit;
   end;
   if ResultValue(LastResult, 'ok') = '0' then
@@ -3862,9 +4137,9 @@ begin
         ' (data_locked=' + IntToStr(Ord(DataLocationLocked)) + ' drive=' + Drive + ')');
     FailText := Fixed;
     if InstallMode = ModeUpdate then
-      Heading := 'Setup cannot update with what this PC has right now. Fix the problem and try again.'
+      Heading := CustomMessage('failureUpdateChoices')
     else
-      Heading := 'Setup cannot install with these choices. Change them under Advanced, or fix the problem, and try again.';
+      Heading := CustomMessage('failureInstallChoices');
     ShowFailuresWithHelp(Heading);
   end;
 end;
@@ -4000,7 +4275,7 @@ begin
           itself did not start (a blocked or very slow PowerShell), which is what the text says. }
         FailMessage := 'Setup could not hand the Admin password to its helper: the Setup helper did not start in time.';
         FailFix := 'Run Setup again. If it keeps happening, choose Save diagnostics and attach the file to a new issue at {#SupportUrl}';
-        FailText := FailMessage + #13#10 + 'What to do: ' + FailFix + #13#10#13#10;
+        FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
         Exit;
       end;
       { Design 22.8: the acceleration and WSL-memory decisions, with the values they came from, right before
@@ -4048,7 +4323,7 @@ begin
       FailCount := 1;
       FailMessage := 'Setup stopped unexpectedly: ' + GetExceptionMessage;
       FailFix := 'Choose Save diagnostics. To get help, attach the file to a new issue at {#SupportUrl}';
-      FailText := FailMessage + #13#10 + 'What to do: ' + FailFix + #13#10#13#10;
+      FailText := FailMessage + #13#10 + CustomMessage('whatToDo') + ' ' + FailFix + #13#10#13#10;
     end;
   finally
     RunMode := 0;
@@ -4072,7 +4347,7 @@ begin
     Log('install flow: resume recorded=' + IntToStr(Ord(InstallResumeSaved)) + '; NeedRestart will return True');
     { Design 19.11 R3: a failed record step is not silent. }
     if not InstallResumeSaved then
-      ShowFailuresWithHelp('Setup could not save where it stopped.');
+      ShowFailuresWithHelp(CustomMessage('failureResume'));
   end
   else if not InstallOk then
     { The failure Finished page names this file (and its button shows it). }
@@ -4386,8 +4661,8 @@ begin
           ' logs_copy=[' + UninstLogsCopy + ']); the closing text will say so. ' + FailMessage);
       end
       else
-        SuppressibleMsgBox('Cognita''s own files are being removed, but part of the cleanup did not finish.' + #13#10#13#10 +
-          FailText + 'Logs: ' + LogsDir, mbError, MB_OK, IDOK);
+        SuppressibleMsgBox(FmtMessage(CustomMessageWithLines('uninstallCleanupFailed'), [FailText, LogsDir]),
+          mbError, MB_OK, IDOK);
     end;
   end
   else if CurUninstallStep = usPostUninstall then
@@ -4414,8 +4689,7 @@ begin
       if Text = '' then
         Text := LogsDir;
       Log('uninstall: closing text for a failed data delete; logs=' + Text);
-      SuppressibleMsgBox('Cognita was removed, but its data could not be deleted. Logs: ' + Text,
-        mbError, MB_OK, IDOK);
+      SuppressibleMsgBox(FmtMessage(CustomMessage('uninstallDataFailed'), [Text]), mbError, MB_OK, IDOK);
     end
     else
       Log('uninstall: closing text is Inno''s own (delete_data=' + IntToStr(Ord(UninstallDeleteData)) +
