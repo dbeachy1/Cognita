@@ -34,7 +34,9 @@ import contextlib
 import dataclasses
 import datetime
 import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +63,8 @@ IMAGE_SIZE_KEY = "size_wsl_image"
 # publish side and this file agree in one place.
 SRC_SHA_KEY = "src_tarball_sha256"
 SRC_SIZE_KEY = "size_src_tarball"
+SETUP_LOCALES = ("en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR")
+SETUP_LANGUAGE_IDS = ("english", "spanish", "french", "german", "italian", "brazilianportuguese")
 
 
 class BuildError(Exception):
@@ -325,6 +329,68 @@ def describe_nvidia_build(values: Mapping[str, str]) -> str:
             f"(image_ref_cognita_nvidia {image_state}, size_cognita_nvidia {size_state}); SizeCognitaNvidia=0")
 
 
+def validate_setup_catalogs(windows_dir: Path, iss_path: Path) -> None:
+    """Fail before compiling if the helper's temporary and installed locale payload is incomplete."""
+    catalog_dir = windows_dir / "locales"
+    catalogs: dict[str, dict[str, object]] = {}
+    for locale in SETUP_LOCALES:
+        path = catalog_dir / f"windows-setup.{locale}.json"
+        if not path.is_file():
+            raise BuildError(f"Windows Setup locale catalog is missing: {path}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise BuildError(f"Windows Setup locale catalog is invalid: {path}: {exc}") from None
+        if not isinstance(data, dict) or not data:
+            raise BuildError(f"Windows Setup locale catalog must be a nonempty JSON object: {path}")
+        for message_id, entry in data.items():
+            if not isinstance(entry, dict) or not all(isinstance(entry.get(field), str) and entry[field]
+                                                       for field in ("title", "message", "fix")):
+                raise BuildError(f"{path}: {message_id!r} needs nonempty title, message, and fix text")
+        catalogs[locale] = data
+    english_keys = set(catalogs["en-US"])
+    def placeholders(value: str) -> set[str]:
+        return set(re.findall(r"\{([A-Za-z][A-Za-z0-9_]*)\}", value))
+
+    for locale, data in catalogs.items():
+        if set(data) != english_keys:
+            raise BuildError(f"Windows Setup catalog {locale} has a different message ID set from en-US")
+        for message_id in sorted(english_keys):
+            base = catalogs["en-US"][message_id]
+            translated = data[message_id]
+            for field in ("title", "message", "fix"):
+                if placeholders(str(translated[field])) != placeholders(str(base[field])):
+                    raise BuildError(f"Windows Setup catalog {locale} has a different placeholder set for {message_id}.{field}")
+            base_reasons = base.get("reasons", {})
+            reasons = translated.get("reasons", {})
+            if set(reasons) != set(base_reasons):
+                raise BuildError(f"Windows Setup catalog {locale} has a different reason set for {message_id}")
+            for reason_id, phrase in base_reasons.items():
+                if placeholders(str(reasons[reason_id])) != placeholders(str(phrase)):
+                    raise BuildError(f"Windows Setup catalog {locale} has a different placeholder set for {message_id}.reasons.{reason_id}")
+    iss = iss_path.read_text(encoding="utf-8")
+    languages_section = re.search(r"(?ims)^\[Languages\]\s*(.*?)(?=^\[|\Z)", iss)
+    if not languages_section:
+        raise BuildError(f"{iss_path} is missing its [Languages] section")
+    language_ids = set(re.findall(r'(?im)^Name:\s*"([^"]+)"', languages_section.group(1)))
+    if language_ids != set(SETUP_LANGUAGE_IDS):
+        raise BuildError(f"{iss_path} must declare exactly the six supported Setup languages")
+    custom_section = re.search(r"(?ims)^\[CustomMessages\]\s*(.*?)(?=^\[|\Z)", iss)
+    if not custom_section:
+        raise BuildError(f"{iss_path} is missing its [CustomMessages] section")
+    custom_keys = {language: set() for language in SETUP_LANGUAGE_IDS}
+    for language, key in re.findall(r"(?im)^([A-Za-z]+)\.([A-Za-z0-9_]+)=", custom_section.group(1)):
+        if language in custom_keys:
+            custom_keys[language].add(key)
+    english_custom_keys = custom_keys["english"]
+    if not english_custom_keys or any(keys != english_custom_keys for keys in custom_keys.values()):
+        raise BuildError(f"{iss_path} must define the same nonempty [CustomMessages] key set for all six languages")
+    for locale in SETUP_LOCALES:
+        name = f"windows-setup.{locale}.json"
+        if iss.count(name) < 2:
+            raise BuildError(f"{iss_path} must package {name} for both temporary and installed helper use")
+
+
 def iscc_defines(
     *,
     version: str,
@@ -403,6 +469,7 @@ def build(
     for needed in (iss, launcher_source):
         if not needed.is_file():
             raise BuildError(f"{needed} does not exist")
+    validate_setup_catalogs(windows_dir, iss)
 
     values = read_published_release(options.published_release)
     version = values["version"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -82,7 +83,23 @@ def workspace(tmp_path):
     repo = tmp_path / "repo"
     (repo / "windows" / "setup").mkdir(parents=True)
     (repo / "windows" / "launcher").mkdir(parents=True)
+    (repo / "windows" / "locales").mkdir(parents=True)
     (repo / "windows" / "setup" / "Cognita.iss").write_text("; iss", encoding="utf-8")
+    locale_entry = {"wsl.warning": {"title": "Title", "message": "Message", "fix": "Fix"}}
+    for locale in bs.SETUP_LOCALES:
+        (repo / "windows" / "locales" / f"windows-setup.{locale}.json").write_text(
+            json.dumps(locale_entry), encoding="utf-8"
+        )
+    iss_lines = ["[Languages]"]
+    for language in bs.SETUP_LANGUAGE_IDS:
+        iss_lines.append(f'Name: "{language}"; MessagesFile: "stock.isl"')
+    iss_lines.append("[CustomMessages]")
+    for language in bs.SETUP_LANGUAGE_IDS:
+        iss_lines.append(f"{language}.example=Example")
+    for locale in bs.SETUP_LOCALES:
+        name = f"windows-setup.{locale}.json"
+        iss_lines.extend((name, name))
+    (repo / "windows" / "setup" / "Cognita.iss").write_text("\n".join(iss_lines), encoding="utf-8")
     (repo / "windows" / "launcher" / "cognita.cs").write_text("// cs", encoding="utf-8")
     csc = tmp_path / "windir" / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe"
     csc.parent.mkdir(parents=True)
@@ -100,6 +117,29 @@ def workspace(tmp_path):
         "repo": repo, "csc": csc, "iscc": iscc, "release": release, "image": image, "src": src,
         "dist": tmp_path / "dist", "env": {"WINDIR": str(tmp_path / "windir"), "LOCALAPPDATA": str(tmp_path / "localapp")},
     }
+
+
+def test_setup_catalog_validator_requires_all_six_and_matching_message_ids(workspace):
+    windows_dir = workspace["repo"] / "windows"
+    iss = windows_dir / "setup" / "Cognita.iss"
+    bs.validate_setup_catalogs(windows_dir, iss)
+
+    (windows_dir / "locales" / "windows-setup.fr-FR.json").unlink()
+    with pytest.raises(bs.BuildError, match="catalog is missing"):
+        bs.validate_setup_catalogs(windows_dir, iss)
+
+
+def test_setup_catalog_validator_rejects_placeholder_drift(workspace):
+    windows_dir = workspace["repo"] / "windows"
+    iss = windows_dir / "setup" / "Cognita.iss"
+    english = {"wsl.warning": {"title": "Title", "message": "Code {exit_code}", "fix": "Fix"}}
+    translated = {"wsl.warning": {"title": "Título", "message": "Código", "fix": "Solución"}}
+    (windows_dir / "locales" / "windows-setup.en-US.json").write_text(json.dumps(english), encoding="utf-8")
+    for locale in bs.SETUP_LOCALES[1:]:
+        data = translated if locale == "es-ES" else english
+        (windows_dir / "locales" / f"windows-setup.{locale}.json").write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(bs.BuildError, match="placeholder set"):
+        bs.validate_setup_catalogs(windows_dir, iss)
 
 
 def make_options(ws, **overrides):

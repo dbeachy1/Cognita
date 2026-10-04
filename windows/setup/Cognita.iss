@@ -207,23 +207,438 @@ CloseApplicationsFilter=*.exe
 ; Inno asks this AFTER the Remove Cognita dialog (AskUninstallChoice). Its stock text, "completely
 ; remove Cognita and all of its components", contradicted a "keep Cognita's data" choice made a
 ; moment earlier (P2, 2026-09-29).
-ConfirmUninstall=Remove %1 from this PC now? Your documents are never touched, and your choice about Cognita's data applies.
+english.ConfirmUninstall=Remove %1 from this PC now? Your documents are never touched, and your choice about Cognita's data applies.
+spanish.ConfirmUninstall=¿Quitar %1 de este equipo ahora? Sus documentos nunca se tocan y se respeta su elección sobre los datos de Cognita.
+french.ConfirmUninstall=Supprimer %1 de ce PC ? Vos documents ne sont jamais modifiés et votre choix concernant les données de Cognita est respecté.
+german.ConfirmUninstall=%1 jetzt von diesem PC entfernen? Ihre Dokumente bleiben unberührt und Ihre Wahl zu den Cognita-Daten wird berücksichtigt.
+italian.ConfirmUninstall=Rimuovere %1 da questo PC? I documenti non vengono mai modificati e viene rispettata la scelta sui dati di Cognita.
+brazilianportuguese.ConfirmUninstall=Remover %1 deste computador agora? Seus documentos nunca são alterados e sua escolha sobre os dados do Cognita será respeitada.
 ; Design 19.4 item 21: ONE closing box. Inno shows one of these when the uninstall ends; they carry the
 ; documents sentence, so the usPostUninstall message box that used to say it is gone. (A delete-data run
 ; whose data could not be deleted shows its own text first, from CurUninstallStepChanged.)
-UninstalledAll=Cognita was removed. Your documents were not touched.
-UninstalledMost=Cognita was removed. Your documents were not touched.
+english.UninstalledAll=Cognita was removed. Your documents were not touched.
+spanish.UninstalledAll=Se quitó Cognita. Sus documentos no se modificaron.
+french.UninstalledAll=Cognita a été supprimé. Vos documents n’ont pas été modifiés.
+german.UninstalledAll=Cognita wurde entfernt. Ihre Dokumente blieben unberührt.
+italian.UninstalledAll=Cognita è stato rimosso. I documenti non sono stati modificati.
+brazilianportuguese.UninstalledAll=O Cognita foi removido. Seus documentos não foram alterados.
+english.UninstalledMost=Cognita was removed. Your documents were not touched.
+spanish.UninstalledMost=Se quitó Cognita. Sus documentos no se modificaron.
+french.UninstalledMost=Cognita a été supprimé. Vos documents n’ont pas été modifiés.
+german.UninstalledMost=Cognita wurde entfernt. Ihre Dokumente blieben unberührt.
+italian.UninstalledMost=Cognita è stato rimosso. I documenti non sono stati modificati.
+brazilianportuguese.UninstalledMost=O Cognita foi removido. Seus documentos não foram alterados.
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "french"; MessagesFile: "compiler:Languages\French.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
+Name: "italian"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+
+[CustomMessages]
+english.upgradePasswordCaption=Updating Cognita from %1 to %2. Enter your current Admin password once. To change it, run cognita password in a terminal.
+spanish.upgradePasswordCaption=Actualización de Cognita de la versión %1 a la %2. Escriba su contraseña actual de administrador una sola vez. Para cambiarla, ejecute cognita password en una terminal.
+french.upgradePasswordCaption=Mise à jour de Cognita de la version %1 vers la version %2. Saisissez une seule fois votre mot de passe Admin actuel. Pour le modifier, exécutez cognita password dans un terminal.
+german.upgradePasswordCaption=Cognita wird von Version %1 auf %2 aktualisiert. Geben Sie Ihr aktuelles Admin-Kennwort einmal ein. Führen Sie zum Ändern cognita password in einem Terminal aus.
+italian.upgradePasswordCaption=Aggiornamento di Cognita dalla versione %1 alla %2. Inserisci una sola volta la password Admin attuale. Per cambiarla, esegui cognita password in un terminale.
+brazilianportuguese.upgradePasswordCaption=Atualizando o Cognita da versão %1 para %2. Digite sua senha Admin atual uma vez. Para alterá-la, execute cognita password em um terminal.
+english.verifyPasswordCaption=Enter your current Admin password once. To change it, run cognita password in a terminal.
+spanish.verifyPasswordCaption=Escriba su contraseña actual de administrador una sola vez. Para cambiarla, ejecute cognita password en una terminal.
+french.verifyPasswordCaption=Saisissez une seule fois votre mot de passe Admin actuel. Pour le modifier, exécutez cognita password dans un terminal.
+german.verifyPasswordCaption=Geben Sie Ihr aktuelles Admin-Kennwort einmal ein. Führen Sie zum Ändern cognita password in einem Terminal aus.
+italian.verifyPasswordCaption=Inserisci una sola volta la password Admin attuale. Per cambiarla, esegui cognita password in un terminale.
+brazilianportuguese.verifyPasswordCaption=Digite sua senha Admin atual uma vez. Para alterá-la, execute cognita password em um terminal.
+english.downgradeText=Cognita %1 is installed; this Setup is older (%2). Use a newer Setup, or "cognita rollback" to go back a release.
+spanish.downgradeText=Está instalada la versión %1 de Cognita; este programa de instalación es anterior (%2). Use uno más reciente o ejecute "cognita rollback" para volver a una versión anterior.
+french.downgradeText=Cognita %1 est installée ; ce programme d’installation est plus ancien (%2). Utilisez un programme plus récent ou exécutez "cognita rollback" pour revenir à une version antérieure.
+german.downgradeText=Cognita %1 ist installiert; dieses Setup ist älter (%2). Verwenden Sie ein neueres Setup oder führen Sie "cognita rollback" aus, um zu einer vorherigen Version zurückzukehren.
+italian.downgradeText=È installato Cognita %1; questo programma di installazione è più vecchio (%2). Usa un programma più recente oppure esegui "cognita rollback" per tornare a una versione precedente.
+brazilianportuguese.downgradeText=O Cognita %1 está instalado; esta instalação é mais antiga (%2). Use uma instalação mais recente ou execute "cognita rollback" para voltar a uma versão anterior.
+english.wslTitle=Turn on WSL
+spanish.wslTitle=Activar WSL
+french.wslTitle=Activer WSL
+german.wslTitle=WSL aktivieren
+italian.wslTitle=Attiva WSL
+brazilianportuguese.wslTitle=Ativar o WSL
+english.wslRestartNow=Restart now
+spanish.wslRestartNow=Reiniciar ahora
+french.wslRestartNow=Redémarrer maintenant
+german.wslRestartNow=Jetzt neu starten
+italian.wslRestartNow=Riavvia ora
+brazilianportuguese.wslRestartNow=Reiniciar agora
+english.wslRestartLater=Later (Setup continues after your next restart)
+spanish.wslRestartLater=Más tarde (la instalación continuará después del próximo reinicio)
+french.wslRestartLater=Plus tard (l’installation continuera après le prochain redémarrage)
+german.wslRestartLater=Später (das Setup wird nach dem nächsten Neustart fortgesetzt)
+italian.wslRestartLater=Più tardi (l’installazione continuerà dopo il prossimo riavvio)
+brazilianportuguese.wslRestartLater=Mais tarde (a instalação continuará após a próxima reinicialização)
+english.folderTitle=Projects folder
+spanish.folderTitle=Carpeta de proyectos
+french.folderTitle=Dossier des projets
+german.folderTitle=Projektordner
+italian.folderTitle=Cartella dei progetti
+brazilianportuguese.folderTitle=Pasta de projetos
+english.folderQuestion=Where are the documents Cognita should search?
+spanish.folderQuestion=¿Dónde están los documentos que Cognita debe buscar?
+french.folderQuestion=Où se trouvent les documents que Cognita doit rechercher ?
+german.folderQuestion=In welchem Ordner soll Cognita nach Dokumenten suchen?
+italian.folderQuestion=Dove si trovano i documenti che Cognita deve cercare?
+brazilianportuguese.folderQuestion=Onde estão os documentos que o Cognita deve pesquisar?
+english.folderDescription=Cognita reads and writes documents in this folder and its subfolders, in place. Nothing outside it is visible to Cognita.
+spanish.folderDescription=Cognita lee y escribe documentos en esta carpeta y sus subcarpetas. Cognita no puede ver nada fuera de ella.
+french.folderDescription=Cognita lit et écrit les documents dans ce dossier et ses sous-dossiers. Cognita ne voit rien en dehors de ce dossier.
+german.folderDescription=Cognita liest und schreibt Dokumente in diesem Ordner und seinen Unterordnern. Außerhalb davon kann Cognita nichts sehen.
+italian.folderDescription=Cognita legge e scrive i documenti in questa cartella e nelle sue sottocartelle. Cognita non può vedere nulla al di fuori.
+brazilianportuguese.folderDescription=O Cognita lê e grava documentos nesta pasta e nas subpastas. O Cognita não consegue ver nada fora dela.
+english.folderOneDrive=If this folder is in OneDrive, right-click it and choose "Always keep on this device".
+spanish.folderOneDrive=Si esta carpeta está en OneDrive, haga clic con el botón derecho y elija «Mantener siempre en este dispositivo».
+french.folderOneDrive=Si ce dossier se trouve dans OneDrive, faites un clic droit et choisissez « Toujours conserver sur cet appareil ».
+german.folderOneDrive=Wenn sich dieser Ordner in OneDrive befindet, klicken Sie mit der rechten Maustaste darauf und wählen Sie „Immer auf diesem Gerät behalten“.
+italian.folderOneDrive=Se questa cartella è in OneDrive, fai clic con il pulsante destro e scegli "Mantieni sempre su questo dispositivo".
+brazilianportuguese.folderOneDrive=Se esta pasta estiver no OneDrive, clique nela com o botão direito e escolha "Sempre manter neste dispositivo".
+english.adminTitle=Admin sign-in
+spanish.adminTitle=Inicio de sesión de administrador
+french.adminTitle=Connexion Admin
+german.adminTitle=Admin-Anmeldung
+italian.adminTitle=Accesso Admin
+brazilianportuguese.adminTitle=Login Admin
+english.adminDescription=Choose the sign-in for Cognita Admin.
+spanish.adminDescription=Elija los datos de inicio de sesión para Cognita Admin.
+french.adminDescription=Choisissez les identifiants de connexion à Cognita Admin.
+german.adminDescription=Legen Sie die Anmeldung für Cognita Admin fest.
+italian.adminDescription=Scegli le credenziali per accedere a Cognita Admin.
+brazilianportuguese.adminDescription=Escolha o login do Cognita Admin.
+english.adminUser=User name:
+spanish.adminUser=Nombre de usuario:
+french.adminUser=Nom d’utilisateur :
+german.adminUser=Benutzername:
+italian.adminUser=Nome utente:
+brazilianportuguese.adminUser=Nome de usuário:
+english.newPassword=Password:
+spanish.newPassword=Contraseña:
+french.newPassword=Mot de passe :
+german.newPassword=Kennwort:
+italian.newPassword=Password:
+brazilianportuguese.newPassword=Senha:
+english.passwordAgain=Password again:
+spanish.passwordAgain=Repita la contraseña:
+french.passwordAgain=Confirmez le mot de passe :
+german.passwordAgain=Kennwort wiederholen:
+italian.passwordAgain=Ripeti la password:
+brazilianportuguese.passwordAgain=Digite a senha novamente:
+english.currentPassword=Current password:
+spanish.currentPassword=Contraseña actual:
+french.currentPassword=Mot de passe actuel :
+german.currentPassword=Aktuelles Kennwort:
+italian.currentPassword=Password attuale:
+brazilianportuguese.currentPassword=Senha atual:
+english.wslDescription=One-time Windows setup before Cognita can install.
+spanish.wslDescription=Configuración única de Windows antes de instalar Cognita.
+french.wslDescription=Configuration unique de Windows avant l’installation de Cognita.
+german.wslDescription=Einmalige Windows-Einrichtung vor der Installation von Cognita.
+italian.wslDescription=Configurazione iniziale di Windows prima di installare Cognita.
+brazilianportuguese.wslDescription=Configuração única do Windows antes de instalar o Cognita.
+english.wslDetails=Cognita runs inside WSL, Windows' built-in Linux support. Setup will turn it on. Windows asks your permission once, and a window shows WSL being installed. Then your PC must restart. Save your work in other programs first. Setup opens again by itself after you sign back in.
+spanish.wslDetails=Cognita se ejecuta en WSL, la compatibilidad con Linux integrada en Windows. El programa de instalación lo activará. Windows le pedirá permiso una vez y mostrará una ventana mientras se instala WSL. Después, tendrá que reiniciar el equipo. Guarde antes el trabajo de otros programas. La instalación se abrirá de nuevo cuando inicie sesión.
+french.wslDetails=Cognita s’exécute dans WSL, la prise en charge de Linux intégrée à Windows. Le programme d’installation l’activera. Windows vous demandera votre autorisation une fois et affichera une fenêtre pendant l’installation de WSL. Vous devrez ensuite redémarrer le PC. Enregistrez d’abord votre travail dans les autres programmes. Le programme d’installation se rouvrira après votre prochaine connexion.
+german.wslDetails=Cognita läuft in WSL, der integrierten Linux-Unterstützung von Windows. Das Setup aktiviert WSL. Windows fragt einmal nach Ihrer Zustimmung und zeigt während der Installation von WSL ein Fenster an. Danach muss der PC neu gestartet werden. Speichern Sie zuerst Ihre Arbeit in anderen Programmen. Nach der nächsten Anmeldung öffnet sich das Setup automatisch wieder.
+italian.wslDetails=Cognita viene eseguito in WSL, il supporto Linux integrato in Windows. Il programma di installazione lo attiverà. Windows chiederà il tuo consenso una volta e mostrerà una finestra durante l’installazione di WSL. Poi dovrai riavviare il PC. Prima salva il lavoro negli altri programmi. Il programma di installazione si riaprirà automaticamente dopo il prossimo accesso.
+brazilianportuguese.wslDetails=O Cognita é executado no WSL, o suporte integrado do Windows para Linux. A instalação vai ativá-lo. O Windows pedirá sua permissão uma vez e mostrará uma janela enquanto o WSL é instalado. Depois, será necessário reiniciar o computador. Salve seu trabalho nos outros programas antes. A instalação será aberta novamente quando você entrar no Windows.
+english.accelTitle=Acceleration
+spanish.accelTitle=Aceleración
+french.accelTitle=Accélération
+german.accelTitle=Beschleunigung
+italian.accelTitle=Accelerazione
+brazilianportuguese.accelTitle=Aceleração
+english.accelDescription=Choose what Cognita uses for its heavy work.
+spanish.accelDescription=Elija qué recursos usará Cognita para las tareas más exigentes.
+french.accelDescription=Choisissez les ressources utilisées par Cognita pour les tâches lourdes.
+german.accelDescription=Wählen Sie aus, welche Hardware Cognita für rechenintensive Aufgaben verwendet.
+italian.accelDescription=Scegli cosa userà Cognita per le attività più impegnative.
+brazilianportuguese.accelDescription=Escolha o que o Cognita usará nas tarefas mais pesadas.
+english.gpuChoice=Use the NVIDIA GPU (recommended).
+spanish.gpuChoice=Usar la GPU NVIDIA (recomendado).
+french.gpuChoice=Utiliser le GPU NVIDIA (recommandé).
+german.gpuChoice=NVIDIA-GPU verwenden (empfohlen).
+italian.gpuChoice=Usa la GPU NVIDIA (consigliato).
+brazilianportuguese.gpuChoice=Usar a GPU NVIDIA (recomendado).
+english.cpuChoice=Use the CPU only.
+spanish.cpuChoice=Usar solo la CPU.
+french.cpuChoice=Utiliser uniquement le processeur.
+german.cpuChoice=Nur die CPU verwenden.
+italian.cpuChoice=Usa solo la CPU.
+brazilianportuguese.cpuChoice=Usar somente a CPU.
+english.accelNote=Setup checks the card while it installs. If Cognita cannot use it, Setup installs for the CPU and tells you why.
+spanish.accelNote=La instalación comprueba la tarjeta. Si Cognita no puede usarla, se instalará para la CPU y se explicará el motivo.
+french.accelNote=Le programme d’installation vérifie la carte. Si Cognita ne peut pas l’utiliser, il sera configuré pour le processeur et la raison vous sera indiquée.
+german.accelNote=Das Setup prüft die Grafikkarte während der Installation. Kann Cognita sie nicht verwenden, wird Cognita für die CPU eingerichtet und der Grund angezeigt.
+italian.accelNote=Il programma di installazione controlla la scheda. Se Cognita non può usarla, verrà configurato per la CPU e ti verrà spiegato il motivo.
+brazilianportuguese.accelNote=A instalação verifica a placa. Se o Cognita não puder usá-la, ele será configurado para a CPU e o motivo será informado.
+english.readyTitle=Ready to install
+spanish.readyTitle=Listo para instalar
+french.readyTitle=Prêt à installer
+german.readyTitle=Installationsbereit
+italian.readyTitle=Pronto per l’installazione
+brazilianportuguese.readyTitle=Pronto para instalar
+english.readyDescription=Setup has what it needs.
+spanish.readyDescription=La instalación tiene todo lo necesario.
+french.readyDescription=Le programme d’installation dispose de tout ce dont il a besoin.
+german.readyDescription=Das Setup hat alle erforderlichen Angaben.
+italian.readyDescription=Il programma di installazione ha tutto ciò che serve.
+brazilianportuguese.readyDescription=A instalação tem tudo o que precisa.
+english.advancedButton=Advanced...
+spanish.advancedButton=Avanzado...
+french.advancedButton=Avancé...
+german.advancedButton=Erweitert...
+italian.advancedButton=Avanzate...
+brazilianportuguese.advancedButton=Avançado...
+english.copyLink=Copy link
+spanish.copyLink=Copiar enlace
+french.copyLink=Copier le lien
+german.copyLink=Link kopieren
+italian.copyLink=Copia link
+brazilianportuguese.copyLink=Copiar link
+english.signInWait=Setup waits up to 10 minutes for the sign-in.
+spanish.signInWait=La instalación espera hasta 10 minutos para que inicie sesión.
+french.signInWait=Le programme d’installation attend jusqu’à 10 minutes la connexion.
+german.signInWait=Das Setup wartet bis zu 10 Minuten auf die Anmeldung.
+italian.signInWait=Il programma di installazione attende fino a 10 minuti l’accesso.
+brazilianportuguese.signInWait=A instalação aguardará o login por até 10 minutos.
+english.skipProof=Skip self-tests
+spanish.skipProof=Omitir autopruebas
+french.skipProof=Ignorer les autotests
+german.skipProof=Selbsttests überspringen
+italian.skipProof=Salta i test automatici
+brazilianportuguese.skipProof=Pular autotestes
+english.retryButton=Retry
+spanish.retryButton=Reintentar
+french.retryButton=Réessayer
+german.retryButton=Erneut versuchen
+italian.retryButton=Riprova
+brazilianportuguese.retryButton=Tentar novamente
+english.saveDiagnostics=Save diagnostics
+spanish.saveDiagnostics=Guardar diagnósticos
+french.saveDiagnostics=Enregistrer les diagnostics
+german.saveDiagnostics=Diagnosedaten speichern
+italian.saveDiagnostics=Salva diagnostica
+brazilianportuguese.saveDiagnostics=Salvar diagnósticos
+english.openLogs=Open the log folder
+spanish.openLogs=Abrir la carpeta de registros
+french.openLogs=Ouvrir le dossier des journaux
+german.openLogs=Protokollordner öffnen
+italian.openLogs=Apri la cartella dei registri
+brazilianportuguese.openLogs=Abrir a pasta de logs
+english.reportProblem=Report a problem
+spanish.reportProblem=Informar de un problema
+french.reportProblem=Signaler un problème
+german.reportProblem=Problem melden
+italian.reportProblem=Segnala un problema
+brazilianportuguese.reportProblem=Relatar um problema
+english.pleaseNote=Please note:
+spanish.pleaseNote=Nota:
+french.pleaseNote=À noter :
+german.pleaseNote=Hinweis:
+italian.pleaseNote=Nota:
+brazilianportuguese.pleaseNote=Observação:
+english.wslRestartNeeded=WSL is turned on, but Windows must restart before Cognita can use it. Save your work in other programs first. Setup opens again by itself after you sign back in, and continues from there.
+spanish.wslRestartNeeded=WSL está activado, pero Windows debe reiniciarse antes de que Cognita pueda usarlo. Guarde primero el trabajo de otros programas. La instalación se abrirá de nuevo después de iniciar sesión y continuará desde aquí.
+french.wslRestartNeeded=WSL est activé, mais Windows doit redémarrer avant que Cognita puisse l’utiliser. Enregistrez d’abord votre travail dans les autres programmes. Le programme d’installation se rouvrira après votre connexion et reprendra ici.
+german.wslRestartNeeded=WSL ist aktiviert, aber Windows muss neu gestartet werden, bevor Cognita es verwenden kann. Speichern Sie zuerst Ihre Arbeit in anderen Programmen. Nach der Anmeldung wird das Setup automatisch wieder geöffnet und fortgesetzt.
+italian.wslRestartNeeded=WSL è attivo, ma Windows deve essere riavviato prima che Cognita possa usarlo. Prima salva il lavoro negli altri programmi. Dopo l’accesso il programma di installazione si riaprirà e continuerà da qui.
+brazilianportuguese.wslRestartNeeded=O WSL está ativado, mas o Windows precisa ser reiniciado antes que o Cognita possa usá-lo. Salve seu trabalho nos outros programas antes. A instalação será aberta novamente depois do login e continuará daqui.
+english.wslContinue=Turn on WSL
+spanish.wslContinue=Activar WSL
+french.wslContinue=Activer WSL
+german.wslContinue=WSL aktivieren
+italian.wslContinue=Attiva WSL
+brazilianportuguese.wslContinue=Ativar o WSL
+english.addFolderLater=To add another folder later: cognita add-folder
+spanish.addFolderLater=Para agregar otra carpeta más adelante: cognita add-folder
+french.addFolderLater=Pour ajouter un autre dossier plus tard : cognita add-folder
+german.addFolderLater=Um später einen weiteren Ordner hinzuzufügen: cognita add-folder
+italian.addFolderLater=Per aggiungere un’altra cartella in seguito: cognita add-folder
+brazilianportuguese.addFolderLater=Para adicionar outra pasta depois: cognita add-folder
+english.adminCreateGuidance=Use this user name and password to open Cognita Admin in your browser. Type the password twice.
+spanish.adminCreateGuidance=Use este nombre de usuario y esta contraseña para abrir Cognita Admin en el navegador. Escriba la contraseña dos veces.
+french.adminCreateGuidance=Utilisez ce nom d’utilisateur et ce mot de passe pour ouvrir Cognita Admin dans votre navigateur. Saisissez le mot de passe deux fois.
+german.adminCreateGuidance=Mit diesem Benutzernamen und Kennwort öffnen Sie Cognita Admin im Browser. Geben Sie das Kennwort zweimal ein.
+italian.adminCreateGuidance=Usa questo nome utente e questa password per aprire Cognita Admin nel browser. Inserisci la password due volte.
+brazilianportuguese.adminCreateGuidance=Use este nome de usuário e esta senha para abrir o Cognita Admin no navegador. Digite a senha duas vezes.
+english.unchanged=unchanged
+spanish.unchanged=sin cambios
+french.unchanged=inchangé
+german.unchanged=unverändert
+italian.unchanged=non modificato
+brazilianportuguese.unchanged=inalterado
+english.folderRequired=Choose the folder that holds your documents.
+spanish.folderRequired=Elija la carpeta que contiene sus documentos.
+french.folderRequired=Choisissez le dossier contenant vos documents.
+german.folderRequired=Wählen Sie den Ordner mit Ihren Dokumenten aus.
+italian.folderRequired=Scegli la cartella che contiene i tuoi documenti.
+brazilianportuguese.folderRequired=Escolha a pasta que contém seus documentos.
+english.quoteFolderError=That folder name cannot contain a double quote.
+spanish.quoteFolderError=El nombre de la carpeta no puede contener comillas dobles.
+french.quoteFolderError=Le nom du dossier ne peut pas contenir de guillemet double.
+german.quoteFolderError=Der Ordnername darf kein doppeltes Anführungszeichen enthalten.
+italian.quoteFolderError=Il nome della cartella non può contenere virgolette doppie.
+brazilianportuguese.quoteFolderError=O nome da pasta não pode conter aspas duplas.
+english.folderUnavailable=Cognita cannot use that folder.
+spanish.folderUnavailable=Cognita no puede usar esa carpeta.
+french.folderUnavailable=Cognita ne peut pas utiliser ce dossier.
+german.folderUnavailable=Cognita kann diesen Ordner nicht verwenden.
+italian.folderUnavailable=Cognita non può usare questa cartella.
+brazilianportuguese.folderUnavailable=O Cognita não pode usar essa pasta.
+english.typeUsername=Type a user name.
+spanish.typeUsername=Escriba un nombre de usuario.
+french.typeUsername=Saisissez un nom d’utilisateur.
+german.typeUsername=Geben Sie einen Benutzernamen ein.
+italian.typeUsername=Inserisci un nome utente.
+brazilianportuguese.typeUsername=Digite um nome de usuário.
+english.badUsername=The user name cannot contain a double quote or a control character.
+spanish.badUsername=El nombre de usuario no puede contener comillas dobles ni caracteres de control.
+french.badUsername=Le nom d’utilisateur ne peut pas contenir de guillemet double ni de caractère de contrôle.
+german.badUsername=Der Benutzername darf kein doppeltes Anführungszeichen und kein Steuerzeichen enthalten.
+italian.badUsername=Il nome utente non può contenere virgolette doppie o caratteri di controllo.
+brazilianportuguese.badUsername=O nome de usuário não pode conter aspas duplas nem caracteres de controle.
+english.typePassword=Type a password.
+spanish.typePassword=Escriba una contraseña.
+french.typePassword=Saisissez un mot de passe.
+german.typePassword=Geben Sie ein Kennwort ein.
+italian.typePassword=Inserisci una password.
+brazilianportuguese.typePassword=Digite uma senha.
+english.passwordMismatch=The two passwords are not the same.
+spanish.passwordMismatch=Las dos contraseñas no coinciden.
+french.passwordMismatch=Les deux mots de passe ne correspondent pas.
+german.passwordMismatch=Die beiden Kennwörter stimmen nicht überein.
+italian.passwordMismatch=Le due password non corrispondono.
+brazilianportuguese.passwordMismatch=As duas senhas não são iguais.
+english.removeTitle=Remove Cognita
+spanish.removeTitle=Quitar Cognita
+french.removeTitle=Supprimer Cognita
+german.removeTitle=Cognita entfernen
+italian.removeTitle=Rimuovi Cognita
+brazilianportuguese.removeTitle=Remover o Cognita
+english.removeHead=Remove Cognita. Your documents are never touched.
+spanish.removeHead=Se quitará Cognita. Sus documentos nunca se modifican.
+french.removeHead=Cognita sera supprimé. Vos documents ne sont jamais modifiés.
+german.removeHead=Cognita wird entfernt. Ihre Dokumente bleiben unberührt.
+italian.removeHead=Cognita verrà rimosso. I documenti non vengono mai modificati.
+brazilianportuguese.removeHead=O Cognita será removido. Seus documentos nunca são alterados.
+english.keepData=Keep Cognita's data (recommended)
+spanish.keepData=Conservar los datos de Cognita (recomendado)
+french.keepData=Conserver les données de Cognita (recommandé)
+german.keepData=Cognita-Daten behalten (empfohlen)
+italian.keepData=Conserva i dati di Cognita (consigliato)
+brazilianportuguese.keepData=Manter os dados do Cognita (recomendado)
+english.keepDataNote=Installing Cognita again reuses your index, settings and credentials.
+spanish.keepDataNote=Al volver a instalar Cognita, se reutilizarán el índice, la configuración y las credenciales.
+french.keepDataNote=La réinstallation de Cognita réutilisera votre index, vos paramètres et vos identifiants.
+german.keepDataNote=Bei einer erneuten Installation verwendet Cognita Ihren Index, Ihre Einstellungen und Ihre Zugangsdaten weiter.
+italian.keepDataNote=Reinstallando Cognita verranno riutilizzati l’indice, le impostazioni e le credenziali.
+brazilianportuguese.keepDataNote=Ao instalar o Cognita novamente, seu índice, suas configurações e credenciais serão reutilizados.
+english.deleteData=Also delete Cognita's data: index, settings, credentials, Workspace
+spanish.deleteData=Eliminar también los datos de Cognita: índice, configuración, credenciales y Workspace
+french.deleteData=Supprimer aussi les données de Cognita : index, paramètres, identifiants et Workspace
+german.deleteData=Cognita-Daten ebenfalls löschen: Index, Einstellungen, Zugangsdaten und Workspace
+italian.deleteData=Elimina anche i dati di Cognita: indice, impostazioni, credenziali e Workspace
+brazilianportuguese.deleteData=Excluir também os dados do Cognita: índice, configurações, credenciais e Workspace
+english.deleteDataNoteSize=That is %1 in %2. This cannot be undone. Setup asks you to confirm.
+spanish.deleteDataNoteSize=Son %1 en %2. Esta acción no se puede deshacer. La instalación le pedirá confirmación.
+french.deleteDataNoteSize=Cela représente %1 dans %2. Cette action est irréversible. Le programme vous demandera confirmation.
+german.deleteDataNoteSize=Das sind %1 unter %2. Dieser Vorgang kann nicht rückgängig gemacht werden. Das Setup fragt nach einer Bestätigung.
+italian.deleteDataNoteSize=Si tratta di %1 in %2. L’operazione è irreversibile. Il programma chiederà una conferma.
+brazilianportuguese.deleteDataNoteSize=São %1 em %2. Esta ação não pode ser desfeita. A instalação pedirá sua confirmação.
+english.deleteDataNotePath=It is in %1. This cannot be undone. Setup asks you to confirm.
+spanish.deleteDataNotePath=Está en %1. Esta acción no se puede deshacer. La instalación le pedirá confirmación.
+french.deleteDataNotePath=Ces données se trouvent dans %1. Cette action est irréversible. Le programme vous demandera confirmation.
+german.deleteDataNotePath=Die Daten liegen unter %1. Dieser Vorgang kann nicht rückgängig gemacht werden. Das Setup fragt nach einer Bestätigung.
+italian.deleteDataNotePath=Si trova in %1. L’operazione è irreversibile. Il programma chiederà una conferma.
+brazilianportuguese.deleteDataNotePath=Está em %1. Esta ação não pode ser desfeita. A instalação pedirá sua confirmação.
+english.deleteDataNoteNoPath=This cannot be undone. Setup asks you to confirm.
+spanish.deleteDataNoteNoPath=Esta acción no se puede deshacer. La instalación le pedirá confirmación.
+french.deleteDataNoteNoPath=Cette action est irréversible. Le programme vous demandera confirmation.
+german.deleteDataNoteNoPath=Dieser Vorgang kann nicht rückgängig gemacht werden. Das Setup fragt nach einer Bestätigung.
+italian.deleteDataNoteNoPath=L’operazione è irreversibile. Il programma chiederà una conferma.
+brazilianportuguese.deleteDataNoteNoPath=Esta ação não pode ser desfeita. A instalação pedirá sua confirmação.
+english.continueButton=Continue
+spanish.continueButton=Continuar
+french.continueButton=Continuer
+german.continueButton=Weiter
+italian.continueButton=Continua
+brazilianportuguese.continueButton=Continuar
+english.cancelButton=Cancel
+spanish.cancelButton=Cancelar
+french.cancelButton=Annuler
+german.cancelButton=Abbrechen
+italian.cancelButton=Annulla
+brazilianportuguese.cancelButton=Cancelar
+english.deleteConfirmTitle=Delete Cognita's data
+spanish.deleteConfirmTitle=Eliminar los datos de Cognita
+french.deleteConfirmTitle=Supprimer les données de Cognita
+german.deleteConfirmTitle=Cognita-Daten löschen
+italian.deleteConfirmTitle=Elimina i dati di Cognita
+brazilianportuguese.deleteConfirmTitle=Excluir os dados do Cognita
+english.deleteConfirmStart=This permanently deletes:
+spanish.deleteConfirmStart=Se eliminarán de forma permanente:
+french.deleteConfirmStart=Cette action supprimera définitivement :
+german.deleteConfirmStart=Dies wird dauerhaft gelöscht:
+italian.deleteConfirmStart=Verranno eliminati definitivamente:
+brazilianportuguese.deleteConfirmStart=Os itens a seguir serão excluídos permanentemente:
+english.deleteConfirmLinux=- The Cognita Linux system and everything in it: search index, settings, connector keys, credentials and Workspace files (at %1)
+spanish.deleteConfirmLinux=- El sistema Linux de Cognita y todo su contenido: índice de búsqueda, configuración, claves de conectores, credenciales y archivos de Workspace (en %1)
+french.deleteConfirmLinux=- Le système Linux de Cognita et tout son contenu : index de recherche, paramètres, clés des connecteurs, identifiants et fichiers Workspace (dans %1)
+german.deleteConfirmLinux=- Das Cognita-Linux-System und alle darin enthaltenen Daten: Suchindex, Einstellungen, Connectorschlüssel, Zugangsdaten und Workspace-Dateien (unter %1)
+italian.deleteConfirmLinux=- Il sistema Linux di Cognita e tutto ciò che contiene: indice di ricerca, impostazioni, chiavi dei connettori, credenziali e file Workspace (in %1)
+brazilianportuguese.deleteConfirmLinux=- O sistema Linux do Cognita e tudo o que contém: índice de pesquisa, configurações, chaves de conectores, credenciais e arquivos do Workspace (em %1)
+english.deleteConfirmWindows=- Cognita's Windows settings and logs (under %1)
+spanish.deleteConfirmWindows=- La configuración y los registros de Cognita para Windows (en %1)
+french.deleteConfirmWindows=- Les paramètres Windows et les journaux de Cognita (dans %1)
+german.deleteConfirmWindows=- Cognitas Windows-Einstellungen und Protokolle (unter %1)
+italian.deleteConfirmWindows=- Le impostazioni e i registri di Cognita per Windows (in %1)
+brazilianportuguese.deleteConfirmWindows=- As configurações e os logs do Cognita no Windows (em %1)
+english.deleteConfirmDocuments=Your documents are never touched. Setup first copies the logs to %1.
+spanish.deleteConfirmDocuments=Sus documentos nunca se modifican. La instalación copia primero los registros en %1.
+french.deleteConfirmDocuments=Vos documents ne sont jamais modifiés. Le programme copie d’abord les journaux dans %1.
+german.deleteConfirmDocuments=Ihre Dokumente bleiben unberührt. Das Setup kopiert die Protokolle zuerst nach %1.
+italian.deleteConfirmDocuments=I documenti non vengono mai modificati. Il programma copia prima i registri in %1.
+brazilianportuguese.deleteConfirmDocuments=Seus documentos nunca são alterados. A instalação copia os logs primeiro para %1.
+english.deleteConfirmInstruction=To go ahead, type the word DELETE below.
+spanish.deleteConfirmInstruction=Para continuar, escriba la palabra DELETE abajo.
+french.deleteConfirmInstruction=Pour continuer, saisissez le mot DELETE ci-dessous.
+german.deleteConfirmInstruction=Geben Sie unten DELETE ein, um fortzufahren.
+italian.deleteConfirmInstruction=Per continuare, digita la parola DELETE qui sotto.
+brazilianportuguese.deleteConfirmInstruction=Para continuar, digite a palavra DELETE abaixo.
+english.deleteButton=Delete
+spanish.deleteButton=Eliminar
+french.deleteButton=Supprimer
+german.deleteButton=Löschen
+italian.deleteButton=Elimina
+brazilianportuguese.deleteButton=Excluir
 
 [Files]
 ; Order matters little here (SolidCompression=no). Temporary copies first: the helper must run
 ; from {tmp} before Inno installs anything (section 4.2). The same source is installed below.
 Source: "{#WindowsDir}\CognitaWin.ps1"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.en-US.json"; DestName: "windows-setup.en-US.json"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.es-ES.json"; DestName: "windows-setup.es-ES.json"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.fr-FR.json"; DestName: "windows-setup.fr-FR.json"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.de-DE.json"; DestName: "windows-setup.de-DE.json"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.it-IT.json"; DestName: "windows-setup.it-IT.json"; Flags: dontcopy noencryption
+Source: "{#WindowsDir}\locales\windows-setup.pt-BR.json"; DestName: "windows-setup.pt-BR.json"; Flags: dontcopy noencryption
 ; The payload. DestName is the name ExtractTemporaryFile takes (verified on 6.7.3: it matches
 ; DestName, not the source file's own name). Extracted only when a step needs them, deleted after.
 Source: "{#ImagePath}"; DestName: "cognita-wsl.tar.gz"; Flags: dontcopy nocompression noencryption
 Source: "{#SrcPath}"; DestName: "cognita-src.tar.gz"; Flags: dontcopy nocompression noencryption
 ; Installed files: app\ (Inno owns and removes it) and bin\ (the launcher).
 Source: "{#WindowsDir}\CognitaWin.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.en-US.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.es-ES.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.fr-FR.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.de-DE.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.it-IT.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#WindowsDir}\locales\windows-setup.pt-BR.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#WindowsDir}\cognita.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#WindowsDir}\launch-keepalive.vbs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#LauncherExe}"; DestDir: "{localappdata}\Cognita\bin"; DestName: "cognita.exe"; Flags: ignoreversion
@@ -289,6 +704,8 @@ function CloseHandle(hObject: THandle): BOOL; external 'CloseHandle@kernel32.dll
 function UuidCreate(var Uuid: TUuid): Longint; external 'UuidCreate@rpcrt4.dll stdcall';
 { lpValue = 0 (a null pointer) deletes the variable from Setup's own environment. }
 function SetEnvironmentVariableW(lpName: String; lpValue: Cardinal): BOOL;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+function SetEnvironmentVariableTextW(lpName, lpValue: String): BOOL;
   external 'SetEnvironmentVariableW@kernel32.dll stdcall';
 
 const
@@ -446,6 +863,16 @@ end;
 function HelperPath: String;
 begin
   Result := HelperFolder + '\CognitaWin.ps1';
+end;
+
+function SetupLocaleTag: String;
+begin
+  if ActiveLanguage = 'spanish' then Result := 'es-ES'
+  else if ActiveLanguage = 'french' then Result := 'fr-FR'
+  else if ActiveLanguage = 'german' then Result := 'de-DE'
+  else if ActiveLanguage = 'italian' then Result := 'it-IT'
+  else if ActiveLanguage = 'brazilianportuguese' then Result := 'pt-BR'
+  else Result := 'en-US';
 end;
 
 function AdminUrl(Param: String): String;
@@ -711,7 +1138,7 @@ end;
 
 procedure OnHelperLine(const S: String; const Error, FirstLine: Boolean);
 var
-  L, St, Stage, Title, Msg, Fix, WarnFix: String;
+  L, St, Stage, Title, DisplayTitle, Msg, Fix, WarnFix: String;
   Done, Total: Int64;
   TitleNew: Boolean;
 begin
@@ -737,6 +1164,7 @@ begin
   St := JsonField(L, 'state');
   Stage := JsonField(L, 'stage');
   Title := JsonField(L, 'title');
+  DisplayTitle := JsonField(L, 'title_display');
   Msg := JsonField(L, 'message');
   Fix := JsonField(L, 'fix');
   Done := StrToInt64Def(JsonField(L, 'bytes_done'), 0);
@@ -764,6 +1192,12 @@ begin
   end
   else if LastTotal > 0 then
     Log('progress: a line without byte counts on the same step keeps ' + IntToStr(LastDone) + ' of ' + IntToStr(LastTotal));
+  if DisplayTitle = '' then
+    DisplayTitle := Title;
+  if JsonField(L, 'message_display') <> '' then
+    Msg := JsonField(L, 'message_display');
+  if JsonField(L, 'fix_display') <> '' then
+    Fix := JsonField(L, 'fix_display');
   if St = 'failed' then
   begin
     FailCount := FailCount + 1;
@@ -799,11 +1233,11 @@ begin
     end;
   end;
   if RunMode = 2 then
-    ShowProgressLine(CurTitle, Msg, LastDone, LastTotal)
+    ShowProgressLine(DisplayTitle, Msg, LastDone, LastTotal)
   else if RunMode = 1 then
   begin
-    if CurTitle <> '' then
-      BusyPage.SetText(CurTitle, '');
+    if DisplayTitle <> '' then
+      BusyPage.SetText(DisplayTitle, '');
     BusyPage.Animate;
   end;
 end;
@@ -1858,7 +2292,7 @@ begin
   ProgressCopyButton.Top := ProgressLinkEdit.Top - ScaleY(2);
   ProgressCopyButton.Width := ScaleX(84);
   ProgressCopyButton.Height := ScaleY(25);
-  ProgressCopyButton.Caption := 'Copy link';
+  ProgressCopyButton.Caption := CustomMessage('copyLink');
   ProgressCopyButton.OnClick := @ProgressCopyClick;
   ProgressCopyButton.Visible := False;
   ProgressWaitLabel := TNewStaticText.Create(ProgressPage);
@@ -1869,7 +2303,7 @@ begin
   ProgressWaitLabel.AutoSize := False;
   ProgressWaitLabel.WordWrap := True;
   ProgressWaitLabel.Height := ScaleY(34);
-  ProgressWaitLabel.Caption := 'Setup waits up to 10 minutes for the sign-in.';
+  ProgressWaitLabel.Caption := CustomMessage('signInWait');
   ProgressWaitLabel.Visible := False;
   { Design 21.4: Skip self-tests, under the bar on the right (the row the Copy button uses; the two are
     never visible together). Shown by ShowProgressLine while the stage is `proof`. }
@@ -1879,12 +2313,12 @@ begin
   ProgressSkipButton.Height := ScaleY(25);
   ProgressSkipButton.Left := ProgressPage.SurfaceWidth - ProgressSkipButton.Width;
   ProgressSkipButton.Top := ProgressPage.ProgressBar.Top + ProgressPage.ProgressBar.Height + ScaleY(22);
-  ProgressSkipButton.Caption := 'Skip self-tests';
+  ProgressSkipButton.Caption := CustomMessage('skipProof');
   ProgressSkipButton.OnClick := @ProgressSkipClick;
   ProgressSkipButton.Visible := False;
 
   { WSL (shown only when the preflight check says WSL is missing or too old) }
-  PageWsl := CreateCustomPage(wpWelcome, 'Turn on WSL',
+  PageWsl := CreateCustomPage(wpWelcome, CustomMessage('wslTitle'),
     'One-time Windows setup before Cognita can install.');
   WslLabel := TNewStaticText.Create(PageWsl);
   WslLabel.Parent := PageWsl.Surface;
@@ -1894,15 +2328,13 @@ begin
   WslLabel.AutoSize := False;
   WslLabel.WordWrap := True;
   WslLabel.Height := ScaleY(110);
-  WslLabel.Caption := 'Cognita runs inside WSL, Windows'' built-in Linux support. Setup will turn it on. ' +
-    'Windows asks your permission once, and a window shows WSL being installed. Then your PC must ' +
-    'restart. Save your work in other programs first. Setup opens again by itself after you sign back in.';
+  WslLabel.Caption := CustomMessage('wslDetails');
   WslRestartNow := TNewRadioButton.Create(PageWsl);
   WslRestartNow.Parent := PageWsl.Surface;
   WslRestartNow.Left := 0;
   WslRestartNow.Top := ScaleY(120);
   WslRestartNow.Width := PageWsl.SurfaceWidth;
-  WslRestartNow.Caption := 'Restart now';
+  WslRestartNow.Caption := CustomMessage('wslRestartNow');
   WslRestartNow.Checked := True;
   WslRestartNow.OnEnter := @RadioEnter;
   WslRestartNow.Visible := False;
@@ -1911,16 +2343,14 @@ begin
   WslRestartLater.Left := 0;
   WslRestartLater.Top := ScaleY(146);
   WslRestartLater.Width := PageWsl.SurfaceWidth;
-  WslRestartLater.Caption := 'Later (Setup continues after your next restart)';
+  WslRestartLater.Caption := CustomMessage('wslRestartLater');
   WslRestartLater.OnEnter := @RadioEnter;
   WslRestartLater.Visible := False;
   WslPageStage := 0;
 
   { Projects folder }
-  PageFolder := CreateInputDirPage(PageWsl.ID, 'Projects folder',
-    'Where are the documents Cognita should search?',
-    'Cognita reads and writes documents in this folder and its subfolders, in place. Nothing outside it is ' +
-    'visible to Cognita.', False, '');
+  PageFolder := CreateInputDirPage(PageWsl.ID, CustomMessage('folderTitle'),
+    CustomMessage('folderQuestion'), CustomMessage('folderDescription'), False, '');
   PageFolder.Add('');
   PageFolder.Values[0] := '';
   FolderNote := TNewStaticText.Create(PageFolder);
@@ -1931,7 +2361,7 @@ begin
   FolderNote.AutoSize := False;
   FolderNote.WordWrap := True;
   FolderNote.Height := ScaleY(60);
-  FolderNote.Caption := 'If this folder is in OneDrive, right-click it and choose "Always keep on this device".';
+  FolderNote.Caption := CustomMessage('folderOneDrive');
   { The reason `roots --validate` gave for a folder Cognita cannot use (design 18.5), shown on the page. }
   FolderReason := TNewStaticText.Create(PageFolder);
   FolderReason.Parent := PageFolder.Surface;
@@ -1948,19 +2378,19 @@ begin
     a caption long enough for the update guidance:
     Inno places the fields below the caption's height at creation and never moves them, so a caption
     that later grows to two lines runs under the first field. }
-  PageAdmin := CreateInputQueryPage(PageFolder.ID, 'Admin sign-in',
-    'Choose the sign-in for Cognita Admin.',
-    'Updating Cognita from an older version. Enter your current password once. To change it, run cognita password in a terminal.');
-  Idx := PageAdmin.Add('User name:', False);
+  PageAdmin := CreateInputQueryPage(PageFolder.ID, CustomMessage('adminTitle'),
+    CustomMessage('adminDescription'),
+    'Enter your current Admin password once. To change it, run cognita password in a terminal.');
+  Idx := PageAdmin.Add(CustomMessage('adminUser'), False);
   PageAdmin.Values[Idx] := 'admin';
-  Idx := PageAdmin.Add('Password:', True);
-  Idx := PageAdmin.Add('Password again:', True);
+  Idx := PageAdmin.Add(CustomMessage('newPassword'), True);
+  Idx := PageAdmin.Add(CustomMessage('passwordAgain'), True);
 
   { Acceleration (design 22.7): shown only when preflight saw an NVIDIA card (ShouldSkipPage). The texts, the
     enabled radio, the link and the note are set per run in CurPageChanged; the controls are placed there too,
     because the label's height depends on its text. }
-  PageAccel := CreateCustomPage(PageAdmin.ID, 'Acceleration',
-    'Choose what Cognita uses for its heavy work.');
+  PageAccel := CreateCustomPage(PageAdmin.ID, CustomMessage('accelTitle'),
+    CustomMessage('accelDescription'));
   AccelLabelText := TNewStaticText.Create(PageAccel);
   AccelLabelText.Parent := PageAccel.Surface;
   AccelLabelText.Left := 0;
@@ -1982,14 +2412,14 @@ begin
   AccelUseGpu.Left := 0;
   AccelUseGpu.Top := ScaleY(76);
   AccelUseGpu.Width := PageAccel.SurfaceWidth;
-  AccelUseGpu.Caption := 'Use the NVIDIA GPU (recommended).';
+  AccelUseGpu.Caption := CustomMessage('gpuChoice');
   AccelUseGpu.OnEnter := @RadioEnter;
   AccelUseCpu := TNewRadioButton.Create(PageAccel);
   AccelUseCpu.Parent := PageAccel.Surface;
   AccelUseCpu.Left := 0;
   AccelUseCpu.Top := ScaleY(100);
   AccelUseCpu.Width := PageAccel.SurfaceWidth;
-  AccelUseCpu.Caption := 'Use the CPU only.';
+  AccelUseCpu.Caption := CustomMessage('cpuChoice');
   AccelUseCpu.Checked := True;
   AccelUseCpu.OnEnter := @RadioEnter;
   AccelNote := TNewStaticText.Create(PageAccel);
@@ -2000,11 +2430,11 @@ begin
   AccelNote.AutoSize := False;
   AccelNote.WordWrap := True;
   AccelNote.Height := ScaleY(32);
-  AccelNote.Caption := 'Setup checks the card while it installs. If Cognita cannot use it, Setup installs for the CPU and tells you why.';
+  AccelNote.Caption := CustomMessage('accelNote');
   AccelNote.Visible := False;
 
   { Ready }
-  PageReady := CreateCustomPage(PageAccel.ID, 'Ready to install', 'Setup has what it needs.');
+  PageReady := CreateCustomPage(PageAccel.ID, CustomMessage('readyTitle'), CustomMessage('readyDescription'));
   ReadyText := TNewStaticText.Create(PageReady);
   ReadyText.Parent := PageReady.Surface;
   ReadyText.Left := 0;
@@ -2045,7 +2475,7 @@ begin
   AdvancedButton.Top := PageReady.SurfaceHeight - ScaleY(28);
   AdvancedButton.Width := ScaleX(100);
   AdvancedButton.Height := ScaleY(25);
-  AdvancedButton.Caption := 'Advanced...';
+  AdvancedButton.Caption := CustomMessage('advancedButton');
   AdvancedButton.OnClick := @AdvancedClick;
 
   { Remote access (after the install step) }
@@ -2125,7 +2555,7 @@ begin
   RemoteRetryButton.Top := ScaleY(160);
   RemoteRetryButton.Width := ScaleX(100);
   RemoteRetryButton.Height := ScaleY(25);
-  RemoteRetryButton.Caption := 'Retry';
+  RemoteRetryButton.Caption := CustomMessage('retryButton');
   RemoteRetryButton.OnClick := @RemoteRetryClick;
   RemoteRetryButton.Visible := False;
   RemoteStage := 0;
@@ -2133,14 +2563,14 @@ begin
   { Finished page extras (visible only after a failure) }
   DiagButton := TNewButton.Create(WizardForm);
   DiagButton.Parent := WizardForm.FinishedPage;
-  DiagButton.Caption := 'Save diagnostics';
+  DiagButton.Caption := CustomMessage('saveDiagnostics');
   DiagButton.Width := ScaleX(120);
   DiagButton.Height := ScaleY(25);
   DiagButton.OnClick := @SaveDiagnosticsClick;
   DiagButton.Visible := False;
   LogLink := TNewStaticText.Create(WizardForm);
   LogLink.Parent := WizardForm.FinishedPage;
-  LogLink.Caption := 'Open the log folder';
+  LogLink.Caption := CustomMessage('openLogs');
   LogLink.Cursor := crHand;
   LogLink.Font.Color := clBlue;
   LogLink.Font.Style := [fsUnderline];
@@ -2148,7 +2578,7 @@ begin
   LogLink.Visible := False;
   ReportLink := TNewStaticText.Create(WizardForm);
   ReportLink.Parent := WizardForm.FinishedPage;
-  ReportLink.Caption := 'Report a problem';
+  ReportLink.Caption := CustomMessage('reportProblem');
   StyleAsLink(ReportLink);
   ReportLink.OnClick := @ReportProblemClick;
   ReportLink.Visible := False;
@@ -2207,12 +2637,20 @@ begin
   end;
   try
     ExtractTemporaryFile('CognitaWin.ps1');
+    ExtractTemporaryFile('windows-setup.en-US.json');
+    ExtractTemporaryFile('windows-setup.es-ES.json');
+    ExtractTemporaryFile('windows-setup.fr-FR.json');
+    ExtractTemporaryFile('windows-setup.de-DE.json');
+    ExtractTemporaryFile('windows-setup.it-IT.json');
+    ExtractTemporaryFile('windows-setup.pt-BR.json');
   except
     Log('setup: could not extract the helper: ' + GetExceptionMessage);
     MsgBox('Setup could not unpack its helper script: ' + GetExceptionMessage, mbError, MB_OK);
     Exit;
   end;
   HelperFolder := ExpandConstant('{tmp}');
+  if not SetEnvironmentVariableTextW('COGNITA_LANG', SetupLocaleTag) then
+    Log('setup: could not set COGNITA_LANG for helper processes');
   if not RunHelper('state', '') then
   begin
     MsgBox('Setup could not read the current state of this PC.' + #13#10#13#10 + FailText +
@@ -2231,7 +2669,7 @@ begin
   if StInstalled and SetupIsOlder(StLinuxVersion, '{#Version}') then
   begin
     Log('setup: refusing a downgrade; installed ' + StLinuxVersion + ' is newer than this Setup {#Version}');
-    MsgBox(DowngradeText(StLinuxVersion, '{#Version}'), mbError, MB_OK);
+    MsgBox(FmtMessage(CustomMessage('downgradeText'), [StLinuxVersion, '{#Version}']), mbError, MB_OK);
     Exit;
   end;
   Log('setup: no downgrade (installed=[' + StLinuxVersion + '] setup={#Version} compare=' +
@@ -2468,7 +2906,7 @@ begin
     shown once in a box during the run, if at all, and were gone from the Finished page. }
   Notes := '';
   if Trim(InstallWarnText) <> '' then
-    Notes := 'Please note:' + #13#10#13#10 + InstallWarnText;
+    Notes := CustomMessage('pleaseNote') + #13#10#13#10 + InstallWarnText;
   FinMemo.Text := Notes + 'Every day: use the Start menu (Cognita Admin, Cognita Status, Cognita Diagnostics), or type ' +
     'these in a terminal window:' + #13#10 +
     '  cognita status' + #13#10 +
@@ -2609,10 +3047,10 @@ begin
   else if CurPageID = PageWsl.ID then
   begin
     if WslPageStage = 0 then
-      WizardForm.NextButton.Caption := 'Turn on WSL'
+      WizardForm.NextButton.Caption := CustomMessage('wslContinue')
     else
     begin
-      WizardForm.NextButton.Caption := 'Continue';
+      WizardForm.NextButton.Caption := CustomMessage('continueButton');
       WizardForm.BackButton.Visible := False;
     end;
   end
@@ -2625,7 +3063,7 @@ begin
       PageFolder.Values[0] := StRoot1;
       PageFolder.Edits[0].ReadOnly := True;
       PageFolder.Buttons[0].Enabled := False;
-      FolderNote.Caption := 'To add another folder later: cognita add-folder';
+      FolderNote.Caption := CustomMessage('addFolderLater');
     end
     else
     begin
@@ -2634,7 +3072,7 @@ begin
         PageFolder.Values[0] := StRoot1;
       PageFolder.Edits[0].ReadOnly := False;
       PageFolder.Buttons[0].Enabled := True;
-      FolderNote.Caption := 'If this folder is in OneDrive, right-click it and choose "Always keep on this device".';
+      FolderNote.Caption := CustomMessage('folderOneDrive');
     end;
   end
   else if CurPageID = PageAdmin.ID then
@@ -2646,29 +3084,29 @@ begin
       if StAdminUser <> '' then
         PageAdmin.Values[0] := StAdminUser
       else
-        PageAdmin.Values[0] := '(unchanged)';
+        PageAdmin.Values[0] := '(' + CustomMessage('unchanged') + ')';
       PageAdmin.Edits[0].ReadOnly := True;
     end
     else
       PageAdmin.Edits[0].ReadOnly := False;
     if not RunsOverInstalled then
     begin
-      PageAdmin.SubCaptionLabel.Caption := 'You use this user name and password to open Cognita Admin in your browser. Type the password twice.';
-      PageAdmin.PromptLabels[1].Caption := 'Password:';
+      PageAdmin.SubCaptionLabel.Caption := CustomMessage('adminCreateGuidance');
+      PageAdmin.PromptLabels[1].Caption := CustomMessage('newPassword');
     end
     else
     begin
       { Repair, update and reinstall use the existing password only to check Cognita afterwards. }
-      PageAdmin.PromptLabels[1].Caption := 'Current password:';
+      PageAdmin.PromptLabels[1].Caption := CustomMessage('currentPassword');
       if InstallMode = ModeUpdate then
       begin
         if StLinuxVersion <> '' then
-          PageAdmin.SubCaptionLabel.Caption := 'Updating Cognita ' + StLinuxVersion + ' to {#Version}. Enter your current Admin password once. To change it, run cognita password in a terminal.'
+          PageAdmin.SubCaptionLabel.Caption := FmtMessage(CustomMessage('upgradePasswordCaption'), [StLinuxVersion, '{#Version}'])
         else
-          PageAdmin.SubCaptionLabel.Caption := 'Updating Cognita to {#Version}. Enter your current Admin password once. To change it, run cognita password in a terminal.';
+          PageAdmin.SubCaptionLabel.Caption := FmtMessage(CustomMessage('upgradePasswordCaption'), ['an earlier version', '{#Version}']);
       end
       else
-        PageAdmin.SubCaptionLabel.Caption := 'Enter your current Admin password once. To change it, run "cognita password" in a terminal.';
+        PageAdmin.SubCaptionLabel.Caption := CustomMessage('verifyPasswordCaption');
     end;
     PageAdmin.PromptLabels[2].Visible := not RunsOverInstalled;
     PageAdmin.Edits[2].Visible := not RunsOverInstalled;
@@ -2746,7 +3184,7 @@ begin
       if FinDiagZip <> '' then
         DiagButton.Caption := 'Show the file'
       else
-        DiagButton.Caption := 'Save diagnostics';
+        DiagButton.Caption := CustomMessage('saveDiagnostics');
       DiagButton.OnClick := @ShowDiagFileClick;
       DiagButton.Visible := True;
       LogLink.Left := DiagButton.Left + DiagButton.Width + ScaleX(16);
@@ -2841,12 +3279,10 @@ begin
       WslPageStage := 1;
       { Design 19.1 item 1: the helper's restart never force-closes programs (no /f), so a program with
         unsaved work would hold the restart up; the user is told to save first. }
-      WslLabel.Caption := 'WSL is turned on, but Windows must restart before Cognita can use it. ' +
-        'Save your work in other programs first. Setup opens again ' +
-        'by itself after you sign back in, and continues from there.';
+      WslLabel.Caption := CustomMessage('wslRestartNeeded');
       WslRestartNow.Visible := True;
       WslRestartLater.Visible := True;
-      WizardForm.NextButton.Caption := 'Continue';
+      WizardForm.NextButton.Caption := CustomMessage('continueButton');
       WizardForm.BackButton.Visible := False;
       Log('wsl page: restart required; asking Restart now or Later');
       Exit;
@@ -2898,12 +3334,12 @@ begin
   Path := Trim(PageFolder.Values[0]);
   if Path = '' then
   begin
-    MsgBox('Choose the folder that holds your documents.', mbError, MB_OK);
+    MsgBox(CustomMessage('folderRequired'), mbError, MB_OK);
     Exit;
   end;
   if HasBadArgChar(Path) then
   begin
-    MsgBox('That folder name cannot contain a double quote.', mbError, MB_OK);
+    MsgBox(CustomMessage('quoteFolderError'), mbError, MB_OK);
     Exit;
   end;
   Path := RemoveBackslash(Path);
@@ -2923,8 +3359,8 @@ begin
     if Reason = '' then
       Reason := 'The folder cannot be used.';
     Log('folder page: ' + Path + ' refused: ' + Reason);
-    FolderReason.Caption := 'Cognita cannot use that folder: ' + Reason;
-    MsgBox('Cognita cannot use that folder.' + #13#10#13#10 + Reason, mbError, MB_OK);
+    FolderReason.Caption := CustomMessage('folderUnavailable') + ': ' + Reason;
+    MsgBox(CustomMessage('folderUnavailable') + #13#10#13#10 + Reason, mbError, MB_OK);
     Exit;
   end;
   Log('folder page: ' + Path + ' accepted');
@@ -2951,23 +3387,23 @@ begin
     AdminUser := Trim(PageAdmin.Values[0]);
     if AdminUser = '' then
     begin
-      MsgBox('Type a user name.', mbError, MB_OK);
+      MsgBox(CustomMessage('typeUsername'), mbError, MB_OK);
       Exit;
     end;
     if HasBadArgChar(AdminUser) then
     begin
-      MsgBox('The user name cannot contain a double quote or a control character.', mbError, MB_OK);
+      MsgBox(CustomMessage('badUsername'), mbError, MB_OK);
       Exit;
     end;
   end;
   if Pw = '' then
   begin
-    MsgBox('Type a password.', mbError, MB_OK);
+    MsgBox(CustomMessage('typePassword'), mbError, MB_OK);
     Exit;
   end;
   if (not RunsOverInstalled) and (Pw <> Pw2) then
   begin
-    MsgBox('The two passwords are not the same.', mbError, MB_OK);
+    MsgBox(CustomMessage('passwordMismatch'), mbError, MB_OK);
     Exit;
   end;
   AdminPassword := Pw;
@@ -3259,7 +3695,7 @@ begin
   DeleteData := False;
   Form := CreateCustomForm(ScaleX(460), ScaleY(230), False, False);
   try
-    Form.Caption := 'Remove Cognita';
+    Form.Caption := CustomMessage('removeTitle');
     Head := TNewStaticText.Create(Form);
     Head.Parent := Form;
     Head.Left := ScaleX(14);
@@ -3268,7 +3704,7 @@ begin
     Head.AutoSize := False;
     Head.WordWrap := True;
     Head.Height := ScaleY(36);
-    Head.Caption := 'Remove Cognita. Your documents are never touched.';
+    Head.Caption := CustomMessage('removeHead');
     { Design 19.11 R2: the two radio buttons (and their notes) sit in their OWN borderless panel. Directly
       on the form they were siblings of Continue and Cancel, so the arrow keys walked from a radio button
       to the buttons (and selected "Also delete" through the OnEnter handler). In a panel the arrows move
@@ -3287,7 +3723,7 @@ begin
     KeepRadio.Left := 0;
     KeepRadio.Top := 0;
     KeepRadio.Width := ScaleX(432);
-    KeepRadio.Caption := 'Keep Cognita''s data (recommended)';
+    KeepRadio.Caption := CustomMessage('keepData');
     KeepRadio.Checked := True;
     KeepRadio.OnEnter := @RadioEnter;
     KeepNote := TNewStaticText.Create(Form);
@@ -3298,7 +3734,7 @@ begin
     KeepNote.AutoSize := False;
     KeepNote.WordWrap := True;
     KeepNote.Height := ScaleY(32);
-    KeepNote.Caption := 'Installing Cognita again reuses your index, settings and credentials.';
+    KeepNote.Caption := CustomMessage('keepDataNote');
     DeleteRadio := TNewRadioButton.Create(Form);
     DeleteRadio.Parent := RadioPanel;
     DeleteRadio.Left := 0;
@@ -3306,10 +3742,10 @@ begin
     DeleteRadio.Width := ScaleX(432);
     Size := '';
     if StVhdBytes <> '' then
-      Size := FormatBytes(StrToInt64Def(StVhdBytes, 0)) + ' ';
+      Size := FormatBytes(StrToInt64Def(StVhdBytes, 0));
     { A radio button's caption does not wrap, so the size and the path go in the note below it,
       which does; with them in the caption the path ran off the dialog (P2, 2026-09-29). }
-    DeleteRadio.Caption := 'Also delete Cognita''s data: index, settings, credentials, Workspace';
+    DeleteRadio.Caption := CustomMessage('deleteData');
     DeleteRadio.OnEnter := @RadioEnter;
     DeleteNote := TNewStaticText.Create(Form);
     DeleteNote.Parent := RadioPanel;
@@ -3322,16 +3758,15 @@ begin
     if StVhdDir <> '' then
     begin
       if Size <> '' then
-        DeleteNote.Caption := 'That is ' + Size + 'in ' + StVhdDir + '. '
+        DeleteNote.Caption := FmtMessage(CustomMessage('deleteDataNoteSize'), [Size, StVhdDir])
       else
-        DeleteNote.Caption := 'It is in ' + StVhdDir + '. ';
-      DeleteNote.Caption := DeleteNote.Caption + 'This cannot be undone. Setup asks you to confirm.';
+        DeleteNote.Caption := FmtMessage(CustomMessage('deleteDataNotePath'), [StVhdDir]);
     end
     else
-      DeleteNote.Caption := 'This cannot be undone. Setup asks you to confirm.';
+      DeleteNote.Caption := CustomMessage('deleteDataNoteNoPath');
     OkButton := TNewButton.Create(Form);
     OkButton.Parent := Form;
-    OkButton.Caption := 'Continue';
+    OkButton.Caption := CustomMessage('continueButton');
     OkButton.Left := Form.ClientWidth - ScaleX(80 + 6 + 80 + 14);
     OkButton.Top := Form.ClientHeight - ScaleY(25 + 14);
     OkButton.Width := ScaleX(80);
@@ -3340,7 +3775,7 @@ begin
     OkButton.Default := True;
     CancelButton := TNewButton.Create(Form);
     CancelButton.Parent := Form;
-    CancelButton.Caption := 'Cancel';
+    CancelButton.Caption := CustomMessage('cancelButton');
     CancelButton.Left := Form.ClientWidth - ScaleX(80 + 14);
     CancelButton.Top := Form.ClientHeight - ScaleY(25 + 14);
     CancelButton.Width := ScaleX(80);
@@ -3383,7 +3818,7 @@ begin
   Result := False;
   Form := CreateCustomForm(ScaleX(480), ScaleY(300), False, False);
   try
-    Form.Caption := 'Delete Cognita''s data';
+    Form.Caption := CustomMessage('deleteConfirmTitle');
     Where := StVhdDir;
     if Where = '' then
       Where := ExpandConstant('{localappdata}\Cognita\wsl');
@@ -3395,12 +3830,11 @@ begin
     Head.AutoSize := False;
     Head.WordWrap := True;
     Head.Height := ScaleY(190);
-    Head.Caption := 'This permanently deletes:' + #13#10#13#10 +
-      '  - the Cognita Linux system and everything in it: the search index, settings, connector keys, ' +
-      'credentials and Workspace files (at ' + Where + ')' + #13#10 +
-      '  - Cognita''s Windows settings and logs (under %LOCALAPPDATA%\Cognita)' + #13#10#13#10 +
-      'Your documents are never touched. Setup copies the logs to a folder in %TEMP% first.' + #13#10#13#10 +
-      'To go ahead, type the word DELETE below.';
+    Head.Caption := CustomMessage('deleteConfirmStart') + #13#10#13#10 +
+      FmtMessage(CustomMessage('deleteConfirmLinux'), [Where]) + #13#10 +
+      FmtMessage(CustomMessage('deleteConfirmWindows'), [ExpandConstant('{localappdata}\Cognita')]) + #13#10#13#10 +
+      FmtMessage(CustomMessage('deleteConfirmDocuments'), [ExpandConstant('{tmp}')]) + #13#10#13#10 +
+      CustomMessage('deleteConfirmInstruction');
     DeleteConfirmEdit := TNewEdit.Create(Form);
     DeleteConfirmEdit.Parent := Form;
     DeleteConfirmEdit.Left := ScaleX(14);
@@ -3409,7 +3843,7 @@ begin
     DeleteConfirmEdit.OnChange := @DeleteConfirmChange;
     DeleteConfirmOk := TNewButton.Create(Form);
     DeleteConfirmOk.Parent := Form;
-    DeleteConfirmOk.Caption := 'Delete';
+    DeleteConfirmOk.Caption := CustomMessage('deleteButton');
     DeleteConfirmOk.Left := Form.ClientWidth - ScaleX(80 + 6 + 80 + 14);
     DeleteConfirmOk.Top := Form.ClientHeight - ScaleY(25 + 14);
     DeleteConfirmOk.Width := ScaleX(80);
@@ -3418,7 +3852,7 @@ begin
     DeleteConfirmOk.Enabled := False;
     CancelButton := TNewButton.Create(Form);
     CancelButton.Parent := Form;
-    CancelButton.Caption := 'Cancel';
+    CancelButton.Caption := CustomMessage('cancelButton');
     CancelButton.Left := Form.ClientWidth - ScaleX(80 + 14);
     CancelButton.Top := Form.ClientHeight - ScaleY(25 + 14);
     CancelButton.Width := ScaleX(80);

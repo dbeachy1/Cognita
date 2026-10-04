@@ -1,0 +1,40 @@
+{
+  "wsl.permission.warning": {
+    "title": "Turning on WSL",
+    "message": "Setup needs your permission once to turn on WSL.",
+    "fix": "Run Setup again when you are ready."
+  },
+  "wsl.update.failed": {
+    "title": "Updating WSL",
+    "message": "WSL could not be updated (exit code {exit_code}).",
+    "fix": "Run Setup again. If it keeps failing, choose Save diagnostics."
+  },
+  "setup.generic.failure": {
+    "title": "Cognita Setup could not finish this step",
+    "message": "English technical detail: {detail}",
+    "fix": "Choose Save diagnostics for support information."
+  },
+  "setup.generic.warning": {
+    "title": "Setup needs your attention",
+    "message": "English technical detail: {detail}",
+    "fix": "Review the details in Setup and choose Save diagnostics if needed."
+  },
+  "setup.acceleration.fallback_unavailable": {
+    "title": "Acceleration",
+    "message": "The requested {vendor} GPU is unavailable ({reason}), so Cognita will use the CPU.",
+    "fix": "Cognita can continue using the CPU.",
+    "reasons": {
+      "no_image": "this release has no matching GPU image",
+      "driver_unavailable": "Linux cannot see the NVIDIA driver",
+      "driver_too_old": "the NVIDIA driver is older than 580",
+      "runtime_unavailable": "Docker does not know the NVIDIA runtime",
+      "not_qualified": "the GPU did not qualify",
+      "saved_profile": "the saved GPU profile can no longer be honored"
+    }
+  },
+  "setup.acceleration.verification_failed": {
+    "title": "Acceleration",
+    "message": "The {vendor} GPU could not be verified. Cognita will use the CPU.",
+    "fix": "Cognita can continue using the CPU."
+  }
+}

@@ -162,7 +162,7 @@ Test-Case 'restart-for-wsl: RunOnce value, resume in settings, restart only with
     $r = Invoke-RestartForWslVerb -Opts $o.Opts
     Assert-Equal 'ok' $r.Status 'status'
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce|CognitaSetup'
-    Assert-Equal '"C:\Users\me\Downloads\Cognita-Setup-14.1.0-r1.exe" /resume' $script:Registry[$k] 'RunOnce value points at the downloaded Setup.exe'
+    Assert-Equal '"C:\Users\me\Downloads\Cognita-Setup-14.1.0-r1.exe" /LANG=english /resume' $script:Registry[$k] 'RunOnce preserves the English wizard language'
     Assert-Equal 'after-wsl' (Read-Settings).resume 'resume recorded before the restart'
     Assert-Equal 0 (Get-ExtCallsMatching 'shutdown').Count 'no restart without --now'
     Add-ExtRule 'shutdown\.exe' (New-ExtResult)
@@ -176,12 +176,27 @@ Test-Case 'restart-for-wsl: RunOnce value, resume in settings, restart only with
     Assert-Match (Get-LogText) 'restart-for-wsl: running shutdown.exe /r /t 0' 'the arguments are logged'
 }
 
+Test-Case 'restart-for-wsl: selected Brazilian Portuguese survives the WSL resume command' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'pt-BR'
+        Set-HelperLocale
+        $o = ConvertFrom-HelperArgs @('--setup-exe', 'C:\Setup.exe')
+        $r = Invoke-RestartForWslVerb -Opts $o.Opts
+        Assert-Equal 'ok' $r.Status 'status'
+        Assert-Equal '"C:\Setup.exe" /LANG=brazilianportuguese /resume' `
+            $script:Registry['HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce|CognitaSetup'] `
+            'Inno receives the same language when it resumes'
+        Assert-Equal 'after-wsl' (Read-Settings).resume 'the resume marker is retained'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
 Test-Case 'restart-for-wsl (design 19.11 R1): --now --after-pid starts a detached hidden powershell that waits for Setup''s PID, then runs shutdown /r /t 0; the helper itself never runs shutdown.exe' {
     $o = ConvertFrom-HelperArgs @('--setup-exe', 'C:\Setup.exe', '--now', '--after-pid', '4321')
     $r = Invoke-RestartForWslVerb -Opts $o.Opts
     Assert-Equal 'ok' $r.Status 'status'
     Assert-Equal 'after-wsl' (Read-Settings).resume 'resume still recorded before the waiter is started'
-    Assert-Equal '"C:\Setup.exe" /resume' $script:Registry['HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce|CognitaSetup'] 'RunOnce still written'
+    Assert-Equal '"C:\Setup.exe" /LANG=english /resume' $script:Registry['HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce|CognitaSetup'] 'RunOnce still written with selected language'
     Assert-Equal 0 (Get-ExtCallsMatching 'shutdown').Count 'the helper does not run shutdown.exe itself: Setup is still running and would refuse the restart'
     Assert-Equal 1 $script:Detached.Count 'exactly one detached process'
     $d = $script:Detached[0]

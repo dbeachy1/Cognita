@@ -1,0 +1,40 @@
+{
+  "wsl.permission.warning": {
+    "title": "Ativando o WSL",
+    "message": "A instalação precisa da sua permissão uma vez para ativar o WSL.",
+    "fix": "Execute a instalação novamente quando estiver pronto."
+  },
+  "wsl.update.failed": {
+    "title": "Atualizando o WSL",
+    "message": "Não foi possível atualizar o WSL (código de saída {exit_code}).",
+    "fix": "Execute a instalação novamente. Se o problema continuar, escolha Salvar diagnósticos."
+  },
+  "setup.generic.failure": {
+    "title": "A instalação do Cognita não conseguiu concluir esta etapa",
+    "message": "Detalhe técnico em inglês: {detail}",
+    "fix": "Escolha Salvar diagnósticos para obter informações de suporte."
+  },
+  "setup.generic.warning": {
+    "title": "A instalação precisa da sua atenção",
+    "message": "Detalhe técnico em inglês: {detail}",
+    "fix": "Verifique os detalhes da instalação e escolha Salvar diagnósticos se necessário."
+  },
+  "setup.acceleration.fallback_unavailable": {
+    "title": "Aceleração",
+    "message": "A GPU {vendor} solicitada não está disponível ({reason}), então o Cognita usará a CPU.",
+    "fix": "O Cognita pode continuar usando a CPU.",
+    "reasons": {
+      "no_image": "esta versão não inclui uma imagem de GPU compatível",
+      "driver_unavailable": "o Linux não consegue detectar o driver da NVIDIA",
+      "driver_too_old": "o driver da NVIDIA é anterior à versão 580",
+      "runtime_unavailable": "o Docker não reconhece o ambiente de execução da NVIDIA",
+      "not_qualified": "a GPU não passou pelas outras verificações",
+      "saved_profile": "não é mais possível usar o perfil de GPU salvo"
+    }
+  },
+  "setup.acceleration.verification_failed": {
+    "title": "Aceleração",
+    "message": "Não foi possível verificar a GPU {vendor}. O Cognita usará a CPU.",
+    "fix": "O Cognita pode continuar usando a CPU."
+  }
+}

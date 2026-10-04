@@ -65,6 +65,9 @@ $script:LogFile = $null
 $script:LogLines = New-Object System.Collections.ArrayList
 $script:LogCap = 20000
 $script:CurrentVerb = ''
+$script:SupportedLocales = @('en-US', 'es-ES', 'fr-FR', 'de-DE', 'it-IT', 'pt-BR')
+$script:Locale = 'en-US'
+$script:LocaleCatalog = $null
 # Real clock. Tests replace this object with a fake whose Now and Sleep are scriptblocks.
 $script:Clock = [pscustomobject]@{
     Now   = { [DateTime]::Now }
@@ -183,7 +186,8 @@ function ConvertTo-JsonString {
 }
 
 function Format-ProgressJson {
-    param([string]$Stage, [string]$Title, [string]$State, $BytesDone, $BytesTotal, [string]$Message, [string]$Fix)
+    param([string]$Stage, [string]$Title, [string]$State, $BytesDone, $BytesTotal, [string]$Message, [string]$Fix,
+        [string]$MessageId = '', $Values = $null)
     $parts = New-Object System.Collections.ArrayList
     [void]$parts.Add('"schema": 1')
     [void]$parts.Add('"time": ' + (ConvertTo-JsonString ((Get-ClockNow).ToString('yyyy-MM-ddTHH:mm:ss'))))
@@ -195,7 +199,112 @@ function Format-ProgressJson {
     if ($null -ne $BytesTotal) { [void]$parts.Add('"bytes_total": ' + [string][int64]$BytesTotal) }
     if ($Message) { [void]$parts.Add('"message": ' + (ConvertTo-JsonString $Message)) }
     if ($Fix) { [void]$parts.Add('"fix": ' + (ConvertTo-JsonString $Fix)) }
+    $presentationId = $MessageId
+    $presentationValues = $Values
+    if (-not $presentationId -and $State -eq 'failed') {
+        $presentationId = 'setup.generic.failure'
+        $presentationValues = @{ detail = $Message }
+    } elseif (-not $presentationId -and $State -eq 'warning') {
+        $presentationId = 'setup.generic.warning'
+        $presentationValues = @{ detail = $Message }
+    }
+    if ($presentationId) {
+        $localized = Get-LocalizedProgressText -Id $presentationId -Title $Title -Message $Message -Fix $Fix -Values $presentationValues
+        if ($localized.Title) { [void]$parts.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
+        if ($localized.Message) { [void]$parts.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
+        if ($localized.Fix) { [void]$parts.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+    }
     return ('{' + ($parts -join ', ') + '}')
+}
+
+function Set-HelperLocale {
+    $candidate = [string]$env:COGNITA_LANG
+    if ($script:SupportedLocales -ccontains $candidate) { $script:Locale = $candidate }
+    else { $script:Locale = 'en-US' }
+    $catalogName = 'windows-setup.{0}.json' -f $script:Locale
+    $path = Join-Path (Join-Path $script:HelperDir 'locales') $catalogName
+    if (-not (Test-Path -LiteralPath $path)) { $path = Join-Path $script:HelperDir $catalogName }
+    try {
+        $script:LocaleCatalog = (Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop) | ConvertFrom-Json
+    } catch {
+        $script:Locale = 'en-US'
+        $fallback = Join-Path (Join-Path $script:HelperDir 'locales') 'windows-setup.en-US.json'
+        if (-not (Test-Path -LiteralPath $fallback)) { $fallback = Join-Path $script:HelperDir 'windows-setup.en-US.json' }
+        try { $script:LocaleCatalog = (Get-Content -LiteralPath $fallback -Raw -Encoding UTF8 -ErrorAction Stop) | ConvertFrom-Json }
+        catch { $script:LocaleCatalog = $null; Write-Log ("locale catalog unavailable: {0}" -f $_.Exception.Message) }
+    }
+}
+
+function Get-LocalizedProgressText {
+    param([string]$Id, [string]$Title, [string]$Message, [string]$Fix, $Values = $null)
+    $entry = $null
+    if ($script:LocaleCatalog -and $script:LocaleCatalog.PSObject.Properties[$Id]) {
+        $entry = $script:LocaleCatalog.$Id
+    }
+    if (-not $entry -and $script:Locale -ne 'en-US') {
+        $fallbackPath = Join-Path (Join-Path $script:HelperDir 'locales') 'windows-setup.en-US.json'
+        if (-not (Test-Path -LiteralPath $fallbackPath)) { $fallbackPath = Join-Path $script:HelperDir 'windows-setup.en-US.json' }
+        try {
+            $fallbackCatalog = (Get-Content -LiteralPath $fallbackPath -Raw -Encoding UTF8 -ErrorAction Stop) | ConvertFrom-Json
+            if ($fallbackCatalog.PSObject.Properties[$Id]) { $entry = $fallbackCatalog.$Id }
+        } catch { Write-Log ("English locale fallback could not be read: {0}" -f $_.Exception.Message) }
+    }
+    if (-not $entry) { return @{ Title = $Title; Message = $Message; Fix = $Fix } }
+    $translated = @{ Title = [string]$entry.title; Message = [string]$entry.message; Fix = [string]$entry.fix }
+    if ($Values) {
+        $keys = if ($Values -is [System.Collections.IDictionary]) { @($Values.Keys) } else { @($Values.PSObject.Properties | ForEach-Object { $_.Name }) }
+        foreach ($key in $keys) {
+            $token = '{' + [string]$key + '}'
+            $value = if ($Values -is [System.Collections.IDictionary]) { $Values[$key] } else { $Values.$key }
+            if ($key -eq 'reason' -and $entry.PSObject.Properties['reasons'] -and $entry.reasons.PSObject.Properties[[string]$value]) {
+                $value = [string]$entry.reasons.([string]$value)
+            }
+            foreach ($field in @('Title', 'Message', 'Fix')) {
+                $translated[$field] = $translated[$field].Replace($token, [string]$value)
+            }
+        }
+    }
+    return $translated
+}
+
+function Test-SetupMessageId {
+    param([string]$Id)
+    if ($script:LocaleCatalog -and $script:LocaleCatalog.PSObject.Properties[$Id]) { return $true }
+    if ($script:Locale -eq 'en-US') { return $false }
+    $fallbackPath = Join-Path (Join-Path $script:HelperDir 'locales') 'windows-setup.en-US.json'
+    if (-not (Test-Path -LiteralPath $fallbackPath)) { $fallbackPath = Join-Path $script:HelperDir 'windows-setup.en-US.json' }
+    try {
+        $fallbackCatalog = (Get-Content -LiteralPath $fallbackPath -Raw -Encoding UTF8 -ErrorAction Stop) | ConvertFrom-Json
+        return [bool]$fallbackCatalog.PSObject.Properties[$Id]
+    } catch { return $false }
+}
+
+function Add-LocalizedRelayFields {
+    param([string]$JsonLine)
+    try { $o = $JsonLine | ConvertFrom-Json -ErrorAction Stop }
+    catch { return $JsonLine }
+    if ($o.PSObject.Properties['title_display'] -or $o.PSObject.Properties['message_display'] -or
+        $o.PSObject.Properties['fix_display']) { return $JsonLine }
+    $id = [string]$o.presentation_id
+    $values = $o.presentation_values
+    if (-not $id -and [string]$o.state -eq 'failed') {
+        $id = 'setup.generic.failure'
+        $values = @{ detail = [string]$o.message }
+    } elseif ($id -and -not (Test-SetupMessageId -Id $id) -and [string]$o.state -eq 'failed') {
+        $id = 'setup.generic.failure'
+        $values = @{ detail = [string]$o.message }
+    }
+    if (-not $id) { return $JsonLine }
+    $localized = Get-LocalizedProgressText -Id $id -Title ([string]$o.title) -Message ([string]$o.message) `
+        -Fix ([string]$o.fix) -Values $values
+    if (-not $localized.Title -and -not $localized.Message -and -not $localized.Fix) { return $JsonLine }
+    $extra = New-Object System.Collections.ArrayList
+    if ($localized.Title) { [void]$extra.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
+    if ($localized.Message) { [void]$extra.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
+    if ($localized.Fix) { [void]$extra.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+    if ($extra.Count -eq 0 -or -not $JsonLine.TrimEnd().EndsWith('}')) { return $JsonLine }
+    $trimmedLine = $JsonLine.TrimEnd()
+    return ($trimmedLine.Substring(0, $trimmedLine.Length - 1) + ', ' + ($extra -join ', ') + '}')
 }
 
 function Write-HumanProgress {
@@ -225,14 +334,16 @@ function Write-ProgressLine {
         $BytesDone = $null,
         $BytesTotal = $null,
         [string]$Message = '',
-        [string]$Fix = ''
+        [string]$Fix = '',
+        [string]$MessageId = '',
+        $Values = $null
     )
     Write-Log ("progress stage={0} state={1} title={2} message={3} fix={4}" -f $Stage, $State, $Title, $Message, $Fix)
     if ($script:HumanMode) {
         Write-HumanProgress -Title $Title -State $State -Message $Message -Fix $Fix
         return
     }
-    Write-Out (Format-ProgressJson -Stage $Stage -Title $Title -State $State -BytesDone $BytesDone -BytesTotal $BytesTotal -Message $Message -Fix $Fix)
+    Write-Out (Format-ProgressJson -Stage $Stage -Title $Title -State $State -BytesDone $BytesDone -BytesTotal $BytesTotal -Message $Message -Fix $Fix -MessageId $MessageId -Values $Values)
 }
 
 function Write-InfoLine {
@@ -255,7 +366,7 @@ function Write-RelayedLine {
         }
         return
     }
-    Write-Out $JsonLine
+    Write-Out (Add-LocalizedRelayFields -JsonLine $JsonLine)
 }
 
 function Format-ResultValue {
@@ -1763,10 +1874,10 @@ function Invoke-WslInstallVerb {
         $u = Invoke-External -FilePath (Get-WslExe) -Arguments @('--update') -TimeoutSec 900 -OnPoll $beat -PollIntervalMs 5000 -OwnConsole
         if ($u.ExitCode -ne 0) {
             if (Test-UacDeclined $u) {
-                Write-ProgressLine -Stage 'wsl' -Title 'Updating WSL' -State 'failed' -Message 'Setup needs your permission once to turn on WSL.' -Fix 'Run Setup again when you are ready.'
+                Write-ProgressLine -Stage 'wsl' -Title 'Updating WSL' -State 'failed' -Message 'Setup needs your permission once to turn on WSL.' -Fix 'Run Setup again when you are ready.' -MessageId 'wsl.permission.warning'
                 return (New-VerbResult 'failed' ([ordered]@{ wsl = 'old'; restart = 0; reason = 'uac-declined' }))
             }
-            Write-ProgressLine -Stage 'wsl' -Title 'Updating WSL' -State 'failed' -Message ('wsl --update failed (exit {0}).' -f $u.ExitCode) -Fix 'Run Setup again. If it keeps failing, use Save diagnostics.'
+            Write-ProgressLine -Stage 'wsl' -Title 'Updating WSL' -State 'failed' -Message ('wsl --update failed (exit {0}).' -f $u.ExitCode) -Fix 'Run Setup again. If it keeps failing, use Save diagnostics.' -MessageId 'wsl.update.failed' -Values @{ exit_code = $u.ExitCode }
             return (New-VerbResult 'failed' ([ordered]@{ wsl = 'old'; restart = 0; reason = 'update-failed' }))
         }
     } else {
@@ -1777,7 +1888,7 @@ function Invoke-WslInstallVerb {
         $i = Invoke-External -FilePath (Get-WslExe) -Arguments @('--install', '--no-distribution') -TimeoutSec 1800 -OnPoll $beat -PollIntervalMs 5000 -OwnConsole
         if ($i.ExitCode -ne 0) {
             if (Test-UacDeclined $i) {
-                Write-ProgressLine -Stage 'wsl' -Title 'Turning on WSL' -State 'failed' -Message 'Setup needs your permission once to turn on WSL.' -Fix 'Run Setup again when you are ready.'
+                Write-ProgressLine -Stage 'wsl' -Title 'Turning on WSL' -State 'failed' -Message 'Setup needs your permission once to turn on WSL.' -Fix 'Run Setup again when you are ready.' -MessageId 'wsl.permission.warning'
                 return (New-VerbResult 'failed' ([ordered]@{ wsl = 'missing'; restart = 0; reason = 'uac-declined' }))
             }
             # With its own console window the output is not captured, so a UAC "No" usually looks
@@ -1805,7 +1916,15 @@ function Invoke-RestartForWslVerb {
     $setup = [string](Get-Opt $Opts 'setup-exe' '')
     if ($setup) {
         # RunOnce points at the downloaded Setup.exe where the user ran it; no copy of 500 MB is kept.
-        $value = '"{0}" /resume' -f $setup
+        $localeName = switch ($script:Locale) {
+            'es-ES' { 'spanish' }
+            'fr-FR' { 'french' }
+            'de-DE' { 'german' }
+            'it-IT' { 'italian' }
+            'pt-BR' { 'brazilianportuguese' }
+            default { 'english' }
+        }
+        $value = '"{0}" /LANG={1} /resume' -f $setup, $localeName
         Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'CognitaSetup' -Value $value -Type 'String'
         Write-Log ("restart-for-wsl: RunOnce CognitaSetup = {0}" -f $value)
     } else {
@@ -4682,6 +4801,7 @@ function Invoke-HelperMain {
     $script:CurrentVerb = $verbName
     $script:HumanMode = ($verbName -eq 'cli')
     Start-HelperLog -VerbName $verbName
+    Set-HelperLocale
     Remove-OldHelperLogs
     # A person's terminal: show non-ASCII folder names properly, and the UTF-8 text that wsl.exe
     # writes (WSL_UTF8=1) when a forwarded command owns the console. Restored on the way out so the

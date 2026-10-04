@@ -24,6 +24,73 @@ Test-Case 'progress line: failed carries message and fix; no bytes keys when not
     Assert-False ($j -match 'bytes_') 'no bytes keys'
 }
 
+Test-Case 'Setup locale warning: display fields localize while diagnostic fields stay English' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'es-ES'
+        Set-HelperLocale
+        $j = Format-ProgressJson -Stage 'wsl' -Title 'Turning on WSL' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'Setup needs your permission once to turn on WSL.' -Fix 'Run Setup again when you are ready.' `
+            -MessageId 'wsl.permission.warning'
+        $o = $j | ConvertFrom-Json
+        Assert-Equal 'wsl' $o.stage 'machine stage stays stable'
+        Assert-Equal 'failed' $o.state 'machine result stays stable'
+        Assert-Equal 'Setup needs your permission once to turn on WSL.' $o.message 'English diagnostic message'
+        Assert-Equal 'Run Setup again when you are ready.' $o.fix 'English diagnostic fix'
+        Assert-Equal ('"El programa de instalaci\u00f3n necesita su permiso una vez para activar WSL."' | ConvertFrom-Json) $o.message_display 'Spanish presentation'
+        Assert-Equal ('"Vuelva a ejecutar el programa de instalaci\u00f3n cuando est\u00e9 listo."' | ConvertFrom-Json) $o.fix_display 'Spanish recovery guidance'
+
+        $j = Format-ProgressJson -Stage 'wsl' -Title 'Updating WSL' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'wsl --update failed (exit 5).' -Fix 'Run Setup again. If it keeps failing, use Save diagnostics.' `
+            -MessageId 'wsl.update.failed' -Values @{ exit_code = 5 }
+        $o = $j | ConvertFrom-Json
+        Assert-Equal 'wsl' $o.stage 'second machine stage stays stable'
+        Assert-Equal 'wsl --update failed (exit 5).' $o.message 'second English diagnostic message'
+        Assert-Equal ('"No se pudo actualizar WSL (c\u00f3digo de salida 5)."' | ConvertFrom-Json) $o.message_display 'distinct same-stage Spanish failure'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'Setup relay: two acceleration outcomes share a stage but use distinct localized IDs' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'es-ES'
+        Set-HelperLocale
+        Write-RelayedLine '{"schema":1,"stage":"acceleration","state":"warning","title":"Acceleration","message":"The requested NVIDIA GPU is unavailable (the NVIDIA driver is older than 580), so Cognita will use the CPU.","fix":"Run Setup again later.","presentation_id":"setup.acceleration.fallback_unavailable","presentation_values":{"vendor":"NVIDIA","reason":"driver_too_old"}}'
+        Write-RelayedLine '{"schema":1,"stage":"acceleration","state":"failed","title":"Acceleration","message":"The NVIDIA GPU could not be verified. Cognita will use the CPU.","fix":"Run Setup again later.","presentation_id":"setup.acceleration.verification_failed","presentation_values":{"vendor":"NVIDIA"}}'
+        $p = Get-ProgressObjects
+        Assert-Equal 'acceleration' $p[0].stage 'stage stays stable'
+        Assert-Equal 'The requested NVIDIA GPU is unavailable (the NVIDIA driver is older than 580), so Cognita will use the CPU.' $p[0].message 'English diagnostic message remains intact'
+        Assert-Equal ('"La GPU NVIDIA solicitada no est\u00e1 disponible (el controlador NVIDIA es anterior a la versi\u00f3n 580), as\u00ed que Cognita usar\u00e1 la CPU."' | ConvertFrom-Json) $p[0].message_display 'reason enum is localized'
+        Assert-Equal ('"No se pudo verificar la GPU NVIDIA. Cognita usar\u00e1 la CPU."' | ConvertFrom-Json) $p[1].message_display 'same stage uses the second message ID'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'Setup relay: unknown failure gets a localized summary and an English technical detail' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'fr-FR'
+        Set-HelperLocale
+        Write-RelayedLine '{"schema":1,"stage":"folder","state":"failed","title":"Projects folder","message":"mount failed (exit 7)","fix":"Run Setup again."}'
+        $p = (Get-ProgressObjects)[0]
+        Assert-Equal 'mount failed (exit 7)' $p.message 'diagnostic detail remains English'
+        Assert-Equal ('"D\u00e9tail technique en anglais : mount failed (exit 7)"' | ConvertFrom-Json) $p.message_display 'localized generic failure includes labeled detail'
+        Assert-Match $p.title_display 'pas pu terminer cette .tape' 'localized summary'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'unsupported Setup locale falls back to English' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'pt-PT'
+        Set-HelperLocale
+        Assert-Equal 'en-US' $script:Locale 'unsupported locale is rejected'
+        $j = Format-ProgressJson -Stage 'wsl' -Title 'Turning on WSL' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'English source message' -Fix 'English source fix' -MessageId 'wsl.permission.warning'
+        $o = $j | ConvertFrom-Json
+        Assert-Equal 'Setup needs your permission once to turn on WSL.' $o.message_display 'fallback presentation is English'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
 Test-Case 'JSON escaping: quote, backslash, apostrophe stay readable, control chars escaped, non-ASCII raw' {
     $e = Get-Utf8 0xE9, 0x20AC
     $j = Format-ProgressJson -Stage 's' -Title "it's" -State 'warning' -BytesDone $null -BytesTotal $null -Message ("a`"b\c`nline2 $e") -Fix ''

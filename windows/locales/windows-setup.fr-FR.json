@@ -1,0 +1,40 @@
+{
+  "wsl.permission.warning": {
+    "title": "Activation de WSL",
+    "message": "Le programme d’installation a besoin de votre autorisation une seule fois pour activer WSL.",
+    "fix": "Relancez le programme d’installation lorsque vous êtes prêt."
+  },
+  "wsl.update.failed": {
+    "title": "Mise à jour de WSL",
+    "message": "Impossible de mettre WSL à jour (code de sortie {exit_code}).",
+    "fix": "Relancez le programme d’installation. Si le problème persiste, choisissez Enregistrer les diagnostics."
+  },
+  "setup.generic.failure": {
+    "title": "Le programme d’installation de Cognita n’a pas pu terminer cette étape",
+    "message": "Détail technique en anglais : {detail}",
+    "fix": "Choisissez Enregistrer les diagnostics pour obtenir des informations d’assistance."
+  },
+  "setup.generic.warning": {
+    "title": "Le programme d’installation nécessite votre attention",
+    "message": "Détail technique en anglais : {detail}",
+    "fix": "Consultez les détails du programme d’installation et choisissez Enregistrer les diagnostics si nécessaire."
+  },
+  "setup.acceleration.fallback_unavailable": {
+    "title": "Accélération",
+    "message": "Le GPU {vendor} demandé n’est pas disponible ({reason}) ; Cognita utilisera donc le processeur.",
+    "fix": "Cognita peut continuer à utiliser le processeur.",
+    "reasons": {
+      "no_image": "cette version ne contient aucune image GPU compatible",
+      "driver_unavailable": "Linux ne détecte pas le pilote NVIDIA",
+      "driver_too_old": "le pilote NVIDIA est antérieur à la version 580",
+      "runtime_unavailable": "Docker ne reconnaît pas l’environnement d’exécution NVIDIA",
+      "not_qualified": "le GPU n’a pas satisfait aux autres vérifications",
+      "saved_profile": "le profil GPU enregistré ne peut plus être utilisé"
+    }
+  },
+  "setup.acceleration.verification_failed": {
+    "title": "Accélération",
+    "message": "Le GPU {vendor} n’a pas pu être vérifié. Cognita utilisera le processeur.",
+    "fix": "Cognita peut continuer à utiliser le processeur."
+  }
+}
