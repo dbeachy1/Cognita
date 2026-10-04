@@ -135,9 +135,8 @@ class Target:
     project: str
     mcp_port: int
     admin_port: int
-    # The real connector the live self-test authenticates against: the same one
-    # claude.ai uses, because that is where the Self-Test project lives
-    # (section 7.3).  Both 12.x instances serve it under the slug `cognita`.
+    # Enabled combined connector used by live QA. The install proof supplies
+    # its temporary connector directly; later local QA names an installed one.
     connector: str
     # DESIGN-LINUX-INSTALLER 5.1.  None means "the module's RELEASES_ROOT",
     # which is what every table target uses and is looked up at CALL time (the
@@ -276,12 +275,26 @@ def resolve_target(name: str) -> Target:
         project="cognita",
         mcp_port=_env_port(values, "COGNITA_MCP_HOST_PORT", env_file),
         admin_port=_env_port(values, "COGNITA_ADMIN_HOST_PORT", env_file),
-        # The proof's own connector (design 7.5 step 3, final review finding 2): a name
-        # only the proof writes, so a table target's `self-test` connector is never the
-        # one qa_release authenticates against on an adopted machine.
+        # The installer proof supplies this temporary connector to qa_release.
+        # The public qa/deploy CLI requires --connector on an installed local target
+        # because the proof deletes it after the install check.
         connector="install-proof",
         releases_root=Path(releases),
     )
+
+
+def with_qa_connector(target: Target, slug: str | None) -> Target:
+    """Use an installed connector for live QA after install proof cleans up its own."""
+    if slug is None:
+        if target.name == LOCAL_TARGET:
+            raise ReleaseError(
+                "usage", "local live QA requires --connector with an enabled combined "
+                "connector that can write to the Self-Test project",
+            )
+        return target
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+        raise ReleaseError("usage", f"invalid QA connector slug: {slug!r}")
+    return dataclasses.replace(target, connector=slug)
 
 
 def staging_mode(target: Target, log: Log) -> str:
@@ -3757,6 +3770,10 @@ def cmd_publish(args, target: Target, log: Log) -> None:
 
 
 def cmd_deploy(args, target: Target, log: Log) -> None:
+    if args.connector and not args.test:
+        raise ReleaseError("usage", "--connector requires --test")
+    if args.test:
+        target = with_qa_connector(target, args.connector)
     repo = REPO_ROOT
     commit = require_clean_checkout(repo, log)
     version = read_version(repo, log)
@@ -3883,6 +3900,7 @@ def cmd_status(args, target: Target, log: Log) -> None:
 
 def cmd_qa(args, target: Target, log: Log) -> None:
     """QA on the running release: the live self-test, in test mode, then back."""
+    target = with_qa_connector(target, args.connector)
     repo = REPO_ROOT
     with target_lock(target_root(target) / ".lock", log):
         current = current_link(target)
@@ -3960,11 +3978,13 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = with_target(subparsers.add_parser("deploy"))
     deploy.add_argument("--test", action="store_true",
                         help="run the full suite before applying and the live self-test (QA) after")
+    deploy.add_argument("--connector", help="installed combined connector for live QA (required with --test on local)")
     deploy.add_argument("--profile", choices=PROFILES, default="amd")
     deploy.add_argument("--mode", choices=("core", "full"), default="full")
     deploy.add_argument("--images", type=Path)
     deploy.add_argument("--no-build", action="store_true")
-    with_target(subparsers.add_parser("qa"))
+    qa = with_target(subparsers.add_parser("qa"))
+    qa.add_argument("--connector", help="installed combined connector for live QA (required on local)")
     test = with_target(subparsers.add_parser("test"))
     test.add_argument("--profile", choices=PROFILES)
     test.add_argument("--mode", choices=("core", "full"), default="full")

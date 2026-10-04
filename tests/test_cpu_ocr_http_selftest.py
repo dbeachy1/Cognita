@@ -19,6 +19,13 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+def test_mcp_client_reports_http_rejection_before_json_parsing():
+    response = httpx.Response(401, text="Authorization required",
+                              request=httpx.Request("POST", "http://test.invalid/mcp"))
+    with pytest.raises(httpx.HTTPStatusError, match="401"):
+        runner.McpClient._payload(response)
+
+
 class Client:
     project = "Self-Test"
 

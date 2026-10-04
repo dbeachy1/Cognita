@@ -243,6 +243,18 @@ def test_parser_accepts_local_and_publish():
         parser.parse_args(["status", "--target", "elsewhere"])
 
 
+def test_live_qa_can_use_an_installed_connector(local):
+    parser = release.build_parser()
+    assert parser.parse_args(["qa", "--target", "local", "--connector", "cognita-st"]).connector == "cognita-st"
+    assert parser.parse_args(["deploy", "--target", "local", "--test", "--connector", "cognita-st"]).connector == "cognita-st"
+    assert release.with_qa_connector(local, "cognita-st").connector == "cognita-st"
+    assert local.connector == "install-proof"
+    with pytest.raises(release.ReleaseError, match="local live QA requires --connector"):
+        release.with_qa_connector(local, None)
+    with pytest.raises(release.ReleaseError, match="invalid QA connector slug"):
+        release.with_qa_connector(local, "../other")
+
+
 # --------------------------------------------------------------------------
 # 5.2 the mode comes from the release
 # --------------------------------------------------------------------------

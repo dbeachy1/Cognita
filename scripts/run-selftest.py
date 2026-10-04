@@ -73,6 +73,7 @@ class McpClient:
 
     @staticmethod
     def _payload(r: httpx.Response) -> dict:
+        r.raise_for_status()
         body = r.text
         if r.headers.get("content-type", "").startswith("text/event-stream"):
             for line in body.splitlines():  # last data: frame wins
