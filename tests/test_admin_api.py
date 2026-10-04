@@ -285,11 +285,13 @@ async def test_documents_path_info_does_not_expose_nested_name_on_scan_failure(
     ("documents_dir", "presentation_id"),
     [
         ("relative/folder", "admin.folder.invalid"),
-        ("B:/nope/does-not-exist", "admin.folder.missing"),
+        (None, "admin.folder.missing"),
     ],
 )
-async def test_documents_path_info_rejects_invalid_path(ctx, documents_dir, presentation_id):
+async def test_documents_path_info_rejects_invalid_path(ctx, tmp_path, documents_dir, presentation_id):
     app, *_ = ctx
+    if documents_dir is None:
+        documents_dir = str(tmp_path / "does-not-exist")
     async with await _client(app) as c:
         r = await c.post("/api/projects/path-info", json={"documents_dir": documents_dir})
     assert r.status_code == 400
