@@ -78,7 +78,7 @@ async def test_admin_javascript_wires_authentication_policy(app):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         js = (await c.get("/static/app.js")).text
     assert 'api("/api/authentication"' in js
-    assert "Save and lock out clients" in js
+    assert 't("admin.authentication.lockout.save")' in js
     assert "global-generate" in js
 
 

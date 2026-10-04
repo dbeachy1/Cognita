@@ -2300,20 +2300,23 @@ async function reloadAuth() { await refreshAdminMutation("authentication:key-gen
 
 async function changeStaticKey(scope, name, action) {
   const key = name || "__global__";
-  if (authDirty(name)) { await uiNotice({ title: "OAuth change is unsaved", body: "Save or undo the OAuth change before changing this key." }); return; }
+  if (authDirty(name)) { await uiNotice({ title: t("admin.authentication.unsaved.title"), body: t("admin.authentication.unsaved.body") }); return; }
   const current = scope === "global" ? authState.global.static_key : authState.projects.find((p) => p.name === name)?.static_key_override;
   if (action === "revoke") {
     const inherited = scope === "project" && authState.global.static_key
-      ? " The project will inherit the global key." : "";
+      ? t("admin.authentication.inheritance_note") : "";
     const result = await uiConfirm({
-      title: scope === "global" ? "Revoke global key?" : "Revoke project key for " + name + "?",
-      body: "This immediately removes the stored " + scope + " key." + inherited,
-      confirmLabel: scope === "global" ? "Revoke global key" : "Revoke project key",
+      title: scope === "global" ? t("admin.authentication.revoke_global.title") : t("admin.authentication.revoke_project.title", { project: name }),
+      body: scope === "global" ? t("admin.authentication.revoke_global.body") : t("admin.authentication.revoke_project.body", { inheritance: inherited }),
+      confirmLabel: t(scope === "global" ? "admin.authentication.revoke_global" : "admin.authentication.revoke_project"),
       danger: true,
     });
     if (!result.ok) return;
   }
-  if (action === "generate" && current) { const result = await uiConfirm({ title: "Replace static key?", body: `Generating a new ${scope === "global" ? "global" : `project (${name})`} key immediately revokes the existing key. Continue?`, confirmLabel: "Generate New", danger: true }); if (!result.ok) return; }
+  if (action === "generate" && current) {
+    const result = await uiConfirm({ title: t("admin.authentication.replace.title"), body: t("admin.authentication.replace.body", { scope: t(scope === "global" ? "admin.authentication.scope.global" : "admin.authentication.scope.project") + (scope === "project" ? ` (${name})` : "") }), confirmLabel: t("admin.authentication.generate_new"), danger: true });
+    if (!result.ok) return;
+  }
   authState.busy.add(key); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings });
   try {
     const path = scope === "global" ? "/api/authentication/global/static-key/" : `/api/authentication/projects/${encodeURIComponent(name)}/static-key/`;
@@ -2323,10 +2326,10 @@ async function changeStaticKey(scope, name, action) {
     if (action === "generate") { authState.revision = result.revision; authState.global = result.authentication.global; authState.projects = result.authentication.projects; authState.warnings = result.authentication.warnings || {}; renderAuthentication(result.authentication); showAuthKey(result.generated_key, scope, name); }
     else if (action === "revoke") { authState.drafts.delete(name || "__global__"); await refreshAdminMutation("authentication:key-revoke"); }
   } catch (err) {
-    if (err.reason === "lockout_confirmation_required") { const warning = err.payload || {}; const confirm = await uiConfirm({ title: "Lock out clients?", body: `Revoking this key leaves these projects without authentication: ${(warning.affected_projects || []).join(", ")}. Continue?`, confirmLabel: "Revoke key", danger: true }); if (confirm.ok) { try { const path = scope === "global" ? "/api/authentication/global/static-key/revoke" : `/api/authentication/projects/${encodeURIComponent(name)}/static-key/revoke`; await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision, confirm_lockout: true }) }); await refreshAdminMutation("authentication:key-revoke"); } catch (retryErr) { await uiNotice({ title: "Key revocation failed", body: retryErr.message }); } } }
-    else if (err.reason === "revision_conflict" || err.status === 409) { await loadAuthentication(); await uiNotice({ title: "Authentication changed elsewhere", body: "The current policy was reloaded. Review it before changing the key again." }); }
-    else if (!err.status) { await loadAuthentication(); await uiNotice({ title: "Key result is uncertain", body: "The key may have been replaced, but its value was not received. Generate a new key to obtain a usable value." }); }
-    else await uiNotice({ title: "Key change failed", body: err.message });
+    if (err.reason === "lockout_confirmation_required") { const warning = err.payload || {}; const confirm = await uiConfirm({ title: t("admin.authentication.lockout.title"), body: t("admin.authentication.lockout.revoke.body", { projects: (warning.affected_projects || []).join(", ") }), confirmLabel: t("admin.authentication.lockout.revoke"), danger: true }); if (confirm.ok) { try { const path = scope === "global" ? "/api/authentication/global/static-key/revoke" : `/api/authentication/projects/${encodeURIComponent(name)}/static-key/revoke`; await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision, confirm_lockout: true }) }); await refreshAdminMutation("authentication:key-revoke"); } catch (retryErr) { await uiNotice({ title: t("admin.authentication.key_revocation_failed"), body: retryErr.message }); } } }
+    else if (err.reason === "revision_conflict" || err.status === 409) { await loadAuthentication(); await uiNotice({ title: t("admin.authentication.changed_elsewhere.title"), body: t("admin.authentication.changed_elsewhere.body") }); }
+    else if (!err.status) { await loadAuthentication(); await uiNotice({ title: t("admin.authentication.key_uncertain.title"), body: t("admin.authentication.key_uncertain.body") }); }
+    else await uiNotice({ title: t("admin.authentication.key_change_failed"), body: err.message });
   } finally { authState.busy.delete(key); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); }
 }
 
@@ -2337,10 +2340,10 @@ async function saveAuthentication(scope, name = null) {
   try {
     const previewBody = { ...payload, scope: isGlobal ? "global" : "project" }; if (!isGlobal) previewBody.project = name;
     const preview = await api("/api/authentication/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(previewBody) });
-    if (preview.would_lock_out) { const result = await uiConfirm({ title: "Lock out clients?", body: `This save leaves these projects without OAuth or a static key: ${(preview.affected_projects || []).join(", ")}.`, confirmLabel: "Save and lock out clients", danger: true }); if (!result.ok) return; payload.confirm_lockout = true; }
+    if (preview.would_lock_out) { const result = await uiConfirm({ title: t("admin.authentication.lockout.title"), body: t("admin.authentication.lockout.save.body", { projects: (preview.affected_projects || []).join(", ") }), confirmLabel: t("admin.authentication.lockout.save"), danger: true }); if (!result.ok) return; payload.confirm_lockout = true; }
     const path = isGlobal ? "/api/authentication/global" : `/api/authentication/projects/${encodeURIComponent(name)}`;
     await api(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); authState.drafts.delete(name || "__global__"); await refreshAdminMutation("authentication:save");
-  } catch (err) { if (err.reason === "revision_conflict" || err.status === 409) { authState.drafts.delete(name || "__global__"); await loadAuthentication(); } await uiNotice({ title: "Authentication policy change failed", body: err.message }); }
+  } catch (err) { if (err.reason === "revision_conflict" || err.status === 409) { authState.drafts.delete(name || "__global__"); await loadAuthentication(); } await uiNotice({ title: t("admin.authentication.policy_change_failed"), body: err.message }); }
 }
 
 $("#authentication-card").addEventListener("toggle", (event) => { const details = event.target.closest("details[data-auth-project]"); if (details) { if (details.open) authState.expanded.add(details.dataset.authProject); else authState.expanded.delete(details.dataset.authProject); } }, true);
@@ -2348,7 +2351,7 @@ $("#authentication-card").addEventListener("click", async (event) => {
   const summary = event.target.closest("summary"); const details = summary && summary.closest("details[data-auth-project]");
   if (!details || !details.open || !authDirty(details.dataset.authProject)) return;
   event.preventDefault();
-  const result = await uiConfirm({ title: "Discard unsaved OAuth changes?", body: "This section has an unsaved OAuth selection.", confirmLabel: "Discard and collapse", danger: true });
+  const result = await uiConfirm({ title: t("admin.authentication.discard.title"), body: t("admin.authentication.discard.body"), confirmLabel: t("admin.authentication.discard.confirm"), danger: true });
   if (result.ok) { authState.drafts.delete(details.dataset.authProject); details.open = false; }
 });
 $("#authentication-card").addEventListener("click", async (event) => {
@@ -2537,9 +2540,9 @@ $("#gpu-verify").addEventListener("click", async () => {
 });
 $("#authentication-search").addEventListener("input", (event) => { authState.search = event.target.value; renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
 $("#authentication-expand-all").addEventListener("click", () => { authState.projects.forEach((p) => authState.expanded.add(p.name)); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
-$("#authentication-collapse-all").addEventListener("click", async () => { const dirty = [...authState.drafts.keys()].filter((n) => n !== "__global__"); if (dirty.length || authDirty()) { const result = await uiConfirm({ title: "Discard unsaved OAuth changes?", body: "Collapse all would discard unsaved OAuth selections.", confirmLabel: "Discard and collapse", danger: true }); if (!result.ok) return; authState.drafts.clear(); } authState.expanded.clear(); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
-$("#authentication-repair").addEventListener("click", async (event) => { const button = event.target.closest("[data-auth-repair]"); if (!button) return; try { await api(`/api/authentication/orphans/${encodeURIComponent(button.dataset.authRepair)}/repair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision }) }); await refreshAdminMutation("authentication:orphan-repair"); } catch (err) { await uiNotice({ title: "Repair failed", body: err.message }); } });
-$("#copy-auth-key").addEventListener("click", async (event) => { const ok = await copyText(authState.oneTimeKey, event.target); $("#key-dialog-status").textContent = ok ? "Key copied." : "Copy failed; select the key manually."; });
+$("#authentication-collapse-all").addEventListener("click", async () => { const dirty = [...authState.drafts.keys()].filter((n) => n !== "__global__"); if (dirty.length || authDirty()) { const result = await uiConfirm({ title: t("admin.authentication.discard.title"), body: t("admin.authentication.discard.collapse_body"), confirmLabel: t("admin.authentication.discard.confirm"), danger: true }); if (!result.ok) return; authState.drafts.clear(); } authState.expanded.clear(); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
+$("#authentication-repair").addEventListener("click", async (event) => { const button = event.target.closest("[data-auth-repair]"); if (!button) return; try { await api(`/api/authentication/orphans/${encodeURIComponent(button.dataset.authRepair)}/repair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: authState.revision }) }); await refreshAdminMutation("authentication:orphan-repair"); } catch (err) { await uiNotice({ title: t("admin.authentication.repair_failed"), body: err.message }); } });
+$("#copy-auth-key").addEventListener("click", async (event) => { const ok = await copyText(authState.oneTimeKey, event.target); $("#key-dialog-status").textContent = t(ok ? "admin.action.copied" : "admin.action.copy_failed"); });
 $("#auth-key-done").addEventListener("click", () => $("#key-dialog").close());
 $("#key-dialog").addEventListener("close", () => { clearAuthKey(); if (authState.invokingControl) { authState.invokingControl.focus(); authState.invokingControl = null; } });
 window.addEventListener("beforeunload", clearAuthKey);
