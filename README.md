@@ -259,3 +259,9 @@ when it is not available.
 Cognita is licensed under the [Apache License 2.0](LICENSE). The third-party components and
 models it uses, and their licenses, are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Languages
+
+Cognita's Windows installer and web UI (Admin and OAuth) support U.S. English,
+Spanish, French, German, Italian, and Brazilian Portuguese. Diagnostic logging
+and console scripts remain in English.

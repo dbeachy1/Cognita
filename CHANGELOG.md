@@ -1,5 +1,14 @@
 # Changelog
 
+## 15.3.0 — Localized operator UI and simpler Windows upgrades (2026-10-04)
+
+- Windows Setup, Admin, and OAuth user interfaces support U.S. English, Spanish, French,
+  German, Italian, and Brazilian Portuguese. Logs, diagnostics, and console scripts remain
+  in English.
+- Windows Setup shows the Cognita icon, names the installed and incoming versions during an
+  upgrade, and asks for the current Admin password once. Password changes use `cognita password`.
+- MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.3.0.md`.
+
 ## 15.2.0 — Quieter GPU health checks and Windows password confirmation (2026-10-04)
 
 - Repeated GPU profile, probe-choice, and VRAM-ceiling DEBUG messages no longer fill logs during
