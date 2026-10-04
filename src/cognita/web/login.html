@@ -77,9 +77,13 @@
         let detail;
         let responseData = null;
         try { responseData = await res.json(); } catch { /* no body */ }
-        if (res.status === 401) detail = locale.t("admin.login.invalid_credentials");
-        else if (res.status === 429) detail = locale.t("admin.login.too_many_attempts");
-        else {
+        if (responseData && typeof responseData.presentation_id === "string") {
+          try { detail = locale.t(responseData.presentation_id, responseData.presentation_values || {}); }
+          catch { /* unknown/malformed presentation fields use the stable status fallback */ }
+        }
+        if (detail === undefined && res.status === 401) detail = locale.t("admin.login.invalid_credentials");
+        else if (detail === undefined && res.status === 429) detail = locale.t("admin.login.too_many_attempts_generic");
+        else if (detail === undefined) {
           const technical = responseData && responseData.detail;
           detail = locale.t("admin.action.failed") + (typeof technical === "string"
             ? `\n\n${locale.t("admin.technical_detail")}: ${technical}` : "");

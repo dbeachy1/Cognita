@@ -25,6 +25,7 @@ from cognita.admin_auth import (
     read_session_user,
 )
 from cognita.config import CognitaConfig, load_config
+from cognita.localization import translate
 from cognita.registry import Registry
 from cognita.tokens import hash_token
 
@@ -142,7 +143,9 @@ async def test_login_page_follows_system_theme_until_one_is_picked(tmp_path):
         picked = await c.get("/")
     assert "Sign in" in first.text
     assert "data-theme" not in first.text.split("<head>", 1)[0]
-    assert '<html lang="en-US" data-theme="dark">' in picked.text
+    head = picked.text.split("<head>", 1)[0]
+    assert 'lang="en-US"' in head
+    assert 'data-theme="dark"' in head
 
 
 async def test_login_wrong_password_denied(tmp_path):
@@ -153,6 +156,30 @@ async def test_login_wrong_password_denied(tmp_path):
         assert r.json()["detail"] == "Invalid username or password"
         assert r.json()["presentation_id"] == "admin.login.invalid_credentials"
         assert (await c.get("/api/projects")).status_code == 401  # no cookie granted
+
+
+async def test_login_page_localizes_server_presentation_metadata(tmp_path):
+    import cognita.admin_api as admin_mod
+
+    admin_mod._login_failures.clear()
+    app = _app(_config(tmp_path, admin_password_sha256=hash_token(PW)))
+    async with await _client(app) as c:
+        page = await c.get("/")
+        assert 'locale.t(responseData.presentation_id, responseData.presentation_values || {})' in page.text
+        invalid = await c.post("/api/login", json={"username": "admin", "password": "wrong"})
+        invalid_data = invalid.json()
+        assert invalid.status_code == 401
+        assert translate("es-ES", invalid_data["presentation_id"]) == "El usuario o la contraseña no son válidos"
+        for _ in range(admin_mod.LOGIN_MAX_FAILURES - 1):
+            await c.post("/api/login", json={"username": "admin", "password": "wrong"})
+        locked = await c.post("/api/login", json={"username": "admin", "password": "wrong"})
+        locked_data = locked.json()
+        assert locked.status_code == 429
+        assert locked_data["presentation_id"] == "admin.login.too_many_attempts"
+        retry_after = int(locked.headers["Retry-After"])
+        translated = translate("pt-BR", locked_data["presentation_id"], locked_data["presentation_values"])
+        assert f"{retry_after} segundos" in translated
+    admin_mod._login_failures.clear()
 
 
 async def test_login_wrong_username_denied(tmp_path):

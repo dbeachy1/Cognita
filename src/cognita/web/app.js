@@ -2214,12 +2214,12 @@ $("#refresh-btn").addEventListener("click", loadProjects);
 // state are the only local state and never contain credentials.
 const authState = { revision: 0, global: null, projects: [], warnings: {}, drafts: new Map(), expanded: new Set(), search: "", oneTimeKey: "", invokingControl: null, busy: new Set() };
 
-function authKeyLabel(record) { return record && record.configured ? `Configured •••• (${record.key_id}, ${when(record.created_at)})` : "None"; }
+function authKeyLabel(record) { return record && record.configured ? t("admin.authentication.key_configured", { key_id: record.key_id, created: when(record.created_at) }) : t("admin.authentication.key_none"); }
 function authStatusLabel(project) {
-  if (project.effective_oauth_enabled && project.effective_static_key_id) return "OAuth + static key";
-  if (project.effective_oauth_enabled) return "OAuth only";
-  if (project.effective_static_key_id) return "Static key only";
-  return "None";
+  if (project.effective_oauth_enabled && project.effective_static_key_id) return t("admin.authentication.oauth_plus_key");
+  if (project.effective_oauth_enabled) return t("admin.authentication.oauth_only");
+  if (project.effective_static_key_id) return t("admin.authentication.key_only");
+  return t("admin.authentication.key_none");
 }
 function projectDraft(name, project) {
   const existing = authState.drafts.get(name);
@@ -2232,10 +2232,10 @@ function globalDraft() {
 }
 function authDirty(name = null) { return authState.drafts.has(name || "__global__"); }
 function projectSummary(project) {
-  const oauth = project.effective_oauth_enabled ? "Enabled" : "Disabled";
-  const inherited = project.oauth_mode === "inherit" ? "Inherited" : "Override";
-  const key = project.effective_static_key_source === "project" ? "Project key" : project.effective_static_key_source === "global" ? "Inherited global key" : "None";
-  return `${oauth} (${inherited}) · ${key} · ${authStatusLabel(project)}${project.locked_out ? " · Locked out" : ""}`;
+  const oauth = t(project.effective_oauth_enabled ? "admin.authentication.oauth_enabled" : "admin.authentication.oauth_disabled");
+  const inherited = t(project.oauth_mode === "inherit" ? "admin.authentication.inherited" : "admin.authentication.override");
+  const key = t(project.effective_static_key_source === "project" ? "admin.authentication.project_key" : project.effective_static_key_source === "global" ? "admin.authentication.inherited_global_key" : "admin.authentication.key_none");
+  return `${oauth} (${inherited}) · ${key} · ${authStatusLabel(project)}${project.locked_out ? " · " + t("admin.authentication.locked_out") : ""}`;
 }
 
 function renderAuthentication(data, reset = false) {
@@ -2247,20 +2247,20 @@ function renderAuthentication(data, reset = false) {
   const names = new Set(authState.projects.map((p) => p.name));
   for (const name of [...authState.expanded]) if (!names.has(name)) authState.expanded.delete(name);
   if (reset) for (const name of [...authState.drafts.keys()]) if (name !== "__global__" && !names.has(name)) authState.drafts.delete(name);
-  $("#authentication-revision").textContent = `Policy revision ${data.revision}`;
-  $("#authentication-global-summary").textContent = `${authState.global.oauth_enabled ? "OAuth enabled" : "OAuth disabled"} · ${authKeyLabel(authState.global.static_key)}`;
+  $("#authentication-revision").textContent = t("admin.authentication.policy_revision", { revision: window.CognitaAdminLocale.number(data.revision) });
+  $("#authentication-global-summary").textContent = `${t(authState.global.oauth_enabled ? "admin.authentication.oauth_enabled" : "admin.authentication.oauth_disabled")} · ${authKeyLabel(authState.global.static_key)}`;
   const gd = authState.drafts.get("__global__");
-  $("#authentication-global").innerHTML = `<div class="auth-project-grid"><label>OAuth enabled by default <input id="auth-global-oauth" type="checkbox" ${((gd ? gd.oauth_enabled : authState.global.oauth_enabled) ? "checked" : "")} /></label><span><strong>Global static key:</strong> ${esc(authKeyLabel(authState.global.static_key))}</span><span class="auth-project-actions"><button type="button" class="secondary outline" data-auth-action="global-generate" ${authState.busy.has("__global__") ? "disabled aria-busy=\"true\"" : ""}>Generate New</button><button type="button" class="secondary outline" data-auth-action="global-revoke" ${!authState.global.static_key || authState.busy.has("__global__") ? "disabled" : ""}>Revoke global key</button><button type="button" data-auth-action="global-save" ${gd ? "" : "disabled"}>Save OAuth setting</button><button type="button" class="secondary outline" data-auth-action="global-undo" ${gd ? "" : "disabled"}>Undo</button></span></div>`;
+  $("#authentication-global").innerHTML = `<div class="auth-project-grid"><label>${esc(t("admin.authentication.oauth_enabled_default"))} <input id="auth-global-oauth" type="checkbox" ${((gd ? gd.oauth_enabled : authState.global.oauth_enabled) ? "checked" : "")} /></label><span><strong>${esc(t("admin.authentication.global_static_key"))}</strong> ${esc(authKeyLabel(authState.global.static_key))}</span><span class="auth-project-actions"><button type="button" class="secondary outline" data-auth-action="global-generate" ${authState.busy.has("__global__") ? "disabled aria-busy=\"true\"" : ""}>${esc(t("admin.authentication.generate_new"))}</button><button type="button" class="secondary outline" data-auth-action="global-revoke" ${!authState.global.static_key || authState.busy.has("__global__") ? "disabled" : ""}>${esc(t("admin.authentication.revoke_global"))}</button><button type="button" data-auth-action="global-save" ${gd ? "" : "disabled"}>${esc(t("admin.authentication.save_oauth"))}</button><button type="button" class="secondary outline" data-auth-action="global-undo" ${gd ? "" : "disabled"}>${esc(t("admin.authentication.undo"))}</button></span></div>`;
   const query = authState.search.trim().toLocaleLowerCase();
   const projects = authState.projects.filter((p) => !query || p.name.toLocaleLowerCase().includes(query));
   $("#authentication-projects").innerHTML = projects.length ? projects.map((project) => {
     const draft = projectDraft(project.name, project);
     const override = draft.oauth_mode !== "inherit";
     const open = authState.expanded.has(project.name);
-    const key = project.effective_static_key_source === "project" ? authKeyLabel(project.static_key_override) : project.effective_static_key_source === "global" ? `Inherited global key (${project.effective_static_key_id})` : "None";
-    const excluded = state.projects.find((p) => p.name === project.name)?.exclude_from_default_permissions ? " · Excluded from default permissions" : "";
-    return `<details class="auth-project" data-auth-project="${esc(project.name)}" ${open ? "open" : ""}><summary><span><strong>${esc(project.name)}</strong></span><span class="auth-summary-badges">${esc(projectSummary(project))}${esc(excluded)}</span></summary><div class="auth-project-body"><div class="auth-project-grid"><label><input type="checkbox" data-auth-override ${override ? "checked" : ""}> Override global OAuth setting</label><label>Allow OAuth <select data-auth-oauth ${override ? "" : "disabled"}><option value="enabled" ${draft.oauth_mode === "enabled" ? "selected" : ""}>Enabled</option><option value="disabled" ${draft.oauth_mode === "disabled" ? "selected" : ""}>Disabled</option></select></label><span>Static key: ${esc(key)}</span><span>Effective: <strong>${esc(authStatusLabel(project))}</strong></span><span class="auth-project-actions"><button type="button" class="secondary outline" data-auth-action="project-generate" ${authState.busy.has(project.name) ? "disabled aria-busy=\"true\"" : ""}>Generate New</button><button type="button" class="secondary outline" data-auth-action="project-revoke" ${!project.static_key_override || authState.busy.has(project.name) ? "disabled" : ""}>Revoke project key</button><button type="button" data-auth-action="project-save" ${authDirty(project.name) ? "" : "disabled"}>Save OAuth setting</button><button type="button" class="secondary outline" data-auth-action="project-undo" ${authDirty(project.name) ? "" : "disabled"}>Undo</button></span></div></div></details>`;
-  }).join("") : '<p class="muted">No matching projects.</p>';
+    const key = project.effective_static_key_source === "project" ? authKeyLabel(project.static_key_override) : project.effective_static_key_source === "global" ? `${t("admin.authentication.inherited_global_key")} (${project.effective_static_key_id})` : t("admin.authentication.key_none");
+    const excluded = state.projects.find((p) => p.name === project.name)?.exclude_from_default_permissions ? " · " + t("admin.authentication.exclude_defaults") : "";
+    return `<details class="auth-project" data-auth-project="${esc(project.name)}" ${open ? "open" : ""}><summary><span><strong>${esc(project.name)}</strong></span><span class="auth-summary-badges">${esc(projectSummary(project))}${esc(excluded)}</span></summary><div class="auth-project-body"><div class="auth-project-grid"><label><input type="checkbox" data-auth-override ${override ? "checked" : ""}> ${esc(t("admin.authentication.override_global"))}</label><label>${esc(t("admin.authentication.allow_oauth"))} <select data-auth-oauth ${override ? "" : "disabled"}><option value="enabled" ${draft.oauth_mode === "enabled" ? "selected" : ""}>${esc(t("admin.authentication.oauth_enabled"))}</option><option value="disabled" ${draft.oauth_mode === "disabled" ? "selected" : ""}>${esc(t("admin.authentication.oauth_disabled"))}</option></select></label><span>${esc(t("admin.authentication.static_key"))} ${esc(key)}</span><span>${esc(t("admin.authentication.effective"))} <strong>${esc(authStatusLabel(project))}</strong></span><span class="auth-project-actions"><button type="button" class="secondary outline" data-auth-action="project-generate" ${authState.busy.has(project.name) ? "disabled aria-busy=\"true\"" : ""}>${esc(t("admin.authentication.generate_new"))}</button><button type="button" class="secondary outline" data-auth-action="project-revoke" ${!project.static_key_override || authState.busy.has(project.name) ? "disabled" : ""}>${esc(t("admin.authentication.revoke_project"))}</button><button type="button" data-auth-action="project-save" ${authDirty(project.name) ? "" : "disabled"}>${esc(t("admin.authentication.save_oauth"))}</button><button type="button" class="secondary outline" data-auth-action="project-undo" ${authDirty(project.name) ? "" : "disabled"}>${esc(t("admin.authentication.undo"))}</button></span></div></div></details>`;
+  }).join("") : `<p class="muted">${esc(t("admin.authentication.no_matching_projects"))}</p>`;
   const route = routeForHash(window.location.hash);
   if (route.top === "authentication" && route.sub === "project") {
     const target = authState.projects.find((p) => p.name === route.project);
@@ -2269,29 +2269,29 @@ function renderAuthentication(data, reset = false) {
       const details = document.querySelector(`[data-auth-project="${CSS.escape(target.name)}"]`);
       if (details) { details.open = true; details.querySelector("summary").setAttribute("tabindex", "-1"); details.querySelector("summary").focus({ preventScroll: true }); }
     } else {
-      $("#authentication-projects").innerHTML = '<p role="alert">Project not found. Authentication policy remains unchanged.</p>';
+      $("#authentication-projects").innerHTML = '<p role="alert">' + esc(t("admin.authentication.project_missing")) + '</p>';
     }
   }
   const locked = authState.projects.filter((p) => p.locked_out).map((p) => p.name);
   const connectors = authState.warnings.locked_out_connectors || [];
   const warning = $("#authentication-warning");
   warning.hidden = !locked.length && !connectors.length;
-  warning.textContent = [locked.length ? `Warning: ${locked.join(", ")} have no effective client authentication.` : "", connectors.length ? `Every accessible project is locked out for connectors: ${connectors.join(", ")}.` : ""].filter(Boolean).join(" ");
+  warning.textContent = [locked.length ? t("admin.authentication.warning.projects", { projects: locked.join(", ") }) : "", connectors.length ? t("admin.authentication.warning.connectors", { connectors: connectors.join(", ") }) : ""].filter(Boolean).join(" ");
   const repair = $("#authentication-repair");
   const orphans = data.orphaned_project_entries || [];
   repair.hidden = !orphans.length;
-  repair.innerHTML = orphans.length ? `<p>Orphaned authentication policy: ${orphans.map(esc).join(", ")}</p>${orphans.map((name) => `<button type="button" class="secondary outline" data-auth-repair="${esc(name)}">Repair ${esc(name)}</button>`).join(" ")}` : "";
+  repair.innerHTML = orphans.length ? `<p>${esc(t("admin.authentication.orphans", { projects: orphans.join(", ") }))}</p>${orphans.map((name) => `<button type="button" class="secondary outline" data-auth-repair="${esc(name)}">${esc(t("admin.authentication.repair", { project: name }))}</button>`).join(" ")}` : "";
 }
 
 async function loadAuthentication(cached = null, preloaded = false) {
   try { renderAuthentication(preloaded ? cached : (cached || await api("/api/authentication")), false); }
-  catch (err) { $("#authentication-global").innerHTML = `<p role="alert">Authentication policy unavailable: ${esc(err.message)}</p>`; }
+  catch (err) { $("#authentication-global").innerHTML = `<p role="alert">${esc(t("admin.credential.policy_unavailable"))}: ${esc(err.message)}</p>`; }
 }
 
 function showAuthKey(raw, scope, project) {
   authState.oneTimeKey = raw || "";
   $("#new-auth-key").textContent = authState.oneTimeKey;
-  $("#key-dialog-scope").textContent = project ? `Project key for ${project}` : "Global key";
+  $("#key-dialog-scope").textContent = project ? t("admin.authentication.key_scope.project", { project }) : t("admin.authentication.key_scope.global");
   $("#key-dialog").showModal();
   $("#copy-auth-key").focus();
 }
