@@ -44,7 +44,13 @@ def load_catalog(
     locale: str = "en-US", catalog_dir: str | Path | None = None
 ) -> Mapping[str, str]:
     """Load and cache one catalog from the package or an explicit catalog directory."""
-    return _read_catalog(str(_catalog_path(locale, catalog_dir).resolve()))
+    path = _catalog_path(locale, catalog_dir).resolve()
+    try:
+        return _read_catalog(str(path))
+    except FileNotFoundError:
+        if resolve_locale(locale) == "en-US":
+            raise
+        return _read_catalog(str(_catalog_path("en-US", catalog_dir).resolve()))
 
 
 def _placeholders(message: str) -> set[str]:
@@ -82,10 +88,10 @@ def translate(
 
 def validate_catalogs(catalog_dir: str | Path | None = None) -> None:
     """Raise when supported catalogs differ in keys or named placeholders."""
-    english = load_catalog("en-US", catalog_dir)
+    english = _read_catalog(str(_catalog_path("en-US", catalog_dir).resolve()))
     signature = {key: _placeholders(value) for key, value in english.items()}
     for locale in SUPPORTED_LOCALES[1:]:
-        catalog = load_catalog(locale, catalog_dir)
+        catalog = _read_catalog(str(_catalog_path(locale, catalog_dir).resolve()))
         if set(catalog) != set(english):
             missing = sorted(set(english) - set(catalog))
             extra = sorted(set(catalog) - set(english))

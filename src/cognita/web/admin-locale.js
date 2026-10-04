@@ -10,7 +10,9 @@
   const cookieLocale = () => {
     const item = document.cookie.split(";").map((part) => part.trim())
       .find((part) => part.startsWith("cognita_lang="));
-    return item ? decodeURIComponent(item.slice("cognita_lang=".length)) : "";
+    if (!item) return "";
+    try { return decodeURIComponent(item.slice("cognita_lang=".length)); }
+    catch { return ""; }
   };
   const resolve = (value) => {
     const normalized = String(value || "").trim().replaceAll("_", "-");
@@ -29,10 +31,15 @@
     return "en-US";
   };
   let locale = choose();
-  const format = (message, values) => String(message).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_all, name) => {
-    if (!values || !Object.hasOwn(values, name)) throw new Error(`Missing translation value: ${name}`);
-    return String(values[name]);
-  });
+  const format = (message, values) => {
+    const names = [...String(message).matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((match) => match[1]);
+    const expected = new Set(names);
+    const supplied = new Set(Object.keys(values || {}));
+    if (expected.size !== supplied.size || [...expected].some((name) => !supplied.has(name))) {
+      throw new Error("Translation values do not match named placeholders");
+    }
+    return String(message).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_all, name) => String(values[name]));
+  };
   const api = {
     locale,
     labels,
@@ -69,22 +76,23 @@
     },
   };
   api.ready = (async () => {
+    const version = encodeURIComponent(document.documentElement.dataset.version || "");
     let response;
     try {
-      response = await fetch(`/static/locales/${locale}.json`, { cache: "force-cache" });
+      response = await fetch(`/static/locales/${locale}.json?v=${version}`, { cache: "force-cache" });
       if (!response.ok) throw new Error(`Could not load ${locale} message catalog`);
       api.catalog = await response.json();
     } catch (error) {
       if (locale === "en-US") throw error;
       locale = "en-US";
       api.locale = locale;
-      response = await fetch("/static/locales/en-US.json", { cache: "force-cache" });
+      response = await fetch(`/static/locales/en-US.json?v=${version}`, { cache: "force-cache" });
       if (!response.ok) throw new Error("Could not load the English message catalog");
       api.catalog = await response.json();
     }
     if (locale === "en-US") api.english = api.catalog;
     else {
-      const english = await fetch("/static/locales/en-US.json", { cache: "force-cache" });
+      const english = await fetch(`/static/locales/en-US.json?v=${version}`, { cache: "force-cache" });
       api.english = english.ok ? await english.json() : {};
     }
     api.apply();

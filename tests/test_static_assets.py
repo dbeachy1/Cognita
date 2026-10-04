@@ -49,7 +49,7 @@ async def test_index_wires_modal_and_scripts(app):
     assert 'id="authentication-card"' in html
     assert 'id="debug-tokens-toggle"' not in html
     assert 'data-section="authorized-clients"' in html
-    assert "<strong>Connectors</strong>" in html
+    assert 'data-i18n="admin.nav.connectors">Connectors</strong>' in html
     assert "Default Read-only" in html
     assert "All enabled projects" in html
     assert "Selected projects only" in html
@@ -102,7 +102,7 @@ async def test_admin_javascript_wires_connector_policy_boundary(app):
     assert "exclude_from_default_permissions" in js
     assert 'data-act="settings"' in js
     assert "connectionSummary" in js
-    assert 'connector.name || "Deleted connector"' in js
+    assert 'connector.name || t("admin.oauth.deleted_connector")' in js
     assert "const draft = connectorDraft(connector);" in js
     assert "captureConnectorDraft();" in js
     assert "if (current) beginConnectorEdit(current);" in js

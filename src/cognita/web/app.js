@@ -2,6 +2,7 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
+const t = (id, values) => window.CognitaAdminLocale.t(id, values);
 // Shared, non-persistent Admin cache. Panel migrations can consume this
 // object without creating another copy of projects or policy data.
 const adminState = window.CognitaAdminState
@@ -476,7 +477,7 @@ async function initSession() {
   let s;
   try { s = await api("/api/session"); } catch { return; }
   if (s && s.auth_required && s.authenticated) {
-    $("#session-user").textContent = `Signed in as ${esc(s.username)}`;
+    $("#session-user").textContent = window.CognitaAdminLocale.t("admin.session.signed_in", { username: s.username });
     $("#logout-btn").style.display = "";
   }
   if (adminState) {
@@ -499,7 +500,9 @@ async function initBootstrap() {
 
 function pill(status) {
   const s = String(status || "stopped").toLowerCase();
-  return `<span class="pill ${s}">${s}</span>`;
+  const messageId = ({ running: "admin.project_state.running", stopped: "admin.project_state.stopped",
+    starting: "admin.project_state.starting", error: "admin.project_state.error" })[s];
+  return `<span class="pill ${esc(s)}">${esc(messageId ? window.CognitaAdminLocale.t(messageId) : s)}</span>`;
 }
 
 function esc(s) {
@@ -549,8 +552,10 @@ async function fillDocCount(name) {
   if (!cell) return;
   try {
     const s = await api(`/api/projects/${encodeURIComponent(name)}/status`);
-    cell.textContent = s.doc_count == null ? "—" : `${s.doc_count}`;
-    if (s.chunk_count != null) cell.title = `${s.chunk_count} chunks`;
+    cell.textContent = s.doc_count == null ? "—" : window.CognitaAdminLocale.number(s.doc_count);
+    if (s.chunk_count != null) cell.title = window.CognitaAdminLocale.t("admin.projects.chunk_count", {
+      count: window.CognitaAdminLocale.number(s.chunk_count),
+    });
     // Installer design 7.3: show the last reindex error (for example "The documents folder
     // ... is empty or not mounted. Nothing was removed.") under the folder path.
     const folderCell = cell.parentElement.children[1];
@@ -604,12 +609,12 @@ function when(ts) {
 // ---- Cognita 9 project, connector, and authorization views ----
 async function loadProjectsV9(cached = null, preloaded = false) {
   const body = $("#projects-body");
-  body.innerHTML = '<tr><td colspan="6" aria-busy="true">Loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="6" aria-busy="true">' + esc(t("admin.loading")) + "</td></tr>";
   try {
     const data = preloaded ? cached : (cached || await api("/api/projects"));
     state.projects = Array.isArray(data.projects) ? data.projects : [];
     if (!state.projects.length) {
-      body.innerHTML = '<tr><td colspan="6"><em>No projects yet. Add one below.</em></td></tr>';
+      body.innerHTML = '<tr><td colspan="6"><em>' + esc(t("admin.projects.empty_state")) + "</em></td></tr>";
       captureConnectorDraft();
       renderConnectorEditorProjects(selectedConnector());
       return data;
@@ -617,15 +622,15 @@ async function loadProjectsV9(cached = null, preloaded = false) {
     body.innerHTML = state.projects.map((p) =>
       '<tr data-name="' + esc(p.name) + '"' + (state.highlightedProject === p.name ? ' class="project-highlight" tabindex="-1"' : '') + '>' +
       "<td><strong>" + esc(p.name) + "</strong>" +
-      (p.enabled ? "" : ' <small class="muted">(disabled)</small>') +
-      (p.exclude_from_default_permissions ? ' <small class="muted">(Excluded from defaults)</small>' : "") + "</td>" +
+      (p.enabled ? "" : ' <small class="muted">(' + esc(t("admin.projects.disabled")) + ")</small>") +
+      (p.exclude_from_default_permissions ? ' <small class="muted">(' + esc(t("admin.projects.excluded_defaults")) + ")</small>" : "") + "</td>" +
       "<td><code>" + esc(p.documents_display || p.documents_dir) + "</code></td>" +
       '<td class="doc-count muted">…</td><td>' + pill(p.worker_status) + "</td>" +
       "<td>" + (p.connected_clients == null ? "—" : esc(p.connected_clients)) + "</td>" +
-      '<td class="actions"><button class="secondary outline" data-act="settings">Settings</button> ' +
-      '<button class="secondary outline" data-act="connections">View access</button> ' +
-      '<button class="secondary outline" data-act="reindex">Reindex</button> ' +
-      '<button class="contrast outline" data-act="remove">Remove</button></td></tr>'
+      '<td class="actions"><button class="secondary outline" data-act="settings">' + esc(t("admin.action.settings")) + "</button> " +
+      '<button class="secondary outline" data-act="connections">' + esc(t("admin.oauth.view_access")) + "</button> " +
+      '<button class="secondary outline" data-act="reindex">' + esc(t("admin.action.reindex")) + "</button> " +
+      '<button class="contrast outline" data-act="remove">' + esc(t("admin.action.remove")) + "</button></td></tr>"
     ).join("");
     for (const project of state.projects) {
       if (project.worker_status === "running") fillDocCount(project.name);
@@ -639,7 +644,7 @@ async function loadProjectsV9(cached = null, preloaded = false) {
     renderConnectorEditorProjects(selectedConnector());
     return data;
   } catch (err) {
-    body.innerHTML = '<tr><td colspan="6">Failed to load: ' + esc(err.message) + "</td></tr>";
+    body.innerHTML = '<tr><td colspan="6">' + esc(t("admin.action.failed")) + ": " + esc(err.message) + "</td></tr>";
     return null;
   }
 }
@@ -654,7 +659,8 @@ function selectedConnector() {
 }
 
 const connectorFunctionLabels = Object.freeze({
-  settings: "Settings", clients: "Authorized clients", access: "Per-project access", transfer: "Workspace transfer",
+  settings: "admin.action.settings", clients: "admin.projects.authorized_clients",
+  access: "admin.oauth.per_project_access", transfer: "admin.workspaces.transfer",
 });
 
 function renderConnectorEntityTabs() {
@@ -669,12 +675,12 @@ function renderConnectorEntityTabs() {
     return '<button type="button" role="tab" aria-controls="connector-setup-panel" aria-selected="' +
       (selected ? "true" : "false") + '" tabindex="' + (selected ? "0" : "-1") +
       '" data-connector-id="' + esc(id) + '" aria-label="' + esc(connector.name) +
-      '"' + (duplicate ? ' aria-description="Duplicate display name; connector identity is distinct"' : "") + '>' +
-      esc(connector.name) + (connector.enabled ? "" : ' <small class="muted">(disabled)</small>') + "</button>";
+      '"' + (duplicate ? ' aria-description="' + esc(t("admin.connectors.duplicate_description")) + '"' : "") + '>' +
+      esc(connector.name) + (connector.enabled ? "" : ' <small class="muted">(' + esc(t("admin.projects.disabled")) + ")</small>") + "</button>";
   }).join("") +
     '<button type="button" role="tab" aria-controls="connector-setup-panel" aria-selected="' +
     (current == null ? "true" : "false") + '" tabindex="' + (current == null ? "0" : "-1") +
-    '" data-connector-add="true" data-route="#connectors/add">Add connector</button>';
+    '" data-connector-add="true" data-route="#connectors/add">' + esc(t("admin.action.add_connector")) + "</button>";
   row.querySelectorAll("[role=tab]").forEach((button) => {
     button.addEventListener("click", () => {
       captureConnectorCreateDraft();
@@ -695,7 +701,7 @@ function renderConnectorFunctionTabs(route) {
   row.innerHTML = Object.entries(connectorFunctionLabels).map(([sub, label]) => {
     const selected = route.sub === sub;
     return '<button type="button" role="tab" id="connector-tab-' + sub + '" aria-controls="connector-' + sub + '-panel" aria-selected="' +
-      (selected ? "true" : "false") + '" tabindex="' + (selected ? "0" : "-1") + '" data-function="' + sub + '">' + label + '</button>';
+      (selected ? "true" : "false") + '" tabindex="' + (selected ? "0" : "-1") + '" data-function="' + sub + '">' + esc(t(label)) + '</button>';
   }).join("");
   row.querySelectorAll("[role=tab]").forEach((button) => {
     button.dataset.route = CognitaAdminState.routeFragment(connectorRoute(connector.id, button.dataset.function));
@@ -1579,8 +1585,8 @@ function connectionSummary(grant) {
   const connector = grant.connector ||
     state.connectors.find((item) => item.url && item.url === grant.resource);
   if (connector) {
-    const connectorName = connector.name || "Deleted connector";
-    const connectorState = connector.enabled === false ? " — disabled" : "";
+    const connectorName = connector.name || t("admin.oauth.deleted_connector");
+    const connectorState = connector.enabled === false ? ` — ${t("admin.oauth.disabled")}` : "";
     const projects = Array.isArray(connector.projects) ? connector.projects :
       state.projects.filter((project) => project.enabled).map((project) => ({
         name: project.name,
@@ -1591,12 +1597,12 @@ function connectionSummary(grant) {
       })).filter((project) => project.access);
     const access = projects.length
       ? projects.map((project) => project.name + ": " +
-        (project.access === "read" ? "Read-only" : "Read/write")).join(", ")
-      : "No currently accessible enabled projects";
+        (project.access === "read" ? t("admin.oauth.read_only") : t("admin.oauth.read_write"))).join(", ")
+      : t("admin.oauth.no_accessible_projects");
     return connectorName + " (" + (connector.id || "connector") + ")" +
       connectorState + "\n" + access;
   }
-  return grant.project ? "Legacy project: " + grant.project : "Connector summary unavailable";
+  return grant.project ? t("admin.oauth.legacy_project", { project: grant.project }) : t("admin.oauth.summary_unavailable");
 }
 
 function grantConnectorId(grant) {
@@ -1616,10 +1622,10 @@ async function loadOAuthV9(cached = null) {
     const oauthState = fromCache ? result.status : result[0];
     const data = fromCache ? result.grants : (result.data || result[1]);
     status.textContent = oauthState.enabled
-      ? (oauthState.ready ? "Enabled" : "Configuration required") : "Disabled";
+      ? (oauthState.ready ? t("admin.option.enabled") : t("admin.oauth.configuration_required")) : t("admin.oauth.disabled");
     problems.innerHTML = oauthState.problems && oauthState.problems.length
-      ? '<p role="alert"><strong>OAuth is not ready:</strong> ' +
-        oauthState.problems.map(esc).join("; ") + "</p>"
+      ? '<p role="alert"><strong>' + esc(t("admin.oauth.not_ready")) + "</strong><br>" +
+        esc(t("admin.technical_detail")) + ": " + oauthState.problems.map(esc).join("; ") + "</p>"
       : "";
     const allGrants = Array.isArray(data.grants) ? data.grants : [];
     const selectedId = state.selectedConnectorId == null ? null : String(state.selectedConnectorId);
@@ -1633,11 +1639,11 @@ async function loadOAuthV9(cached = null) {
       esc(connectionSummary(grant)) + "</td><td>" + esc(when(grant.created_at)) +
       "</td><td>" + esc(when(grant.last_used_at)) +
       '</td><td><button class="contrast outline" data-revoke="' +
-      esc(grant.id) + '">Revoke</button></td></tr>'
-    ).join("") : '<tr><td colspan="5"><em>No connected OAuth clients.</em></td></tr>';
+      esc(grant.id) + '">' + esc(t("admin.oauth.revoke")) + "</button></td></tr>"
+    ).join("") : '<tr><td colspan="5"><em>' + esc(t("admin.oauth.no_clients")) + "</em></td></tr>";
     $("#revoke-all-grants").disabled = !grants.length;
   } catch (err) {
-    status.textContent = "Unavailable";
+    status.textContent = t("admin.status.unavailable");
     body.innerHTML = "<tr><td colspan=\"5\">" + esc(err.message) + "</td></tr>";
   }
 }

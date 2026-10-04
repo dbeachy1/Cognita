@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="light" data-version="__COGNITA_VERSION__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -74,8 +74,16 @@
           window.location.href = "/";
           return;
         }
-        let detail = locale.t("admin.login.invalid_credentials");
-        try { detail = (await res.json()).detail || detail; } catch { /* no body */ }
+        let detail;
+        let responseData = null;
+        try { responseData = await res.json(); } catch { /* no body */ }
+        if (res.status === 401) detail = locale.t("admin.login.invalid_credentials");
+        else if (res.status === 429) detail = locale.t("admin.login.too_many_attempts");
+        else {
+          const technical = responseData && responseData.detail;
+          detail = locale.t("admin.action.failed") + (typeof technical === "string"
+            ? `\n\n${locale.t("admin.technical_detail")}: ${technical}` : "");
+        }
         errEl.textContent = detail;
         form.password.value = "";
         form.password.focus();

@@ -5,6 +5,7 @@
   "admin.login.password": "Password",
   "admin.login.submit": "Sign in",
   "admin.login.invalid_credentials": "Invalid username or password",
+  "admin.login.too_many_attempts": "Too many attempts. Please wait and try again.",
   "admin.login.server_unreachable": "Could not reach the server. Try again.",
   "admin.shell.tagline": "Multi-project MCP gateway — local admin",
   "admin.nav.projects": "Projects",
@@ -12,6 +13,38 @@
   "admin.nav.authentication": "Authentication",
   "admin.nav.workspaces": "Workspaces",
   "admin.nav.settings": "Settings",
+  "admin.action.logout": "Log out",
+  "admin.action.settings": "Settings",
+  "admin.action.reindex": "Reindex",
+  "admin.action.remove": "Remove",
+  "admin.action.add_connector": "Add connector",
+  "admin.projects.empty_state": "No projects yet. Add one below.",
+  "admin.projects.disabled": "disabled",
+  "admin.projects.excluded_defaults": "Excluded from defaults",
+  "admin.oauth.view_access": "View access",
+  "admin.oauth.per_project_access": "Per-project access",
+  "admin.oauth.configuration_required": "Configuration required",
+  "admin.oauth.disabled": "Disabled",
+  "admin.oauth.no_clients": "No connected OAuth clients.",
+  "admin.oauth.revoke": "Revoke",
+  "admin.oauth.not_ready": "OAuth is not ready",
+  "admin.oauth.deleted_connector": "Deleted connector",
+  "admin.oauth.read_only": "Read-only",
+  "admin.oauth.read_write": "Read/write",
+  "admin.oauth.no_accessible_projects": "No currently accessible enabled projects",
+  "admin.oauth.legacy_project": "Legacy project: {project}",
+  "admin.oauth.summary_unavailable": "Connector summary unavailable",
+  "admin.accessibility.admin_sections": "Admin sections",
+  "admin.accessibility.project_views": "Project views",
+  "admin.accessibility.connectors": "Connectors",
+  "admin.accessibility.selected_connector_views": "Selected connector views",
+  "admin.accessibility.workspace_views": "Workspace views",
+  "admin.accessibility.color_theme": "Color theme",
+  "admin.session.signed_in": "Signed in as {username}",
+  "admin.project_state.running": "Running",
+  "admin.project_state.stopped": "Stopped",
+  "admin.project_state.starting": "Starting",
+  "admin.project_state.error": "Error",
   "admin.action.refresh": "Refresh",
   "admin.field.name": "Name",
   "admin.field.status": "Status",
@@ -22,6 +55,7 @@
   "admin.projects.description": "Projects are managed separately from connector access. A project may be a member of more than one connector.",
   "admin.projects.documents_folder": "Documents folder",
   "admin.projects.docs": "Docs",
+  "admin.projects.chunk_count": "{count} chunks",
   "admin.projects.authorized_clients": "Authorized clients",
   "admin.projects.add_project": "Add project",
   "admin.projects.name_help": "Use the exact project name clients will pass to project-scoped tools.",
@@ -36,6 +70,7 @@
   "admin.public_url.title": "Canonical public URL",
   "admin.public_url.save": "Save public URL",
   "admin.connectors.settings": "Connector settings",
+  "admin.connectors.duplicate_description": "Duplicate display name; connector identity is distinct",
   "admin.connectors.description": "Connector settings control Knowledge, Workspace, and bridge access. Workspace tools and transfer are on by default and can be turned off per connector or per project.",
   "admin.oauth.clients_description": "These are live OAuth authorizations. Each client is grouped by connector resource and shows current project access; connector definitions and authorizations are separate controls.",
   "admin.oauth.client": "Client",
@@ -49,6 +84,7 @@
   "admin.workspaces.runtime": "Workspace runtime",
   "admin.workspaces.settings": "Workspace settings",
   "admin.workspaces.connectors": "Workspace-only connectors",
+  "admin.workspaces.transfer": "Workspace transfer",
   "admin.workspaces.owner": "Owner",
   "admin.workspaces.pinned": "Pinned",
   "admin.workspaces.expiry": "Expiry",
@@ -67,6 +103,7 @@
   "admin.option.orphaned": "Orphaned",
   "admin.option.all_owners": "All owners",
   "admin.option.active": "Active",
+  "admin.option.enabled": "Enabled",
   "admin.option.revoked": "Revoked",
   "admin.option.tombstoned": "Tombstoned",
   "admin.option.all": "All",
@@ -131,4 +168,72 @@
   ,"oauth.consent.error_invalid_request": "The authorization request could not be validated."
   ,"oauth.access.read": "Read"
   ,"oauth.access.write": "Write"
+  ,"admin.public_url.description": "This must exactly match the public Cloudflare Tunnel address clients use (including any path prefix), because it is copied into MCP connector links and OAuth issuer/resource metadata. It starts from deployment configuration, then an Admin-saved value is persisted in Cognita state so changing it does not require editing deployment configuration. Use an HTTPS URL; HTTP is allowed only for local development."
+  ,"admin.connectors.add": "Add connector"
+  ,"admin.connectors.display_name": "Display name"
+  ,"admin.connectors.enabled": "Enabled"
+  ,"admin.connectors.workspace_capability": "Workspace capability"
+  ,"admin.connectors.enable_workspace_tools": "Enable Workspace tools"
+  ,"admin.connectors.transfer_default": "Default Knowledge ↔ Workspace transfer"
+  ,"admin.connectors.high_trust_shell": "I understand this grants isolated shell execution and transfer controls"
+  ,"admin.connectors.transfer_default_help": "Workspace tools and transfer are on by default (13.0.1). Turn either off here or per project below."
+  ,"admin.action.cancel_edit": "Cancel edit"
+  ,"admin.connectors.none_configured": "No connectors are configured."
+  ,"admin.action.add_edit_connector": "Add / edit connector"
+  ,"admin.connectors.projects_exposed": "Projects exposed"
+  ,"admin.option.all_enabled_projects": "All enabled projects"
+  ,"admin.option.selected_projects_only": "Selected projects only"
+  ,"admin.connectors.default_read_only": "Default Read-only"
+  ,"admin.connectors.default_access_help": "In all-projects mode, this default applies to every enabled project without an override unless the project is excluded from defaults."
+  ,"admin.connectors.per_project_access": "Per-project access"
+  ,"admin.connectors.save_access": "Save access policy"
+  ,"admin.connectors.transfer_defaults": "Transfer defaults"
+  ,"admin.connectors.high_trust_transfer": "I understand that allowing transfer is a high-trust action"
+  ,"admin.connectors.per_project_transfer": "Per-project Workspace transfer"
+  ,"admin.connectors.transfer_help": "Inherit follows the connector default. Allow is a high-trust confirmation."
+  ,"admin.connectors.save_transfer": "Save transfer policy"
+  ,"admin.sort_direction": "Ascending"
+  ,"admin.workspaces.remove_selected": "Remove selected"
+  ,"admin.option.network_off_recommended": "Off (recommended)"
+  ,"admin.option.network_allowlist": "Allowlist"
+  ,"admin.option.network_unrestricted": "Unrestricted public Internet"
+  ,"admin.workspaces.allowed_domains_ports": "Allowed outbound domains and ports"
+  ,"admin.workspaces.network_help": "Each exact or suffix domain may use the listed TCP ports over HTTP or HTTPS. Saved legacy scheme-specific entries remain unavailable until edited."
+  ,"admin.workspaces.add_domain_rule": "Add domain rule"
+  ,"admin.workspaces.brave_enable": "Enable trusted-side Brave Search"
+  ,"admin.workspaces.external_services_confirm": "I understand network and search settings can send Workspace data to external services."
+  ,"admin.workspaces.preview_policy": "Preview policy"
+  ,"admin.workspaces.test_brave": "Test Brave Search"
+  ,"admin.workspaces.save_settings": "Save Workspace settings"
+  ,"admin.workspaces.add_connector": "Add Workspace-only connector"
+  ,"admin.workspaces.high_trust_connector": "I understand this creates a high-trust Workspace-only surface"
+  ,"admin.workspaces.create_connector": "Create Workspace-only connector"
+  ,"admin.gpu.loading_runtime": "Loading runtime state…"
+  ,"admin.gpu.detected_cards": "Detected cards"
+  ,"admin.gpu.loading_cards": "Loading cards…"
+  ,"admin.gpu.knowledge_embedding": "Knowledge embedding"
+  ,"admin.gpu.enable_embedding": "Enable GPU embedding"
+  ,"admin.gpu.all_cards": "All usable cards"
+  ,"admin.gpu.specific_cards": "Specific cards"
+  ,"admin.gpu.ocr": "OCR"
+  ,"admin.gpu.cpu_recommended": "CPU (recommended fallback)"
+  ,"admin.gpu.save_policy": "Save acceleration policy"
+  ,"admin.gpu.verify_runtime": "Verify loaded runtime"
+  ,"admin.authentication.global_defaults": "Global defaults"
+  ,"admin.authentication.expand_all": "Expand all"
+  ,"admin.authentication.collapse_all": "Collapse all"
+  ,"admin.dialog.static_key_title": "Static private key — shown once"
+  ,"admin.dialog.static_key_instructions": "Copy this key now. It cannot be recovered or shown again. Send it only as"
+  ,"admin.action.copy_key": "Copy key"
+  ,"admin.action.done": "Done"
+  ,"admin.dialog.credential_secret_title": "Credential secret — shown once"
+  ,"admin.dialog.credential_secret_instructions": "Copy this secret now. It is not stored in browser state or shown in the credential list."
+  ,"admin.action.copy_secret": "Copy secret"
+  ,"admin.dialog.project_settings_title": "Project settings"
+  ,"admin.projects.exclude_permission_defaults": "Exclude from default permissions"
+  ,"admin.projects.exclude_permission_help": "All-project connectors will not include this project automatically. Explicit Read-only or Read/write access still grants it."
+  ,"admin.action.cancel": "Cancel"
+  ,"admin.action.configure_authentication": "Configure authentication"
+  ,"admin.action.save_settings": "Save settings"
+  ,"admin.accessibility.sort_direction": "Toggle sort direction"
 }
