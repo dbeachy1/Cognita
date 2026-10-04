@@ -213,6 +213,9 @@ function Format-ProgressJson {
         if ($localized.Title) { [void]$parts.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
         if ($localized.Message) { [void]$parts.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
         if ($localized.Fix) { [void]$parts.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+        if ($Fix -and ($script:Locale -ne 'en-US' -or $presentationId -in @('setup.generic.failure', 'setup.generic.warning')) -and $localized.Fix -cne $Fix) {
+            [void]$parts.Add('"fix_technical": ' + (ConvertTo-JsonString $Fix))
+        }
     } elseif ($script:Locale -ne 'en-US') {
         $localizedTitle = Get-LocalizedStageTitle -Stage $Stage -Title $Title
         if ($localizedTitle) {
@@ -345,6 +348,9 @@ function Add-LocalizedRelayFields {
     if ($localized.Title) { [void]$extra.Add('"title_display": ' + (ConvertTo-JsonString $localized.Title)) }
     if ($localized.Message) { [void]$extra.Add('"message_display": ' + (ConvertTo-JsonString $localized.Message)) }
     if ($localized.Fix) { [void]$extra.Add('"fix_display": ' + (ConvertTo-JsonString $localized.Fix)) }
+    if ($o.fix -and ($script:Locale -ne 'en-US' -or $id -in @('setup.generic.failure', 'setup.generic.warning')) -and $localized.Fix -cne [string]$o.fix) {
+        [void]$extra.Add('"fix_technical": ' + (ConvertTo-JsonString ([string]$o.fix)))
+    }
     if ($extra.Count -eq 0 -or -not $JsonLine.TrimEnd().EndsWith('}')) { return $JsonLine }
     $trimmedLine = $JsonLine.TrimEnd()
     return ($trimmedLine.Substring(0, $trimmedLine.Length - 1) + ', ' + ($extra -join ', ') + '}')
@@ -1505,8 +1511,8 @@ function Get-DistroOwnership {
 # check (design 5.3): all checks run, failures are listed together
 # ---------------------------------------------------------------------------------------
 function New-CheckResult {
-    param([string]$Id, [string]$Title, [ValidateSet('ok', 'warn', 'fail')][string]$State, [string]$Message = '', [string]$Fix = '')
-    return [pscustomobject]@{ Id = $Id; Title = $Title; State = $State; Message = $Message; Fix = $Fix }
+    param([string]$Id, [string]$Title, [ValidateSet('ok', 'warn', 'fail')][string]$State, [string]$Message = '', [string]$Fix = '', [string]$MessageId = '', $Values = $null)
+    return [pscustomobject]@{ Id = $Id; Title = $Title; State = $State; Message = $Message; Fix = $Fix; MessageId = $MessageId; Values = $Values }
 }
 
 function ConvertFrom-WslConfig {
@@ -1856,7 +1862,7 @@ function Get-CheckResults {
             Write-Log ("check ports: port {0} listened by [{1}] pid={2} ours={3}" -f $port, $l.Process, $l.ProcessId, $ours)
             if (-not $ours) {
                 $who = $l.Process; if (-not $who) { $who = 'another program' }
-                [void]$res.Add((New-CheckResult 'ports' 'Ports' 'fail' ('Port {0} is in use by {1}.' -f $port, $who) 'Choose other ports under Advanced.'))
+                [void]$res.Add((New-CheckResult 'ports' 'Ports' 'fail' ('Port {0} is in use by {1}.' -f $port, $who) 'Choose other ports under Advanced.' 'setup.check.ports_in_use' @{ port = $port; process = $who }))
                 [void]$bad.Add($port)
             }
         }
@@ -1876,8 +1882,8 @@ function Invoke-CheckVerb {
     foreach ($r in $results) {
         switch ($r.State) {
             'ok' { Write-ProgressLine -Stage ('check.' + $r.Id) -Title $r.Title -State 'done' }
-            'warn' { $warnings++; Write-ProgressLine -Stage ('check.' + $r.Id) -Title $r.Title -State 'warning' -Message $r.Message -Fix $r.Fix }
-            'fail' { $failures++; Write-ProgressLine -Stage ('check.' + $r.Id) -Title $r.Title -State 'failed' -Message $r.Message -Fix $r.Fix }
+            'warn' { $warnings++; Write-ProgressLine -Stage ('check.' + $r.Id) -Title $r.Title -State 'warning' -Message $r.Message -Fix $r.Fix -MessageId $r.MessageId -Values $r.Values }
+            'fail' { $failures++; Write-ProgressLine -Stage ('check.' + $r.Id) -Title $r.Title -State 'failed' -Message $r.Message -Fix $r.Fix -MessageId $r.MessageId -Values $r.Values }
         }
         if ($r.Id -eq 'wsl') { $wslState = ($r.Message -replace '^wsl=', '') }
     }
@@ -2493,7 +2499,7 @@ function Invoke-ImportImage {
             return @{ Status = 'restart-required'; Reason = 'hcs-service-not-available'; Settings = $Settings }
         }
         if ($kind -eq 'virtualization') {
-            Write-ProgressLine -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'failed' -Message 'WSL could not start a virtual machine.' -Fix 'Turn on virtualization (Intel VT-x or AMD-V/SVM) in your PC''s BIOS/UEFI settings. On a virtual machine, turn on nested virtualization.'
+            Write-ProgressLine -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'failed' -Message 'WSL could not start a virtual machine.' -Fix 'Turn on virtualization (Intel VT-x or AMD-V/SVM) in your PC''s BIOS/UEFI settings. On a virtual machine, turn on nested virtualization.' -MessageId 'setup.import.virtualization'
             return @{ Status = 'failed'; Reason = 'virtualization'; Settings = $Settings }
         }
         Write-ProgressLine -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'failed' -Message ('wsl --import failed (exit {0}): {1}' -f $r.ExitCode, (Limit-LogText $text.Trim() 300)) -Fix 'Run Setup again. If it keeps failing, use Save diagnostics.'
@@ -3301,7 +3307,7 @@ function Invoke-InstallVerb {
     if ($ws -eq 'on' -and -not $hasKvm) {
         $ws = 'off'
         Set-SettingProp $settings 'workspace' 'off'
-        Write-ProgressLine -Stage 'workspace' -Title 'Workspace' -State 'warning' -Message 'This PC''s WSL has no /dev/kvm, so Workspace (sandboxed code running) will be off. Everything else will be installed.' -Fix 'To use Workspace, turn on virtualization (VT-x/AMD-V) in the BIOS, or nested virtualization on a virtual machine, then run: cognita install --workspace on'
+        Write-ProgressLine -Stage 'workspace' -Title 'Workspace' -State 'warning' -Message 'This PC''s WSL has no /dev/kvm, so Workspace (sandboxed code running) will be off. Everything else will be installed.' -Fix 'To use Workspace, turn on virtualization (VT-x/AMD-V) in the BIOS, or nested virtualization on a virtual machine, then run: cognita install --workspace on' -MessageId 'setup.workspace.kvm_unavailable'
     }
     Write-Log ("install: kvm={0} workspace effective={1}" -f $hasKvm, $ws)
 
@@ -4100,7 +4106,7 @@ function Install-TailscaleMsi {
     Write-Log ("tailscale msi signature: status={0} subject={1}" -f $sig.Status, $sig.Subject)
     if ($sig.Status -ne 'Valid' -or $sig.Subject -notmatch 'O=Tailscale Inc\.') {
         try { Remove-Item -LiteralPath $dest -Force } catch { Write-Log ("could not delete the rejected installer: {0}" -f $_.Exception.Message) }
-        Write-ProgressLine -Stage 'remote' -Title 'Downloading Tailscale' -State 'failed' -Message 'The downloaded file is not signed by Tailscale Inc., so it was not run.' -Fix 'Install Tailscale yourself from tailscale.com and run this again.'
+        Write-ProgressLine -Stage 'remote' -Title 'Downloading Tailscale' -State 'failed' -Message 'The downloaded file is not signed by Tailscale Inc., so it was not run.' -Fix 'Install Tailscale yourself from tailscale.com and run this again.' -MessageId 'setup.tailscale.signature_refused'
         return $false
     }
     Write-ProgressLine -Stage 'remote' -Title 'Downloading Tailscale' -State 'done'
@@ -4365,7 +4371,7 @@ function Invoke-RemoteAccessVerb {
             if ($ftext -match 'not enabled on your tailnet') {
                 # Design 18.4: a `failed` line (was `warning`) whose message carries the approval link, and the
                 # same link on the result line, so Setup can show it as a link and offer Retry.
-                Write-ProgressLine -Stage 'remote.funnel' -Title 'Turning on Funnel' -State 'failed' -Message ('Your tailnet''s owner must turn on Funnel once. Open this link, turn it on, then press Retry. ' + $link) -Fix 'Then run this again (or press Retry in Setup).'
+                Write-ProgressLine -Stage 'remote.funnel' -Title 'Turning on Funnel' -State 'failed' -Message ('Your tailnet''s owner must turn on Funnel once. Open this link, turn it on, then press Retry. ' + $link) -Fix 'Then run this again (or press Retry in Setup).' -MessageId 'setup.funnel.enable_required' -Values @{ link = $link }
                 return (New-VerbResult 'failed' ([ordered]@{ reason = 'funnel-not-enabled'; link = $link }))
             }
             Write-ProgressLine -Stage 'remote.funnel' -Title 'Turning on Funnel' -State 'failed' -Message ('tailscale funnel failed (exit {0}).' -f $f.ExitCode) -Fix 'Run this again. If it keeps failing, use cognita diagnostics.'

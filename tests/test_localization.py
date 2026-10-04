@@ -30,6 +30,21 @@ def test_all_admin_catalogs_have_matching_keys_and_placeholders() -> None:
     )
 
 
+def test_workspace_network_editor_and_configured_key_strings_are_localized() -> None:
+    for locale in SUPPORTED_LOCALES:
+        catalog = load_catalog(locale)
+        assert catalog["admin.authentication.key_configured"]
+        assert catalog["admin.status.unknown"]
+        assert translate(locale, "admin.authentication.key_configured", {
+            "key_id": "key-123", "created": "Oct 4",
+        })
+        assert "key-123" in translate(locale, "admin.authentication.key_configured", {
+            "key_id": "key-123", "created": "Oct 4",
+        })
+        assert translate(locale, "admin.workspace.network.ports_integers", {"domain": "docs.example"})
+        assert "docs.example" in translate(locale, "admin.workspace.network.ports_range", {"domain": "docs.example"})
+
+
 def test_tagged_admin_markup_ids_exist_in_every_catalog() -> None:
     html_root = Path(__file__).resolve().parents[1] / "src/cognita/web"
     ids = set()

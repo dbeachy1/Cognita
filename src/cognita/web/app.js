@@ -1398,13 +1398,13 @@ function renderWorkspaceNetworkRules() {
     const legacyKey = legacy && workspaceNetworkShapeKey(legacy);
     const legacyEnabled = legacyKey && state.workspaceNetworkLegacyOverrides.has(legacyKey);
     const legacyText = legacy && !legacyEnabled
-      ? '<small class="muted">Unavailable legacy rule: choose Enable HTTP + HTTPS to apply both schemes.</small><button type="button" class="secondary outline" data-network-enable-legacy>Enable HTTP + HTTPS</button>'
+      ? '<small class="muted">' + esc(t("admin.workspace.network.legacy_rule_unavailable")) + '</small><button type="button" class="secondary outline" data-network-enable-legacy>' + esc(t("admin.workspace.network.enable_http_https")) + '</button>'
       : '';
     return '<div class="workspace-network-rule" data-network-rule-index="' + index + '">' +
-      '<label>Domain <input type="text" data-network-domain value="' + esc(rule.domain) + '" placeholder="example.com" required></label>' +
-      '<label>Match <select data-network-suffix><option value="exact"' + (rule.suffix ? '' : ' selected') + '>Exact domain</option><option value="suffix"' + (rule.suffix ? ' selected' : '') + '>Domain and subdomains</option></select></label>' +
-      '<label>TCP ports <input type="text" data-network-ports value="' + esc(rule.ports.join(', ')) + '" placeholder="443, 8443" required></label>' +
-      '<button type="button" class="secondary outline" data-network-remove>Remove</button>' + legacyText +
+      '<label>' + esc(t("admin.workspace.network.domain")) + ' <input type="text" data-network-domain value="' + esc(rule.domain) + '" placeholder="example.com" required></label>' +
+      '<label>' + esc(t("admin.workspace.network.match")) + ' <select data-network-suffix><option value="exact"' + (rule.suffix ? '' : ' selected') + '>' + esc(t("admin.workspace.network.exact_domain")) + '</option><option value="suffix"' + (rule.suffix ? ' selected' : '') + '>' + esc(t("admin.workspace.network.domain_and_subdomains")) + '</option></select></label>' +
+      '<label>' + esc(t("admin.workspace.network.tcp_ports")) + ' <input type="text" data-network-ports value="' + esc(rule.ports.join(', ')) + '" placeholder="443, 8443" required></label>' +
+      '<button type="button" class="secondary outline" data-network-remove>' + esc(t("admin.workspace.network.remove")) + '</button>' + legacyText +
       '</div>';
   }).join("");
   syncWorkspaceNetworkRules();
@@ -1416,11 +1416,11 @@ function readWorkspaceNetworkRules() {
     const rawPorts = row.querySelector("[data-network-ports]")?.value.trim() || "";
     const pieces = rawPorts.split(",").map((value) => value.trim());
     if (!rawPorts || pieces.some((value) => !/^\d+$/.test(value))) {
-      throw new Error(`TCP ports for ${domain || "each domain"} must be comma-separated integers.`);
+      throw new Error(t("admin.workspace.network.ports_integers", { domain: domain || t("admin.workspace.network.each_domain") }));
     }
     const ports = pieces.map((value) => Number(value));
     if (ports.some((value) => value < 1 || value > 65535)) {
-      throw new Error(`TCP ports for ${domain || "each domain"} must be between 1 and 65535.`);
+      throw new Error(t("admin.workspace.network.ports_range", { domain: domain || t("admin.workspace.network.each_domain") }));
     }
     return { domain, suffix: row.querySelector("[data-network-suffix]")?.value === "suffix", ports };
   });

@@ -162,5 +162,30 @@
     "title": "Projects folder",
     "message": "The folder path could not be read. Check it and choose the folder again.",
     "fix": "Choose a different folder."
+  },
+  "setup.check.ports_in_use": {
+    "title": "Ports",
+    "message": "Port {port} is in use by {process}.",
+    "fix": "Choose other ports under Advanced."
+  },
+  "setup.import.virtualization": {
+    "title": "Setting up Cognita’s Linux",
+    "message": "WSL could not start a virtual machine.",
+    "fix": "Turn on Intel VT-x or AMD-V/SVM in your PC’s BIOS/UEFI settings. On a virtual machine, turn on nested virtualization."
+  },
+  "setup.workspace.kvm_unavailable": {
+    "title": "Workspace",
+    "message": "This PC’s WSL has no /dev/kvm, so Workspace will be off. Everything else will be installed.",
+    "fix": "To use Workspace, turn on virtualization in the BIOS, or nested virtualization on a virtual machine, then run: cognita install --workspace on"
+  },
+  "setup.tailscale.signature_refused": {
+    "title": "Downloading Tailscale",
+    "message": "The downloaded file is not signed by Tailscale Inc., so it was not run.",
+    "fix": "Install Tailscale yourself from tailscale.com and run this again."
+  },
+  "setup.funnel.enable_required": {
+    "title": "Turning on Funnel",
+    "message": "Your tailnet’s owner must turn on Funnel once. Open this link, turn it on, then press Retry: {link}",
+    "fix": "Then run this again, or press Retry in Setup."
   }
 }

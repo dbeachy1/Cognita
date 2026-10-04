@@ -81,6 +81,83 @@ Test-Case 'Setup relay: unknown failure gets a localized summary and an English 
     } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
 }
 
+Test-Case 'localized helper recovery retains the original technical fix and known Windows recovery guidance' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'fr-FR'
+        Set-HelperLocale
+        $originalFix = 'Choose other ports under Advanced.'
+        $j = Format-ProgressJson -Stage 'check.ports' -Title 'Ports' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'Port 8675 is in use by python.' -Fix $originalFix -MessageId 'setup.check.ports_in_use' -Values @{ port = 8675; process = 'python' }
+        $p = $j | ConvertFrom-Json
+        Assert-Equal $originalFix $p.fix 'diagnostic fix stays English'
+        Assert-Equal $originalFix $p.fix_technical 'Setup can show the original fix beside localized recovery'
+        Assert-Match $p.fix_display 'ports dans Options avancées\.' 'specific port recovery is localized'
+        Assert-Equal 'Le port 8675 est utilisé par python.' $p.message_display 'known values are substituted in translated text'
+
+        $j = Format-ProgressJson -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'WSL could not start a virtual machine.' -Fix 'Turn on virtualization (Intel VT-x or AMD-V/SVM) in your PC''s BIOS/UEFI settings. On a virtual machine, turn on nested virtualization.' -MessageId 'setup.import.virtualization'
+        $p = $j | ConvertFrom-Json
+        Assert-Match $p.fix_display 'virtualisation imbriqu' 'virtualization recovery is localized'
+
+        $j = Format-ProgressJson -Stage 'workspace' -Title 'Workspace' -State 'warning' -BytesDone $null -BytesTotal $null `
+            -Message 'This PC''s WSL has no /dev/kvm, so Workspace will be off.' -Fix 'To use Workspace, enable virtualization, then run cognita install --workspace on' -MessageId 'setup.workspace.kvm_unavailable'
+        $p = $j | ConvertFrom-Json
+        Assert-Match $p.fix_display 'cognita install --workspace on' '/dev/kvm recovery retains its usable command'
+
+        $j = Format-ProgressJson -Stage 'remote' -Title 'Downloading Tailscale' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'The downloaded file is not signed by Tailscale Inc., so it was not run.' -Fix 'Install Tailscale yourself from tailscale.com and run this again.' -MessageId 'setup.tailscale.signature_refused'
+        $p = $j | ConvertFrom-Json
+        Assert-Match $p.fix_display 'tailscale.com' 'signature refusal recovery is shown'
+
+        $j = Format-ProgressJson -Stage 'remote.funnel' -Title 'Turning on Funnel' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'Owner must enable Funnel: https://login.tailscale.com/f/funnel?node=nABC123' -Fix 'Then run this again (or press Retry in Setup).' `
+            -MessageId 'setup.funnel.enable_required' -Values @{ link = 'https://login.tailscale.com/f/funnel?node=nABC123' }
+        $p = $j | ConvertFrom-Json
+        Assert-Match $p.message_display 'https://login.tailscale.com/f/funnel\?node=nABC123' 'Funnel owner link remains usable'
+        Assert-Match $p.fix_display 'Réessayer' 'Funnel recovery is localized'
+
+        $j = Format-ProgressJson -Stage 'external' -Title 'External tool' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'tool failed (exit 9)' -Fix 'Run tool --repair --target C:\\data'
+        $p = $j | ConvertFrom-Json
+        Assert-Equal 'Run tool --repair --target C:\\data' $p.fix_technical 'generic helper failure retains its original technical fix'
+        Assert-Match $p.fix_display 'diagnostics' 'generic translated guidance remains available'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'known helper recovery messages exist in every supported Setup locale' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        foreach ($locale in $script:SupportedLocales) {
+            $env:COGNITA_LANG = $locale
+            Set-HelperLocale
+            foreach ($id in @('setup.check.ports_in_use', 'setup.import.virtualization', 'setup.workspace.kvm_unavailable', 'setup.tailscale.signature_refused', 'setup.funnel.enable_required')) {
+                Assert-True (Test-SetupMessageId -Id $id) ("{0} has {1}" -f $locale, $id)
+            }
+            $j = Format-ProgressJson -Stage 'remote.funnel' -Title 'Turning on Funnel' -State 'failed' -BytesDone $null -BytesTotal $null `
+                -Message 'Owner must enable Funnel: https://example.invalid/enable' -Fix 'Retry.' -MessageId 'setup.funnel.enable_required' -Values @{ link = 'https://example.invalid/enable' }
+            $p = $j | ConvertFrom-Json
+            Assert-Match $p.message_display 'https://example.invalid/enable' ("{0} retains the Funnel enablement link" -f $locale)
+            Assert-True ([bool]$p.fix_display) ("{0} displays Funnel recovery" -f $locale)
+        }
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
+Test-Case 'unknown English failures preserve actionable fixes in Setup' {
+    $oldLocale = $env:COGNITA_LANG
+    try {
+        $env:COGNITA_LANG = 'en-US'
+        Set-HelperLocale
+        $originalFix = 'Run tool --repair --target C:\data'
+        $j = Format-ProgressJson -Stage 'external' -Title 'External tool' -State 'failed' -BytesDone $null -BytesTotal $null `
+            -Message 'tool failed (exit 9)' -Fix $originalFix
+        $p = $j | ConvertFrom-Json
+        Assert-Equal $originalFix $p.fix_technical 'helper preserves original repair command'
+        $p = Add-LocalizedRelayFields -JsonLine '{"schema":1,"stage":"external","state":"failed","title":"External tool","message":"tool failed (exit 9)","fix":"Run tool --repair --target C:\\data"}' | ConvertFrom-Json
+        Assert-Equal $originalFix $p.fix_technical 'relay preserves original repair command'
+    } finally { $env:COGNITA_LANG = $oldLocale; Set-HelperLocale }
+}
+
 Test-Case 'Setup relay: known Linux stages show localized titles with English diagnostics intact' {
     $oldLocale = $env:COGNITA_LANG
     try {

@@ -162,5 +162,10 @@
     "title": "Pasta de projetos",
     "message": "Não foi possível ler o caminho da pasta. Verifique-o e escolha a pasta novamente.",
     "fix": "Escolha outra pasta."
-  }
+  },
+  "setup.check.ports_in_use": { "title": "Portas", "message": "A porta {port} está sendo usada por {process}.", "fix": "Escolha outras portas em Avançado." },
+  "setup.import.virtualization": { "title": "Configurando o Linux do Cognita", "message": "O WSL não conseguiu iniciar uma máquina virtual.", "fix": "Ative Intel VT-x ou AMD-V/SVM nas configurações de BIOS/UEFI do PC. Em uma máquina virtual, ative a virtualização aninhada." },
+  "setup.workspace.kvm_unavailable": { "title": "Workspace", "message": "O WSL deste PC não tem /dev/kvm, então o Workspace ficará desativado. Todo o restante será instalado.", "fix": "Para usar o Workspace, ative a virtualização no BIOS ou a virtualização aninhada em uma máquina virtual e execute: cognita install --workspace on" },
+  "setup.tailscale.signature_refused": { "title": "Baixando o Tailscale", "message": "O arquivo baixado não foi assinado pelo Tailscale Inc. e não foi executado.", "fix": "Instale o Tailscale diretamente de tailscale.com e execute novamente." },
+  "setup.funnel.enable_required": { "title": "Ativando o Funnel", "message": "O proprietário do seu tailnet precisa ativar o Funnel uma vez. Abra este link, ative-o e pressione Tentar novamente: {link}", "fix": "Execute novamente ou pressione Tentar novamente no programa de instalação." }
 }

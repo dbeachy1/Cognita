@@ -19,7 +19,7 @@ IDENTITY_SCHEMA = 1
 # The application version — what `/healthz`, the wheel metadata, the Admin UI,
 # the `initialize` serverInfo, the self-test plan and the image tag all report.
 # Move it in the same commit as the change that ships.
-APPLICATION_VERSION = "15.3.0"
+APPLICATION_VERSION = "15.4.0"
 
 # The public combined-connector MCP generation, served at
 # `/mcp/connectors/<slug>/mcp/v<N>`. Bump ONLY for a client-visible change to

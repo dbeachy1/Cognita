@@ -55,15 +55,23 @@ def test_admin_network_editor_has_domain_port_controls_without_scheme_selector()
     assert "data-network-suffix" in app
     assert "data-network-ports" in app
     assert "data-network-enable-legacy" in app
-    assert "Enable HTTP + HTTPS" in app
+    assert 't("admin.workspace.network.enable_http_https")' in app
+    assert 't("admin.workspace.network.legacy_rule_unavailable")' in app
+    for key in (
+        "domain", "match", "exact_domain", "domain_and_subdomains", "tcp_ports", "remove",
+    ):
+        assert f't("admin.workspace.network.{key}")' in app
     assert "ports: [80, 443]" in app
     assert "workspaceNetworkLegacyOverrides" in app
     assert "explicitlyEnabled" in app
     assert 'protocols: ["http", "https"]' in app
     assert "legacy.protocols.slice()" in app
     assert "workspaceNetworkPayload" in app
-    assert "must be comma-separated integers" in app
-    assert "between 1 and 65535" in app
+    assert 't("admin.workspace.network.ports_integers"' in app
+    assert 't("admin.workspace.network.ports_range"' in app
+    assert 't("admin.status.unknown")' in app
+    assert "must be comma-separated integers" not in app
+    assert "between 1 and 65535" not in app
     assert ".filter(Number.isFinite)" not in app
     assert 'protocols:["https"]' not in index
 

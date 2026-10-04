@@ -1,11 +1,19 @@
 # Changelog
 
-## 15.3.0 — Localized operator UI and simpler Windows upgrades (2026-10-04)
+## 15.4.0 — Complete localized Setup and Admin guidance (2026-10-04)
 
-- Windows Setup, Admin, and OAuth user interfaces support U.S. English, Spanish, French,
-  German, Italian, and Brazilian Portuguese. Logs, diagnostics, and console scripts remain
-  in English.
-- Windows Setup shows the Cognita icon, names the installed and incoming versions during an
+- Windows Setup uses high-resolution Cognita artwork in its Welcome panel, title bar, and
+  taskbar. Setup and uninstall present remaining progress and recovery guidance in the six
+  supported UI languages while retaining English technical details.
+- The Admin Workspace network editor and configured-key status use the selected language.
+  Generic errors keep their specific recovery instructions available.
+- MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.4.0.md`.
+
+## 15.3.0 — Initial operator localization and simpler Windows upgrades (2026-10-04)
+
+- Windows Setup, Admin, and OAuth gained catalogs for U.S. English, Spanish, French, German,
+  Italian, and Brazilian Portuguese. Logs, diagnostics, and console scripts remain in English.
+- Windows Setup shows the Cognita mark in its page header, names the installed and incoming versions during an
   upgrade, and asks for the current Admin password once. Password changes use `cognita password`.
 - MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.3.0.md`.
 

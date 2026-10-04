@@ -195,6 +195,10 @@ SolidCompression=no
 WizardStyle=modern
 ; The source image is the same Cognita mark used by the web UI; Inno scales it into the wizard header.
 WizardSmallImageFile=..\..\src\cognita\web\cognita-icon-512.png
+; Tall, high-resolution Cognita art for the Welcome and other wizard pages.
+WizardImageFile=assets\cognita-wizard.png
+; Multi-size icon shown by Setup in the taskbar, title bar, and Explorer.
+SetupIconFile=assets\cognita-setup.ico
 UninstallDisplayName=Cognita
 ; Design 19.1 item 5: one Setup at a time. A second copy (the RunOnce resume plus a double-click, say)
 ; gets Inno's own "already running" message instead of two installs racing each other.
@@ -894,6 +898,12 @@ french.finishedWorkspace=Workspace :  %1
 german.finishedWorkspace=Workspace:  %1
 italian.finishedWorkspace=Workspace:  %1
 brazilianportuguese.finishedWorkspace=Workspace:  %1
+english.finishedUser= (user: %1)
+spanish.finishedUser= (usuario: %1)
+french.finishedUser= (utilisateur : %1)
+german.finishedUser= (Benutzer: %1)
+italian.finishedUser= (utente: %1)
+brazilianportuguese.finishedUser= (usuário: %1)
 english.finishedConnect=To connect claude.ai or ChatGPT: open Cognita Admin, go to Connectors, create a connector, and use its address.
 spanish.finishedConnect=Para conectar claude.ai o ChatGPT: abra Cognita Admin, vaya a Conectores, cree un conector y use su dirección.
 french.finishedConnect=Pour connecter claude.ai ou ChatGPT : ouvrez Cognita Admin, accédez à Connecteurs, créez un connecteur et utilisez son adresse.
@@ -906,6 +916,30 @@ french.failedStep=Étape en échec :  %1
 german.failedStep=Fehlgeschlagener Schritt:  %1
 italian.failedStep=Passaggio non riuscito:  %1
 brazilianportuguese.failedStep=Etapa que falhou:  %1
+english.failureStageStarting=Starting
+spanish.failureStageStarting=Inicio
+french.failureStageStarting=Démarrage
+german.failureStageStarting=Start
+italian.failureStageStarting=Avvio
+brazilianportuguese.failureStageStarting=Início
+english.failureStagePassword=Handing the Admin password to the installer
+spanish.failureStagePassword=Entrega de la contraseña de Admin al instalador
+french.failureStagePassword=Transmission du mot de passe Admin au programme d’installation
+german.failureStagePassword=Übergabe des Admin-Kennworts an das Setup
+italian.failureStagePassword=Consegna della password Admin al programma di installazione
+brazilianportuguese.failureStagePassword=Entrega da senha Admin ao instalador
+english.failureStageUnknown=Current step
+spanish.failureStageUnknown=Paso actual
+french.failureStageUnknown=Étape en cours
+german.failureStageUnknown=Aktueller Schritt
+italian.failureStageUnknown=Passaggio corrente
+brazilianportuguese.failureStageUnknown=Etapa atual
+english.technicalDetail=Technical detail:
+spanish.technicalDetail=Detalle técnico:
+french.technicalDetail=Détail technique :
+german.technicalDetail=Technische Details:
+italian.technicalDetail=Dettagli tecnici:
+brazilianportuguese.technicalDetail=Detalhe técnico:
 english.whatToDo=What to do:
 spanish.whatToDo=Qué hacer:
 french.whatToDo=Que faire :
@@ -1695,8 +1729,10 @@ var
   FailCount: Integer;
   FailText: String;
   FailStage: String;
+  FailStageDisplay: String;
   FailMessage: String;
   FailFix: String;
+  FailTechnicalFix: String;
   WarnText: String;
   SignInWarned: Boolean;          { a warning line of stage `keepalive` arrived: the sign-in task is not in place }
   LastStatus: String;             { ok | restart-required | failed, from JudgeResult }
@@ -1795,6 +1831,16 @@ begin
   else if ActiveLanguage = 'italian' then Result := 'it-IT'
   else if ActiveLanguage = 'brazilianportuguese' then Result := 'pt-BR'
   else Result := 'en-US';
+end;
+
+function FailureStageDisplayFor(const RawStage: String): String;
+begin
+  if RawStage = 'Starting' then
+    Result := CustomMessage('failureStageStarting')
+  else if RawStage = 'Handing the Admin password to the installer' then
+    Result := CustomMessage('failureStagePassword')
+  else
+    Result := CustomMessage('failureStageUnknown');
 end;
 
 function AdminUrl(Param: String): String;
@@ -1904,8 +1950,10 @@ begin
   FailCount := 0;
   FailText := '';
   FailStage := '';
+  FailStageDisplay := '';
   FailMessage := '';
   FailFix := '';
+  FailTechnicalFix := '';
   WarnText := '';
   SignInWarned := False;
   CurTitle := '';
@@ -2131,11 +2179,16 @@ begin
   begin
     FailCount := FailCount + 1;
     FailStage := CurTitle;
+    FailStageDisplay := JsonField(L, 'title_display');
+    if FailStageDisplay = '' then
+      FailStageDisplay := FailureStageDisplayFor(FailStage);
     FailMessage := Msg;
     FailFix := Fix;
+    FailTechnicalFix := JsonField(L, 'fix_technical');
     FailText := FailText + Msg;
     if Fix <> '' then
       FailText := FailText + #13#10 + CustomMessage('whatToDo') + ' ' + Fix;
+    FailText := FailText + AppendTechnicalDetail(FailFix, FailTechnicalFix, CustomMessage('technicalDetail'));
     FailText := FailText + #13#10#13#10;
   end
   else if St = 'warning' then
@@ -2198,6 +2251,8 @@ begin
     FailCount := 1;
     if FailStage = '' then
       FailStage := CurTitle;
+    if FailStageDisplay = '' then
+      FailStageDisplay := FailureStageDisplayFor(FailStage);
     if FailMessage = '' then
     begin
       if LastResult = '' then
@@ -2617,17 +2672,19 @@ end;
   failed (the text then points at the log folder instead). }
 function AutoSaveDiagnostics(const Why: String): String;
 var
-  KText, KStage, KMsg, KFix, KResult: String;
+  KText, KStage, KStageDisplay, KMsg, KFix, KTechnicalFix, KResult: String;
   KCount: Integer;
 begin
-  KText := FailText; KStage := FailStage; KMsg := FailMessage; KFix := FailFix; KResult := LastResult;
+  KText := FailText; KStage := FailStage; KStageDisplay := FailStageDisplay;
+  KMsg := FailMessage; KFix := FailFix; KTechnicalFix := FailTechnicalFix; KResult := LastResult;
   KCount := FailCount;
   Result := '';
   Log('diagnostics: saving automatically after a failure (' + Why + ')');
   if RunHelperBusy(CustomMessage('busySavingDiagnostics'), 'diagnostics', '--no-open --setup-log ' + QuoteArg(ExpandConstant('{log}'))) then
     Result := ResultValue(LastResult, 'zip');
   Log('diagnostics: automatic save zip=[' + Result + ']');
-  FailText := KText; FailStage := KStage; FailMessage := KMsg; FailFix := KFix; LastResult := KResult;
+  FailText := KText; FailStage := KStage; FailStageDisplay := KStageDisplay;
+  FailMessage := KMsg; FailFix := KFix; FailTechnicalFix := KTechnicalFix; LastResult := KResult;
   FailCount := KCount;
 end;
 
@@ -3178,7 +3235,8 @@ begin
     Link := ResultValue(LastResult, 'link');
     RemoteNote := CustomMessage('remoteFailurePrefix') + ' ' + FailMessage;
     if FailFix <> '' then
-      RemoteNote := RemoteNote + ' ' + FailFix;
+    RemoteNote := RemoteNote + ' ' + FailFix;
+    RemoteNote := RemoteNote + AppendTechnicalDetail(FailFix, FailTechnicalFix, CustomMessage('technicalDetail'));
     RemoteNote := RemoteNote + ' ' + CustomMessage('remoteTryLater');
     Log('remote access: failed; reason=' + ResultValue(LastResult, 'reason') + ' link_set=' + IntToStr(Ord(Link <> '')));
     if Link <> '' then
@@ -3823,7 +3881,7 @@ begin
   { The user name only when it is known or really passed (design 19.2 item 14). }
   UserText := '';
   if AdminUser <> '' then
-    UserText := '(user: ' + AdminUser + ')';
+    UserText := FmtMessage(CustomMessage('finishedUser'), [AdminUser]);
   PlaceLinkRow(FinAdminPre, FinAdminLink, AdminUrl(''), FinAdminPost, UserText, X, Y);
   PlaceLinkRow(FinMcpPre, FinMcpLink, 'http://localhost:' + IntToStr(ChosenMcpPort) + '/', nil, '', X, Y);
   if PublicUrl <> '' then
@@ -4116,7 +4174,7 @@ begin
         memo (a long failure used to push the buttons off the page), and a fixed row at the bottom
         (Save diagnostics, Open the log folder). The heading says which run it was. }
       WizardForm.FinishedHeadingLabel.Caption := FailHeading(InstallMode);
-      Cap := FmtMessage(CustomMessage('failedStep'), [FailStage]);
+      Cap := FmtMessage(CustomMessage('failedStep'), [FailStageDisplay]);
       if StillThereText(InstallMode) <> '' then
         Cap := Cap + #13#10#13#10 + StillThereText(InstallMode);
       WizardForm.FinishedLabel.Caption := Cap;
@@ -4467,6 +4525,7 @@ begin
   FailCount := 0;
   FailText := '';
   FailStage := 'Starting';
+  FailStageDisplay := FailureStageDisplayFor(FailStage);
   InstallWarnText := '';
   InstallSignInWarned := False;
   ResultWorkspace := '';
@@ -4524,6 +4583,7 @@ begin
       Log('install flow: mode=' + IntToStr(InstallMode) + ' verb=' + Verb + ' image=' + IntToStr(Ord(ImageFile <> '')) +
         ' src=' + IntToStr(Ord(SrcFile <> '')) + ' admin_user_passed=' + IntToStr(Ord((Verb = 'install') and (not RunsOverInstalled))));
       FailStage := 'Handing the Admin password to the installer';
+      FailStageDisplay := FailureStageDisplayFor(FailStage);
       if not HandOverPassword(PipeB) then
       begin
         FailCount := 1;
@@ -4820,6 +4880,8 @@ var
   Wanted: Boolean;
 begin
   Result := True;
+  if not SetEnvironmentVariableTextW('COGNITA_LANG', SetupLocaleTag) then
+    Log('uninstall: could not set COGNITA_LANG for helper processes');
   UninstallDeleteData := False;
   UninstallDeleteFailed := False;
   HelperFolder := ExpandConstant('{app}');

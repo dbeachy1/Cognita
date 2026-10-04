@@ -51,8 +51,15 @@ def test_setup_custom_message_ids_match_across_all_supported_languages():
         "failedInstallHeading",
         "progressInstalling",
         "warningAccelerationFix",
+        "finishedUser",
+        "failureStageStarting",
+        "failureStagePassword",
+        "failureStageUnknown",
+        "technicalDetail",
     ):
         assert key in expected
+    assert by_language["spanish"]["finishedUser"] != by_language["english"]["finishedUser"]
+    assert by_language["french"]["finishedUser"] != by_language["english"]["finishedUser"]
 
 
 def test_reachable_setup_progress_and_failure_literals_use_catalog_messages():
@@ -71,3 +78,20 @@ def test_reachable_setup_progress_and_failure_literals_use_catalog_messages():
         assert literal not in source
     assert "UninstallProgressForm.StatusLabel.Caption := DisplayTitle;" in source
     assert "DisplayTitle := JsonField(L, 'title_display');" in source
+
+
+def test_failure_page_localizes_stage_and_preserves_helper_technical_guidance():
+    source = ISS.read_text(encoding="utf-8")
+    uninstall = source.split("function InitializeUninstall:", 1)[1].split(
+        "procedure OnUninstallLine", 1
+    )[0]
+    assert "SetEnvironmentVariableTextW('COGNITA_LANG', SetupLocaleTag)" in uninstall
+    assert uninstall.index("SetEnvironmentVariableTextW") < uninstall.index("if UninstallSilent then")
+
+    assert "FailStageDisplay := JsonField(L, 'title_display');" in source
+    assert "FailStage := CurTitle;" in source
+    assert "CustomMessage('failedStep'), [FailStageDisplay]" in source
+    assert "CustomMessage('failedStep'), [FailStage])" not in source
+    assert "FailTechnicalFix := JsonField(L, 'fix_technical');" in source
+    assert "AppendTechnicalDetail(FailFix, FailTechnicalFix, CustomMessage('technicalDetail'))" in source
+    assert "FailStageDisplay := FailureStageDisplayFor(FailStage);" in source

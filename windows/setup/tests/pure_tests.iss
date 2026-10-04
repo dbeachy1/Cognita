@@ -456,6 +456,13 @@ begin
   CheckStr('WarningFix another stage without a fix gets none', WarningFix('keepalive', ''), '');
   CheckStr('WarningFix another stage keeps its fix', WarningFix('nvidia', 'Run Setup again later.'), 'Run Setup again later.');
   CheckStr('WarningFix no stage, no fix', WarningFix('', ''), '');
+  CheckStr('AppendTechnicalDetail keeps English recovery guidance alongside localized detail label',
+    AppendTechnicalDetail('Choose other ports in Advanced.', 'Choose other ports under Advanced.', 'Technical detail:'),
+    (#13#10 + 'Technical detail: Choose other ports under Advanced.'));
+  CheckStr('AppendTechnicalDetail adds nothing when helper provided no technical fix',
+    AppendTechnicalDetail('Choose other ports under Advanced.', '', 'Technical detail:'), '');
+  CheckStr('AppendTechnicalDetail avoids repeating guidance that was not localized',
+    AppendTechnicalDetail('Use this fix.', 'Use this fix.', 'Technical detail:'), '');
 end;
 
 procedure CasesWslReclaim;

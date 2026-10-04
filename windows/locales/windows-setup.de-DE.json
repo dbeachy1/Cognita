@@ -162,5 +162,10 @@
     "title": "Projektordner",
     "message": "Der Ordnerpfad konnte nicht gelesen werden. Prüfen Sie ihn und wählen Sie den Ordner erneut aus.",
     "fix": "Wählen Sie einen anderen Ordner."
-  }
+  },
+  "setup.check.ports_in_use": { "title": "Ports", "message": "Port {port} wird von {process} verwendet.", "fix": "Wählen Sie unter Erweitert andere Ports aus." },
+  "setup.import.virtualization": { "title": "Cognitas Linux einrichten", "message": "WSL konnte keine virtuelle Maschine starten.", "fix": "Aktivieren Sie Intel VT-x oder AMD-V/SVM in den BIOS-/UEFI-Einstellungen Ihres PCs. Aktivieren Sie bei einer virtuellen Maschine die verschachtelte Virtualisierung." },
+  "setup.workspace.kvm_unavailable": { "title": "Workspace", "message": "WSL auf diesem PC hat kein /dev/kvm. Workspace bleibt daher deaktiviert. Alles andere wird installiert.", "fix": "Aktivieren Sie für Workspace die Virtualisierung im BIOS oder die verschachtelte Virtualisierung auf einer virtuellen Maschine. Führen Sie dann cognita install --workspace on aus." },
+  "setup.tailscale.signature_refused": { "title": "Tailscale herunterladen", "message": "Die heruntergeladene Datei ist nicht von Tailscale Inc. signiert und wurde daher nicht ausgeführt.", "fix": "Installieren Sie Tailscale selbst von tailscale.com und starten Sie diesen Vorgang erneut." },
+  "setup.funnel.enable_required": { "title": "Funnel aktivieren", "message": "Der Besitzer Ihres Tailnets muss Funnel einmalig aktivieren. Öffnen Sie diesen Link, aktivieren Sie Funnel und klicken Sie dann auf Erneut versuchen: {link}", "fix": "Starten Sie den Vorgang erneut oder klicken Sie in Setup auf Erneut versuchen." }
 }

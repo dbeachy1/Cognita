@@ -852,6 +852,15 @@ begin
     Result := '';
 end;
 
+{ Keep the helper's English recovery text visible when Setup also shows a localized presentation string. }
+function AppendTechnicalDetail(const DisplayFix, TechnicalFix, DetailLabel: String): String;
+begin
+  if (TechnicalFix = '') or (TechnicalFix = DisplayFix) then
+    Result := ''
+  else
+    Result := #13#10 + DetailLabel + ' ' + TechnicalFix;
+end;
+
 { Design 22.9: the Ready page's WSL memory check box is shown only when wsl_reclaim=unset (no autoMemoryReclaim
   key; `set` and `unreadable` hide it), in every mode, update included. }
 function WslReclaimBoxVisible(const WslReclaim: String): Boolean;
