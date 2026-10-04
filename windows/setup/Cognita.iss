@@ -676,6 +676,258 @@ french.summaryFreshNote= Utilisez Avancé pour modifier les ports, l’emplaceme
 german.summaryFreshNote= Unter Erweitert können Sie Ports, Cognitas Datenspeicherort oder Workspace ändern.
 italian.summaryFreshNote= Usa Avanzate per modificare le porte, la posizione dei dati di Cognita o disattivare Workspace.
 brazilianportuguese.summaryFreshNote= Use Avançado para alterar as portas, o local dos dados do Cognita ou desativar o Workspace.
+english.welcomeResume=Setup is continuing after the restart. Press Next to check this PC again and finish installing Cognita.
+spanish.welcomeResume=La instalación continúa después del reinicio. Pulse Siguiente para volver a comprobar este equipo y terminar de instalar Cognita.
+french.welcomeResume=Le programme reprend après le redémarrage. Cliquez sur Suivant pour vérifier à nouveau ce PC et terminer l’installation de Cognita.
+german.welcomeResume=Das Setup wird nach dem Neustart fortgesetzt. Klicken Sie auf Weiter, um diesen PC erneut zu prüfen und die Cognita-Installation abzuschließen.
+italian.welcomeResume=L’installazione riprende dopo il riavvio. Premi Avanti per controllare di nuovo questo PC e completare l’installazione di Cognita.
+brazilianportuguese.welcomeResume=A instalação continuará após a reinicialização. Clique em Avançar para verificar este computador novamente e concluir a instalação do Cognita.
+english.welcomeUpdate=COGNITA %1 is installed. This Setup updates it to %2. Press Next to check this PC.
+spanish.welcomeUpdate=Está instalado Cognita %1. Esta instalación lo actualiza a %2. Pulse Siguiente para comprobar este equipo.
+french.welcomeUpdate=Cognita %1 est installé. Ce programme le met à jour vers %2. Cliquez sur Suivant pour vérifier ce PC.
+german.welcomeUpdate=Cognita %1 ist installiert. Dieses Setup aktualisiert es auf %2. Klicken Sie auf Weiter, um diesen PC zu prüfen.
+italian.welcomeUpdate=Cognita %1 è installato. Questa installazione lo aggiorna alla versione %2. Premi Avanti per controllare questo PC.
+brazilianportuguese.welcomeUpdate=O Cognita %1 está instalado. Esta instalação o atualiza para %2. Clique em Avançar para verificar este computador.
+english.welcomeUpdateNoVersion=Cognita is installed. This Setup updates it to %1. Press Next to check this PC.
+spanish.welcomeUpdateNoVersion=Está instalado Cognita. Esta instalación lo actualiza a %1. Pulse Siguiente para comprobar este equipo.
+french.welcomeUpdateNoVersion=Cognita est installé. Ce programme le met à jour vers %1. Cliquez sur Suivant pour vérifier ce PC.
+german.welcomeUpdateNoVersion=Cognita ist installiert. Dieses Setup aktualisiert es auf %1. Klicken Sie auf Weiter, um diesen PC zu prüfen.
+italian.welcomeUpdateNoVersion=Cognita è installato. Questa installazione lo aggiorna alla versione %1. Premi Avanti per controllare questo PC.
+brazilianportuguese.welcomeUpdateNoVersion=O Cognita está instalado. Esta instalação o atualiza para %1. Clique em Avançar para verificar este computador.
+english.welcomeRepair=Cognita is already set up on this PC. Setup checks it and repairs problems. Press Next to check this PC.
+spanish.welcomeRepair=Cognita ya está instalado en este equipo. La instalación lo comprobará y reparará los problemas. Pulse Siguiente para comprobar este equipo.
+french.welcomeRepair=Cognita est déjà installé sur ce PC. Le programme le vérifie et répare les problèmes. Cliquez sur Suivant pour vérifier ce PC.
+german.welcomeRepair=Cognita ist auf diesem PC bereits eingerichtet. Das Setup prüft es und behebt Probleme. Klicken Sie auf Weiter, um diesen PC zu prüfen.
+italian.welcomeRepair=Cognita è già configurato su questo PC. L’installazione lo controlla e corregge i problemi. Premi Avanti per controllare questo PC.
+brazilianportuguese.welcomeRepair=O Cognita já está configurado neste computador. A instalação verificará e corrigirá problemas. Clique em Avançar para verificar este computador.
+english.welcomeReinstall=Cognita was removed from this PC and its data was kept. Setup installs Cognita %1 again over that data. Press Next to check this PC.
+spanish.welcomeReinstall=Se quitó Cognita de este equipo y se conservaron sus datos. La instalación volverá a instalar Cognita %1 sobre esos datos. Pulse Siguiente para comprobar este equipo.
+french.welcomeReinstall=Cognita a été supprimé de ce PC et ses données ont été conservées. Le programme réinstalle Cognita %1 sur ces données. Cliquez sur Suivant pour vérifier ce PC.
+german.welcomeReinstall=Cognita wurde von diesem PC entfernt; die Daten blieben erhalten. Das Setup installiert Cognita %1 erneut mit diesen Daten. Klicken Sie auf Weiter, um diesen PC zu prüfen.
+italian.welcomeReinstall=Cognita è stato rimosso da questo PC e i dati sono stati conservati. L’installazione reinstalla Cognita %1 usando quei dati. Premi Avanti per controllare questo PC.
+brazilianportuguese.welcomeReinstall=O Cognita foi removido deste computador e os dados foram mantidos. A instalação instalará o Cognita %1 novamente usando esses dados. Clique em Avançar para verificar este computador.
+english.welcomeFinish=An earlier Cognita install did not finish. Setup continues it, and nothing already set up is lost. Press Next to check this PC.
+spanish.welcomeFinish=Una instalación anterior de Cognita no terminó. La instalación la continuará sin perder lo que ya está configurado. Pulse Siguiente para comprobar este equipo.
+french.welcomeFinish=Une installation précédente de Cognita n’a pas abouti. Le programme la reprend sans perdre ce qui est déjà configuré. Cliquez sur Suivant pour vérifier ce PC.
+german.welcomeFinish=Eine frühere Cognita-Installation wurde nicht abgeschlossen. Das Setup setzt sie fort, ohne bereits eingerichtete Daten zu verlieren. Klicken Sie auf Weiter, um diesen PC zu prüfen.
+italian.welcomeFinish=Una precedente installazione di Cognita non è terminata. L’installazione la riprende senza perdere ciò che è già configurato. Premi Avanti per controllare questo PC.
+brazilianportuguese.welcomeFinish=Uma instalação anterior do Cognita não foi concluída. A instalação continuará sem perder o que já está configurado. Clique em Avançar para verificar este computador.
+english.welcomeFresh=This installs Cognita %1 on your PC and starts it whenever you sign in to Windows. Press Next to check that this PC can run it.
+spanish.welcomeFresh=Esto instala Cognita %1 en su equipo y lo inicia cada vez que inicie sesión en Windows. Pulse Siguiente para comprobar que este equipo puede ejecutarlo.
+french.welcomeFresh=Cette installation installe Cognita %1 sur ce PC et le démarre à chaque ouverture de session Windows. Cliquez sur Suivant pour vérifier que ce PC peut l’exécuter.
+german.welcomeFresh=Dieses Setup installiert Cognita %1 auf Ihrem PC und startet es bei jeder Windows-Anmeldung. Klicken Sie auf Weiter, um zu prüfen, ob dieser PC dafür geeignet ist.
+italian.welcomeFresh=Questa installazione installa Cognita %1 sul PC e lo avvia a ogni accesso a Windows. Premi Avanti per verificare che il PC possa eseguirlo.
+brazilianportuguese.welcomeFresh=Esta instalação instala o Cognita %1 no computador e o inicia sempre que você entra no Windows. Clique em Avançar para verificar se este computador pode executá-lo.
+english.accelFound=Setup found an NVIDIA graphics card (%1, driver %2). Cognita can use it to index documents and read text in images much faster than the CPU.
+spanish.accelFound=La instalación encontró una tarjeta gráfica NVIDIA (%1, controlador %2). Cognita puede usarla para indexar documentos y leer texto en imágenes mucho más rápido que con la CPU.
+french.accelFound=Le programme a détecté une carte graphique NVIDIA (%1, pilote %2). Cognita peut l’utiliser pour indexer des documents et lire le texte des images bien plus vite qu’avec le processeur.
+german.accelFound=Das Setup hat eine NVIDIA-Grafikkarte gefunden (%1, Treiber %2). Cognita kann damit Dokumente indizieren und Bildtext viel schneller als mit der CPU lesen.
+italian.accelFound=L’installazione ha rilevato una scheda grafica NVIDIA (%1, driver %2). Cognita può usarla per indicizzare documenti e leggere il testo nelle immagini molto più velocemente della CPU.
+brazilianportuguese.accelFound=A instalação encontrou uma placa de vídeo NVIDIA (%1, driver %2). O Cognita pode usá-la para indexar documentos e ler textos em imagens muito mais rápido que a CPU.
+english.accelOld=Your NVIDIA driver is %1. Cognita needs driver 580 or newer to use this card. Update the driver, then run Setup again and choose NVIDIA.
+spanish.accelOld=El controlador NVIDIA es %1. Cognita necesita la versión 580 o posterior para usar esta tarjeta. Actualice el controlador, vuelva a ejecutar la instalación y elija NVIDIA.
+french.accelOld=Votre pilote NVIDIA est %1. Cognita nécessite la version 580 ou ultérieure pour utiliser cette carte. Mettez le pilote à jour, relancez le programme et choisissez NVIDIA.
+german.accelOld=Ihr NVIDIA-Treiber ist %1. Cognita benötigt Treiberversion 580 oder neuer, um diese Karte zu verwenden. Aktualisieren Sie den Treiber, starten Sie das Setup erneut und wählen Sie NVIDIA.
+italian.accelOld=Il driver NVIDIA è %1. Cognita richiede la versione 580 o successiva per usare questa scheda. Aggiorna il driver, esegui di nuovo l’installazione e scegli NVIDIA.
+brazilianportuguese.accelOld=O driver NVIDIA é %1. O Cognita precisa da versão 580 ou mais recente para usar esta placa. Atualize o driver, execute a instalação novamente e escolha NVIDIA.
+english.accelNoBuild=This version of Cognita has no NVIDIA build, so it installs for the CPU.
+spanish.accelNoBuild=Esta versión de Cognita no incluye una compilación para NVIDIA, por lo que se instalará para la CPU.
+french.accelNoBuild=Cette version de Cognita ne propose pas de build NVIDIA ; l’installation utilisera donc le processeur.
+german.accelNoBuild=Diese Cognita-Version enthält keinen NVIDIA-Build und wird daher für die CPU installiert.
+italian.accelNoBuild=Questa versione di Cognita non include un pacchetto NVIDIA, quindi verrà installata per la CPU.
+brazilianportuguese.accelNoBuild=Esta versão do Cognita não tem uma compilação para NVIDIA, então será instalada para uso com a CPU.
+english.accelGpuChoice=Use the NVIDIA GPU (recommended).
+spanish.accelGpuChoice=Usar la GPU NVIDIA (recomendado).
+french.accelGpuChoice=Utiliser le GPU NVIDIA (recommandé).
+german.accelGpuChoice=NVIDIA-GPU verwenden (empfohlen).
+italian.accelGpuChoice=Usa la GPU NVIDIA (consigliato).
+brazilianportuguese.accelGpuChoice=Usar a GPU NVIDIA (recomendado).
+english.accelCpuChoice=Use the CPU only. Cognita downloads about %1.
+spanish.accelCpuChoice=Usar solo la CPU. Cognita descargará unos %1.
+french.accelCpuChoice=Utiliser uniquement le processeur. Cognita téléchargera environ %1.
+german.accelCpuChoice=Nur die CPU verwenden. Cognita lädt etwa %1 herunter.
+italian.accelCpuChoice=Usa solo la CPU. Cognita scaricherà circa %1.
+brazilianportuguese.accelCpuChoice=Usar somente a CPU. O Cognita baixará cerca de %1.
+english.accelGpuDownload= Cognita downloads about %1.
+spanish.accelGpuDownload= Cognita descargará unos %1.
+french.accelGpuDownload= Cognita téléchargera environ %1.
+german.accelGpuDownload= Cognita lädt etwa %1 herunter.
+italian.accelGpuDownload= Cognita scaricherà circa %1.
+brazilianportuguese.accelGpuDownload= O Cognita baixará cerca de %1.
+english.memoryReclaim=Let Windows reclaim memory that WSL holds as file cache. This adds one setting to %USERPROFILE%\.wslconfig, applying to all WSL distributions after WSL next starts.
+spanish.memoryReclaim=Permitir que Windows recupere la memoria que WSL usa como caché de archivos. Añade una opción a %USERPROFILE%\.wslconfig y se aplica a todas las distribuciones WSL al próximo inicio de WSL.
+french.memoryReclaim=Permettre à Windows de récupérer la mémoire que WSL utilise comme cache de fichiers. Cela ajoute un paramètre à %USERPROFILE%\.wslconfig, appliqué à toutes les distributions WSL au prochain démarrage de WSL.
+german.memoryReclaim=Windows kann Speicher zurückgewinnen, den WSL als Dateicache belegt. Dafür wird eine Einstellung zu %USERPROFILE%\.wslconfig hinzugefügt, die nach dem nächsten WSL-Start für alle WSL-Distributionen gilt.
+italian.memoryReclaim=Consenti a Windows di recuperare la memoria usata da WSL come cache dei file. Aggiunge un’impostazione a %USERPROFILE%\.wslconfig, applicata a tutte le distribuzioni WSL dal prossimo avvio di WSL.
+brazilianportuguese.memoryReclaim=Permitir que o Windows recupere a memória que o WSL mantém como cache de arquivos. Isso adiciona uma configuração a %USERPROFILE%\.wslconfig, válida para todas as distribuições WSL após a próxima inicialização do WSL.
+english.remoteTitle=Remote access (recommended)
+spanish.remoteTitle=Acceso remoto (recomendado)
+french.remoteTitle=Accès à distance (recommandé)
+german.remoteTitle=Fernzugriff (empfohlen)
+italian.remoteTitle=Accesso remoto (consigliato)
+brazilianportuguese.remoteTitle=Acesso remoto (recomendado)
+english.remoteSubtitle=Give your assistant a way to reach Cognita.
+spanish.remoteSubtitle=Permita que su asistente acceda a Cognita.
+french.remoteSubtitle=Permettez à votre assistant d’accéder à Cognita.
+german.remoteSubtitle=Geben Sie Ihrem Assistenten Zugriff auf Cognita.
+italian.remoteSubtitle=Consenti al tuo assistente di raggiungere Cognita.
+brazilianportuguese.remoteSubtitle=Permita que seu assistente acesse o Cognita.
+english.remoteBody=Assistants such as claude.ai, Claude Desktop, ChatGPT and Gemini connect to Cognita from their own servers, so they need a public address: a tunnel. Setup can create one now with Tailscale Funnel. It is free, and the address stays the same afterwards.%n%nYou can skip a tunnel only if you connect exclusively from a tool on this PC that can reach Cognita itself (Claude Code, Codex, Google Antigravity, Cursor, or a local LLM). Even then, a tunnel is recommended so any assistant can use Cognita.%n%nIf Tailscale is not installed, Setup downloads the official installer (about 40 MB) from pkgs.tailscale.com and runs it; Tailscale asks for permission itself. Cognita Admin is never made public.
+spanish.remoteBody=Asistentes como claude.ai, Claude Desktop, ChatGPT y Gemini se conectan a Cognita desde sus propios servidores, por lo que necesitan una dirección pública: un túnel. La instalación puede crear uno ahora con Tailscale Funnel. Es gratuito y la dirección seguirá siendo la misma.%n%nPuede omitir el túnel solo si se conecta exclusivamente desde una herramienta de este equipo que pueda acceder directamente a Cognita (Claude Code, Codex, Google Antigravity, Cursor o un modelo local). Aun así, se recomienda un túnel para que cualquier asistente pueda usar Cognita.%n%nSi Tailscale no está instalado, la instalación descarga y ejecuta el instalador oficial (unos 40 MB) desde pkgs.tailscale.com; Tailscale solicitará permiso. La página Admin de Cognita nunca se hace pública.
+french.remoteBody=Des assistants comme claude.ai, Claude Desktop, ChatGPT et Gemini se connectent à Cognita depuis leurs propres serveurs ; ils ont donc besoin d’une adresse publique, c’est-à-dire d’un tunnel. Le programme peut en créer un maintenant avec Tailscale Funnel. C’est gratuit et l’adresse restera la même.%n%nVous pouvez ignorer le tunnel uniquement si vous vous connectez exclusivement depuis un outil de ce PC qui accède directement à Cognita (Claude Code, Codex, Google Antigravity, Cursor ou un LLM local). Même dans ce cas, un tunnel est recommandé pour que tous les assistants puissent utiliser Cognita.%n%nSi Tailscale n’est pas installé, le programme télécharge et exécute l’installateur officiel (environ 40 Mo) depuis pkgs.tailscale.com ; Tailscale demande lui-même l’autorisation. L’interface Admin de Cognita n’est jamais rendue publique.
+german.remoteBody=Assistenten wie claude.ai, Claude Desktop, ChatGPT und Gemini verbinden sich von ihren eigenen Servern mit Cognita und benötigen daher eine öffentliche Adresse, also einen Tunnel. Das Setup kann jetzt mit Tailscale Funnel einen einrichten. Er ist kostenlos und die Adresse bleibt dauerhaft gleich.%n%nSie können den Tunnel nur überspringen, wenn Sie ausschließlich ein Tool auf diesem PC verwenden, das direkt auf Cognita zugreifen kann (Claude Code, Codex, Google Antigravity, Cursor oder ein lokales Sprachmodell). Auch dann wird ein Tunnel empfohlen, damit jeder Assistent Cognita verwenden kann.%n%nFalls Tailscale nicht installiert ist, lädt das Setup den offiziellen Installer (etwa 40 MB) von pkgs.tailscale.com herunter und startet ihn. Tailscale fragt selbst nach der Berechtigung. Cognita Admin wird niemals öffentlich gemacht.
+italian.remoteBody=Assistenti come claude.ai, Claude Desktop, ChatGPT e Gemini si connettono a Cognita dai propri server, quindi hanno bisogno di un indirizzo pubblico, cioè di un tunnel. L’installazione può crearne uno ora con Tailscale Funnel. È gratuito e l’indirizzo resterà lo stesso.%n%nPuoi evitare il tunnel solo se ti connetti esclusivamente da uno strumento su questo PC che raggiunge direttamente Cognita (Claude Code, Codex, Google Antigravity, Cursor o un modello locale). Anche in questo caso il tunnel è consigliato, così qualsiasi assistente può usare Cognita.%n%nSe Tailscale non è installato, l’installazione scarica ed esegue il programma ufficiale (circa 40 MB) da pkgs.tailscale.com; Tailscale chiede direttamente l’autorizzazione. La pagina Admin di Cognita non viene mai resa pubblica.
+brazilianportuguese.remoteBody=Assistentes como claude.ai, Claude Desktop, ChatGPT e Gemini se conectam ao Cognita pelos próprios servidores e precisam de um endereço público: um túnel. A instalação pode criar um agora com o Tailscale Funnel. É gratuito e o endereço continuará o mesmo.%n%nVocê pode pular o túnel somente se usar exclusivamente uma ferramenta neste computador que acesse o Cognita diretamente (Claude Code, Codex, Google Antigravity, Cursor ou um modelo local). Mesmo assim, o túnel é recomendado para que qualquer assistente possa usar o Cognita.%n%nSe o Tailscale não estiver instalado, a instalação baixa e executa o instalador oficial (cerca de 40 MB) de pkgs.tailscale.com; o próprio Tailscale solicitará permissão. A página Admin do Cognita nunca é exposta publicamente.
+english.remoteSkip=Skip for now. I can do it later with: cognita remote-access
+spanish.remoteSkip=Omitir por ahora. Puedo hacerlo después con: cognita remote-access
+french.remoteSkip=Ignorer pour l’instant. Je pourrai le faire plus tard avec : cognita remote-access
+german.remoteSkip=Jetzt überspringen. Ich kann es später mit cognita remote-access einrichten.
+italian.remoteSkip=Salta per ora. Potrò farlo più tardi con: cognita remote-access
+brazilianportuguese.remoteSkip=Pular por enquanto. Posso fazer isso depois com: cognita remote-access
+english.remoteSetup=Set up remote access with Tailscale Funnel now (recommended)
+spanish.remoteSetup=Configurar ahora el acceso remoto con Tailscale Funnel (recomendado)
+french.remoteSetup=Configurer maintenant l’accès à distance avec Tailscale Funnel (recommandé)
+german.remoteSetup=Fernzugriff jetzt mit Tailscale Funnel einrichten (empfohlen)
+italian.remoteSetup=Configura ora l’accesso remoto con Tailscale Funnel (consigliato)
+brazilianportuguese.remoteSetup=Configurar o acesso remoto com o Tailscale Funnel agora (recomendado)
+english.restartHeading=A restart is needed
+spanish.restartHeading=Es necesario reiniciar
+french.restartHeading=Un redémarrage est nécessaire
+german.restartHeading=Ein Neustart ist erforderlich
+italian.restartHeading=È necessario riavviare
+brazilianportuguese.restartHeading=É necessário reiniciar
+english.restartResume=Windows must restart to finish turning on WSL. Save your work in other programs first. Setup opens again by itself after you sign back in and continues.
+spanish.restartResume=Windows debe reiniciarse para terminar de activar WSL. Guarde primero su trabajo en otros programas. La instalación se abrirá de nuevo automáticamente después de iniciar sesión y continuará.
+french.restartResume=Windows doit redémarrer pour terminer l’activation de WSL. Enregistrez d’abord votre travail dans les autres programmes. Le programme se rouvrira automatiquement après votre reconnexion et reprendra.
+german.restartResume=Windows muss neu gestartet werden, um die Aktivierung von WSL abzuschließen. Speichern Sie zuerst Ihre Arbeit in anderen Programmen. Nach der Anmeldung öffnet sich das Setup automatisch wieder und wird fortgesetzt.
+italian.restartResume=Windows deve riavviarsi per completare l’attivazione di WSL. Salva prima il lavoro negli altri programmi. Dopo aver effettuato di nuovo l’accesso, l’installazione si riaprirà automaticamente e continuerà.
+brazilianportuguese.restartResume=O Windows precisa reiniciar para concluir a ativação do WSL. Salve o trabalho em outros programas primeiro. A instalação abrirá novamente após você entrar no Windows e continuará automaticamente.
+english.restartNoResume=Windows must restart to finish turning on WSL. Save your work in other programs first. Setup could not save where it stopped, so run Setup again after the restart to continue.
+spanish.restartNoResume=Windows debe reiniciarse para terminar de activar WSL. Guarde primero su trabajo en otros programas. No se pudo guardar el punto de continuación; vuelva a ejecutar la instalación después del reinicio.
+french.restartNoResume=Windows doit redémarrer pour terminer l’activation de WSL. Enregistrez d’abord votre travail dans les autres programmes. Le point de reprise n’a pas pu être enregistré ; relancez le programme après le redémarrage.
+german.restartNoResume=Windows muss neu gestartet werden, um WSL zu aktivieren. Speichern Sie zuerst Ihre Arbeit. Das Setup konnte den Fortsetzungspunkt nicht speichern; starten Sie es nach dem Neustart erneut.
+italian.restartNoResume=Windows deve riavviarsi per completare l’attivazione di WSL. Salva prima il lavoro negli altri programmi. Non è stato possibile salvare il punto di ripresa; esegui di nuovo l’installazione dopo il riavvio.
+brazilianportuguese.restartNoResume=O Windows precisa reiniciar para concluir a ativação do WSL. Salve o trabalho em outros programas primeiro. Não foi possível salvar o ponto de retomada; execute a instalação novamente após reiniciar.
+english.finishedHeading=Cognita is installed
+spanish.finishedHeading=Cognita está instalado
+french.finishedHeading=Cognita est installé
+german.finishedHeading=Cognita ist installiert
+italian.finishedHeading=Cognita è installato
+brazilianportuguese.finishedHeading=O Cognita está instalado
+english.finishedRunning=Cognita %1 is running.
+spanish.finishedRunning=Cognita %1 está en ejecución.
+french.finishedRunning=Cognita %1 est en cours d’exécution.
+german.finishedRunning=Cognita %1 läuft.
+italian.finishedRunning=Cognita %1 è in esecuzione.
+brazilianportuguese.finishedRunning=O Cognita %1 está em execução.
+english.finishedStarts= Cognita starts when you sign in to Windows.
+spanish.finishedStarts= Cognita se inicia cuando inicia sesión en Windows.
+french.finishedStarts= Cognita démarre lorsque vous ouvrez une session Windows.
+german.finishedStarts= Cognita startet, wenn Sie sich bei Windows anmelden.
+italian.finishedStarts= Cognita si avvia quando accedi a Windows.
+brazilianportuguese.finishedStarts= O Cognita inicia quando você entra no Windows.
+english.finishedWorkspace=Workspace:  %1
+spanish.finishedWorkspace=Workspace:  %1
+french.finishedWorkspace=Workspace :  %1
+german.finishedWorkspace=Workspace:  %1
+italian.finishedWorkspace=Workspace:  %1
+brazilianportuguese.finishedWorkspace=Workspace:  %1
+english.finishedConnect=To connect claude.ai or ChatGPT: open Cognita Admin, go to Connectors, create a connector, and use its address.
+spanish.finishedConnect=Para conectar claude.ai o ChatGPT: abra Cognita Admin, vaya a Conectores, cree un conector y use su dirección.
+french.finishedConnect=Pour connecter claude.ai ou ChatGPT : ouvrez Cognita Admin, accédez à Connecteurs, créez un connecteur et utilisez son adresse.
+german.finishedConnect=So verbinden Sie claude.ai oder ChatGPT: Öffnen Sie Cognita Admin, gehen Sie zu Connectors, erstellen Sie einen Connector und verwenden Sie dessen Adresse.
+italian.finishedConnect=Per collegare claude.ai o ChatGPT: apri Cognita Admin, vai a Connectors, crea un connector e usa il relativo indirizzo.
+brazilianportuguese.finishedConnect=Para conectar o claude.ai ou ChatGPT: abra o Cognita Admin, acesse Conectores, crie um conector e use o endereço dele.
+english.failedStep=Step that failed:  %1
+spanish.failedStep=Paso que falló:  %1
+french.failedStep=Étape en échec :  %1
+german.failedStep=Fehlgeschlagener Schritt:  %1
+italian.failedStep=Passaggio non riuscito:  %1
+brazilianportuguese.failedStep=Etapa que falhou:  %1
+english.showFile=Show the file
+spanish.showFile=Mostrar el archivo
+french.showFile=Afficher le fichier
+german.showFile=Datei anzeigen
+italian.showFile=Mostra il file
+brazilianportuguese.showFile=Mostrar o arquivo
+english.advancedTitle=Advanced
+spanish.advancedTitle=Avanzado
+french.advancedTitle=Avancé
+german.advancedTitle=Erweitert
+italian.advancedTitle=Avanzate
+brazilianportuguese.advancedTitle=Avançado
+english.advancedMcpPort=MCP port (connectors):
+spanish.advancedMcpPort=Puerto MCP (conectores):
+french.advancedMcpPort=Port MCP (connecteurs) :
+german.advancedMcpPort=MCP-Port (Connectors):
+italian.advancedMcpPort=Porta MCP (connector):
+brazilianportuguese.advancedMcpPort=Porta MCP (conectores):
+english.advancedFunnelPort=Remote access uses this port. Turn remote access off first to change it.
+spanish.advancedFunnelPort=El acceso remoto usa este puerto. Desactive primero el acceso remoto para cambiarlo.
+french.advancedFunnelPort=L’accès à distance utilise ce port. Désactivez-le d’abord pour le modifier.
+german.advancedFunnelPort=Der Fernzugriff verwendet diesen Port. Deaktivieren Sie ihn zuerst, um den Port zu ändern.
+italian.advancedFunnelPort=L’accesso remoto usa questa porta. Disattivalo prima per modificarla.
+brazilianportuguese.advancedFunnelPort=O acesso remoto usa esta porta. Desative-o primeiro para alterá-la.
+english.advancedAdminPort=Admin port:
+spanish.advancedAdminPort=Puerto Admin:
+french.advancedAdminPort=Port Admin :
+german.advancedAdminPort=Admin-Port:
+italian.advancedAdminPort=Porta Admin:
+brazilianportuguese.advancedAdminPort=Porta Admin:
+english.advancedUpdateData=An update keeps your ports, your Workspace setting and where Cognita keeps its data. To change the ports or Workspace, run Setup again after the update.
+spanish.advancedUpdateData=Una actualización conserva los puertos, la configuración de Workspace y la ubicación de los datos de Cognita. Para cambiarlos, vuelva a ejecutar la instalación después de actualizar.
+french.advancedUpdateData=Une mise à jour conserve les ports, le réglage Workspace et l’emplacement des données de Cognita. Pour les modifier, relancez le programme après la mise à jour.
+german.advancedUpdateData=Bei einer Aktualisierung bleiben Ports, Workspace-Einstellung und Cognitas Datenspeicherort erhalten. Führen Sie das Setup danach erneut aus, um Ports oder Workspace zu ändern.
+italian.advancedUpdateData=Un aggiornamento mantiene le porte, l’impostazione di Workspace e la posizione dei dati di Cognita. Per modificarli, esegui di nuovo il programma dopo l’aggiornamento.
+brazilianportuguese.advancedUpdateData=Uma atualização mantém as portas, a configuração do Workspace e o local dos dados do Cognita. Para alterá-los, execute novamente a instalação após a atualização.
+english.advancedDataLocked=Where Cognita keeps its data (its index, settings and Workspace). Cognita's Linux system is already there, so this cannot change. Your documents stay where they are.
+spanish.advancedDataLocked=Ubicación de los datos de Cognita (índice, configuración y Workspace). El sistema Linux de Cognita ya está aquí, por lo que no se puede cambiar. Sus documentos permanecen donde están.
+french.advancedDataLocked=Emplacement des données de Cognita (index, paramètres et Workspace). Le système Linux de Cognita se trouve déjà ici et ne peut pas être déplacé. Vos documents restent à leur emplacement.
+german.advancedDataLocked=Speicherort der Cognita-Daten (Index, Einstellungen und Workspace). Cognitas Linux-System befindet sich bereits hier und kann nicht verschoben werden. Ihre Dokumente bleiben am bisherigen Speicherort.
+italian.advancedDataLocked=Dove Cognita conserva i dati (indice, impostazioni e Workspace). Il sistema Linux di Cognita è già qui e non può essere spostato. I documenti restano dove sono.
+brazilianportuguese.advancedDataLocked=Local dos dados do Cognita (índice, configurações e Workspace). O sistema Linux do Cognita já está aqui e não pode ser movido. Seus documentos permanecem onde estão.
+english.advancedDataFresh=Where Cognita keeps its data (its index, settings and Workspace). Choose a new or empty folder on a drive with enough free space if C: is small. Your documents stay where they are.
+spanish.advancedDataFresh=Ubicación de los datos de Cognita (índice, configuración y Workspace). Si la unidad C: tiene poco espacio, elija una carpeta nueva o vacía en otra unidad con espacio suficiente. Sus documentos permanecen donde están.
+french.advancedDataFresh=Emplacement des données de Cognita (index, paramètres et Workspace). Si le lecteur C: manque d’espace, choisissez un dossier nouveau ou vide sur un lecteur disposant d’assez d’espace. Vos documents restent à leur emplacement.
+german.advancedDataFresh=Speicherort der Cognita-Daten (Index, Einstellungen und Workspace). Wenn auf C: wenig Platz ist, wählen Sie einen neuen oder leeren Ordner auf einem Laufwerk mit genügend freiem Speicherplatz. Ihre Dokumente bleiben am bisherigen Speicherort.
+italian.advancedDataFresh=Dove Cognita conserva i dati (indice, impostazioni e Workspace). Se l’unità C: ha poco spazio, scegli una cartella nuova o vuota su un’unità con spazio sufficiente. I documenti restano dove sono.
+brazilianportuguese.advancedDataFresh=Local dos dados do Cognita (índice, configurações e Workspace). Se a unidade C: tiver pouco espaço, escolha uma pasta nova ou vazia em outra unidade com espaço suficiente. Seus documentos permanecem onde estão.
+english.advancedBrowse=Browse...
+spanish.advancedBrowse=Examinar...
+french.advancedBrowse=Parcourir...
+german.advancedBrowse=Durchsuchen...
+italian.advancedBrowse=Sfoglia...
+brazilianportuguese.advancedBrowse=Procurar...
+english.browseDataTitle=Choose where Cognita keeps its data
+spanish.browseDataTitle=Elija dónde guarda Cognita sus datos
+french.browseDataTitle=Choisissez l’emplacement des données de Cognita
+german.browseDataTitle=Speicherort der Cognita-Daten auswählen
+italian.browseDataTitle=Scegli dove Cognita conserva i dati
+brazilianportuguese.browseDataTitle=Escolher onde o Cognita mantém os dados
+english.advancedWorkspace=Turn on Workspace (Cognita can run code for you in a sandbox)
+spanish.advancedWorkspace=Activar Workspace (Cognita puede ejecutar código en un entorno aislado)
+french.advancedWorkspace=Activer Workspace (Cognita peut exécuter du code dans un environnement isolé)
+german.advancedWorkspace=Workspace aktivieren (Cognita kann Code in einer Sandbox ausführen)
+italian.advancedWorkspace=Attiva Workspace (Cognita può eseguire codice in un ambiente isolato)
+brazilianportuguese.advancedWorkspace=Ativar o Workspace (o Cognita pode executar código em uma área isolada)
+english.invalidMcpPort=The MCP port must be a number from 1024 to 65535.
+spanish.invalidMcpPort=El puerto MCP debe ser un número entre 1024 y 65535.
+french.invalidMcpPort=Le port MCP doit être un nombre compris entre 1024 et 65535.
+german.invalidMcpPort=Der MCP-Port muss eine Zahl zwischen 1024 und 65535 sein.
+italian.invalidMcpPort=La porta MCP deve essere un numero da 1024 a 65535.
+brazilianportuguese.invalidMcpPort=A porta MCP deve ser um número entre 1024 e 65535.
+english.invalidAdminPort=The Admin port must be a number from 1024 to 65535.
+spanish.invalidAdminPort=El puerto Admin debe ser un número entre 1024 y 65535.
+french.invalidAdminPort=Le port Admin doit être un nombre compris entre 1024 et 65535.
+german.invalidAdminPort=Der Admin-Port muss eine Zahl zwischen 1024 und 65535 sein.
+italian.invalidAdminPort=La porta Admin deve essere un numero da 1024 a 65535.
+brazilianportuguese.invalidAdminPort=A porta Admin deve ser um número entre 1024 e 65535.
+english.portsDifferent=The MCP port and the Admin port must be different.
+spanish.portsDifferent=El puerto MCP y el puerto Admin deben ser distintos.
+french.portsDifferent=Le port MCP et le port Admin doivent être différents.
+german.portsDifferent=MCP-Port und Admin-Port müssen unterschiedlich sein.
+italian.portsDifferent=La porta MCP e la porta Admin devono essere diverse.
+brazilianportuguese.portsDifferent=As portas MCP e Admin devem ser diferentes.
 english.removeTitle=Remove Cognita
 spanish.removeTitle=Quitar Cognita
 french.removeTitle=Supprimer Cognita
@@ -1053,6 +1305,12 @@ begin
     Result := 'on'
   else
     Result := 'off';
+end;
+
+function CustomMessageWithLines(const Id: String): String;
+begin
+  Result := CustomMessage(Id);
+  StringChangeEx(Result, '%n', #13#10, True);
 end;
 
 { Design 18.2: what each mode fixes. finish, repair and update all work in the owned distro, so the
@@ -2075,13 +2333,13 @@ begin
     NoteH := ScaleY(32);
   Form := CreateCustomForm(ScaleX(440), ScaleY(250) + NoteH, False, False);
   try
-    Form.Caption := 'Advanced';
+    Form.Caption := CustomMessage('advancedTitle');
 
     Lbl := TNewStaticText.Create(Form);
     Lbl.Parent := Form;
     Lbl.Left := ScaleX(12);
     Lbl.Top := ScaleY(14);
-    Lbl.Caption := 'MCP port (connectors):';
+    Lbl.Caption := CustomMessage('advancedMcpPort');
     McpEdit := TNewEdit.Create(Form);
     McpEdit.Parent := Form;
     McpEdit.Left := ScaleX(200);
@@ -2099,7 +2357,7 @@ begin
       FunnelNote.AutoSize := False;
       FunnelNote.WordWrap := True;
       FunnelNote.Height := NoteH - ScaleY(4);
-      FunnelNote.Caption := 'Remote access uses this port. Turn remote access off first to change it.';
+      FunnelNote.Caption := CustomMessage('advancedFunnelPort');
       Log('advanced: the MCP port is read-only; a Funnel is recorded on public port ' + StFunnelPort);
     end;
 
@@ -2107,7 +2365,7 @@ begin
     Lbl.Parent := Form;
     Lbl.Left := ScaleX(12);
     Lbl.Top := ScaleY(46) + NoteH;
-    Lbl.Caption := 'Admin port:';
+    Lbl.Caption := CustomMessage('advancedAdminPort');
     AdminEdit := TNewEdit.Create(Form);
     AdminEdit.Parent := Form;
     AdminEdit.Left := ScaleX(200);
@@ -2127,14 +2385,11 @@ begin
       installed; changing them is a repair (a rerun of Setup), design 7.2. Showing editable fields
       here would accept a change and then drop it. }
     if InstallMode = ModeUpdate then
-      Lbl.Caption := 'An update keeps your ports, your Workspace setting and where Cognita keeps its data. ' +
-        'To change the ports or Workspace, run Setup again after the update.'
+      Lbl.Caption := CustomMessage('advancedUpdateData')
     else if DataLocationLocked then
-      Lbl.Caption := 'Where Cognita keeps its data (its index, settings and Workspace). Cognita''s Linux ' +
-        'system is already there, so this cannot change. Your documents stay where they are.'
+      Lbl.Caption := CustomMessage('advancedDataLocked')
     else
-      Lbl.Caption := 'Where Cognita keeps its data (its index, settings and Workspace). Choose a new or empty ' +
-        'folder on a drive with room if C: is small. Your documents stay where they are.';
+      Lbl.Caption := CustomMessage('advancedDataFresh');
     DataEdit := TNewEdit.Create(Form);
     DataEdit.Parent := Form;
     DataEdit.Left := ScaleX(12);
@@ -2151,7 +2406,7 @@ begin
     BrowseButton.Top := ScaleY(132) + NoteH;
     BrowseButton.Width := ScaleX(78);
     BrowseButton.Height := ScaleY(25);
-    BrowseButton.Caption := 'Browse...';
+    BrowseButton.Caption := CustomMessage('advancedBrowse');
     BrowseButton.ModalResult := mrYes;
     BrowseButton.Enabled := not DataLocationLocked;
 
@@ -2160,7 +2415,7 @@ begin
     WorkspaceBox.Left := ScaleX(12);
     WorkspaceBox.Top := ScaleY(172) + NoteH;
     WorkspaceBox.Width := ScaleX(416);
-    WorkspaceBox.Caption := 'Turn on Workspace (Cognita can run code for you in a sandbox)';
+    WorkspaceBox.Caption := CustomMessage('advancedWorkspace');
     WorkspaceBox.Checked := ChosenWorkspaceOn;
     if InstallMode = ModeUpdate then
     begin
@@ -2171,7 +2426,7 @@ begin
 
     OkButton := TNewButton.Create(Form);
     OkButton.Parent := Form;
-    OkButton.Caption := 'OK';
+    OkButton.Caption := SetupMessage(msgButtonOK);
     OkButton.Left := Form.ClientWidth - ScaleX(75 + 6 + 75 + 12);
     OkButton.Top := Form.ClientHeight - ScaleY(25 + 12);
     OkButton.Width := ScaleX(75);
@@ -2180,7 +2435,7 @@ begin
     OkButton.Default := True;
     CancelButton := TNewButton.Create(Form);
     CancelButton.Parent := Form;
-    CancelButton.Caption := 'Cancel';
+    CancelButton.Caption := SetupMessage(msgButtonCancel);
     CancelButton.Left := Form.ClientWidth - ScaleX(75 + 12);
     CancelButton.Top := Form.ClientHeight - ScaleY(25 + 12);
     CancelButton.Width := ScaleX(75);
@@ -2200,18 +2455,18 @@ begin
         mrYes:
           begin
             Dir := DataEdit.Text;
-            if BrowseForFolder('Choose where Cognita keeps its data', Dir, True) then
+            if BrowseForFolder(CustomMessage('browseDataTitle'), Dir, True) then
               DataEdit.Text := Dir;
           end;
         mrOk:
           begin
             Dir := RemoveBackslash(Trim(DataEdit.Text));
             if not PortOk(McpEdit.Text, Mcp) then
-              MsgBox('The MCP port must be a number from 1024 to 65535.', mbError, MB_OK)
+              MsgBox(CustomMessage('invalidMcpPort'), mbError, MB_OK)
             else if not PortOk(AdminEdit.Text, Adm) then
-              MsgBox('The Admin port must be a number from 1024 to 65535.', mbError, MB_OK)
+              MsgBox(CustomMessage('invalidAdminPort'), mbError, MB_OK)
             else if Mcp = Adm then
-              MsgBox('The MCP port and the Admin port must be different.', mbError, MB_OK)
+              MsgBox(CustomMessage('portsDifferent'), mbError, MB_OK)
             else
             begin
               { Design 19.7 item 16: a changed, changeable data location must pass DataFolderProblem
@@ -2627,8 +2882,7 @@ begin
   ReclaimText.WordWrap := True;
   ReclaimText.Height := ScaleY(48);
   ReclaimText.Cursor := crHand;
-  ReclaimText.Caption := 'Let Windows take back memory that WSL holds as file cache (adds one setting to ' +
-    '%USERPROFILE%\.wslconfig, which applies to all WSL distros, from the next time WSL starts)';
+  ReclaimText.Caption := CustomMessage('memoryReclaim');
   ReclaimText.OnClick := @ReclaimTextClick;
   ReclaimText.Visible := False;
   AdvancedButton := TNewButton.Create(PageReady);
@@ -2641,8 +2895,8 @@ begin
   AdvancedButton.OnClick := @AdvancedClick;
 
   { Remote access (after the install step) }
-  PageRemote := CreateCustomPage(wpInstalling, 'Remote access (recommended)',
-    'Give your assistant a way to reach Cognita.');
+  PageRemote := CreateCustomPage(wpInstalling, CustomMessage('remoteTitle'),
+    CustomMessage('remoteSubtitle'));
   RemoteLabel := TNewStaticText.Create(PageRemote);
   RemoteLabel.Parent := PageRemote.Surface;
   RemoteLabel.Left := 0;
@@ -2657,28 +2911,20 @@ begin
     Cursor, a local LLM) can do without, and even then a tunnel is recommended. Cognita listens on this PC
     only (127.0.0.1), so "on this PC" is exact. The old text ("optional", "use Cognita from claude.ai over
     the internet") read as if this were a niche extra. }
-  RemoteLabel.Caption := 'Assistants such as claude.ai, Claude Desktop, ChatGPT and Gemini connect to Cognita from ' +
-    'their own servers, so they need a public address for it: a tunnel. Setup can set one up now with ' +
-    'Tailscale Funnel. It is free, and the address stays the same afterwards.' + #13#10#13#10 +
-    'You can do without a tunnel only if you ONLY connect from a tool on this PC that can reach Cognita ' +
-    'itself (Claude Code, Codex, Google Antigravity, Cursor, or an LLM you run locally). Even then a tunnel ' +
-    'is recommended, so any assistant can use Cognita.' + #13#10#13#10 +
-    'If Tailscale is not installed, Setup downloads the official installer (about 40 MB) from ' +
-    'pkgs.tailscale.com and runs it; Tailscale asks for permission itself. Cognita''s Admin page is never ' +
-    'made public.';
+  RemoteLabel.Caption := CustomMessageWithLines('remoteBody');
   RemoteSkip := TNewRadioButton.Create(PageRemote);
   RemoteSkip.Parent := PageRemote.Surface;
   RemoteSkip.Left := 0;
   RemoteSkip.Top := ScaleY(212);
   RemoteSkip.Width := PageRemote.SurfaceWidth;
-  RemoteSkip.Caption := 'Skip for now. I can do it later with: cognita remote-access';
+  RemoteSkip.Caption := CustomMessage('remoteSkip');
   RemoteSkip.OnEnter := @RadioEnter;
   RemoteSetUp := TNewRadioButton.Create(PageRemote);
   RemoteSetUp.Parent := PageRemote.Surface;
   RemoteSetUp.Left := 0;
   RemoteSetUp.Top := ScaleY(186);
   RemoteSetUp.Width := PageRemote.SurfaceWidth;
-  RemoteSetUp.Caption := 'Set up remote access with Tailscale Funnel now (recommended)';
+  RemoteSetUp.Caption := CustomMessage('remoteSetup');
   RemoteSetUp.Checked := True;
   RemoteSetUp.OnEnter := @RadioEnter;
   { After a failure that carries a link (design 18.4: Funnel not enabled on the tailnet): the link, and
@@ -3020,12 +3266,12 @@ var
 begin
   X := WizardForm.FinishedLabel.Left;
   W := WizardForm.FinishedLabel.Width;
-  WizardForm.FinishedHeadingLabel.Caption := 'Cognita is installed';
+  WizardForm.FinishedHeadingLabel.Caption := CustomMessage('finishedHeading');
   { Design 19.4 item 2: "Cognita starts when you sign in to Windows" is dropped when the helper warned
     that the sign-in task could not be registered, because then it is not true. }
-  Cap := 'Cognita {#Version} is running.';
+  Cap := FmtMessage(CustomMessage('finishedRunning'), ['{#Version}']);
   if not InstallSignInWarned then
-    Cap := Cap + ' Cognita starts when you sign in to Windows.';
+    Cap := Cap + CustomMessage('finishedStarts');
   { Workspace shows what the install/update result (`status`) reported, which can differ from the
     Ready choice (for example Workspace turned off because this PC's WSL has no /dev/kvm). Only when
     the result said nothing does the choice stand in for it. }
@@ -3033,7 +3279,7 @@ begin
     WsText := ResultWorkspace
   else
     WsText := OnOff(ChosenWorkspaceOn);
-  Cap := Cap + #13#10 + 'Workspace:  ' + WsText;
+  Cap := Cap + #13#10 + FmtMessage(CustomMessage('finishedWorkspace'), [WsText]);
   { Design 22.7 and 22.12 item 11: the Acceleration line comes only from the result; no line when it did not say. }
   AccelText := AccelFinishedLine(ResultAccel);
   if AccelText <> '' then
@@ -3056,8 +3302,7 @@ begin
   FinConnectLabel.Left := X;
   FinConnectLabel.Top := Y + ScaleY(4);
   FinConnectLabel.Width := W;
-  FinConnectLabel.Caption := 'To connect claude.ai or ChatGPT: open Cognita Admin, go to Connectors, create a ' +
-    'connector, and use its address.';
+  FinConnectLabel.Caption := CustomMessage('finishedConnect');
   { Design 21.4: one line after the addresses when the self-tests were skipped; nothing else here changes. }
   if FinProofSkipped then
     FinConnectLabel.Caption := FinConnectLabel.Caption + #13#10 + SkippedProofNote;
@@ -3120,13 +3365,11 @@ begin
   if Drv = '' then
     Drv := 'version unknown';
   if Mode = AccelOffer then
-    AccelLabelText.Caption := 'Setup found an ' + Card + ' (driver ' + Drv + '). Cognita can use it to index your ' +
-      'documents and read text in images much faster than the CPU.'
+    AccelLabelText.Caption := FmtMessage(CustomMessage('accelFound'), [Card, Drv])
   else if Mode = AccelOldDriver then
-    AccelLabelText.Caption := 'Your NVIDIA driver is ' + Drv + '. Cognita needs driver 580 or newer to use the card. ' +
-      'Update the driver, then run Setup again and choose NVIDIA.'
+    AccelLabelText.Caption := FmtMessage(CustomMessage('accelOld'), [Drv])
   else
-    AccelLabelText.Caption := 'This version of Cognita has no NVIDIA build, so it installs for the CPU.';
+    AccelLabelText.Caption := CustomMessage('accelNoBuild');
   AccelLabelText.Width := PageAccel.SurfaceWidth;
   AccelLabelText.AdjustHeight;
   Y := AccelLabelText.Top + AccelLabelText.Height + ScaleY(8);
@@ -3137,10 +3380,10 @@ begin
     Y := Y + AccelLink.Height + ScaleY(10);
   end;
   { The sizes are the compiled-in image sizes, formatted like every other size on Setup's pages. }
-  GpuCap := 'Use the NVIDIA GPU (recommended).';
+  GpuCap := CustomMessage('accelGpuChoice');
   if NvidiaBuildBytes > 0 then
-    GpuCap := GpuCap + ' Cognita downloads about ' + FormatBytes(NvidiaBuildBytes) + '.';
-  CpuCap := 'Use the CPU only. Cognita downloads about ' + FormatBytes(StrToInt64('{#SizeCognitaCpu}')) + '.';
+    GpuCap := GpuCap + FmtMessage(CustomMessage('accelGpuDownload'), [FormatBytes(NvidiaBuildBytes)]);
+  CpuCap := FmtMessage(CustomMessage('accelCpuChoice'), [FormatBytes(StrToInt64('{#SizeCognitaCpu}'))]);
   AccelUseGpu.Caption := GpuCap;
   AccelUseCpu.Caption := CpuCap;
   AccelUseGpu.Top := Y;
@@ -3201,25 +3444,22 @@ begin
   if CurPageID = wpWelcome then
   begin
     if ResumeSwitch or StResumeAfterWsl then
-      WizardForm.WelcomeLabel2.Caption := 'Setup is continuing after the restart. Press Next to check this PC again and finish installing Cognita.'
+      WizardForm.WelcomeLabel2.Caption := CustomMessage('welcomeResume')
     else if InstallMode = ModeUpdate then
     begin
       if StLinuxVersion <> '' then
-        WizardForm.WelcomeLabel2.Caption := 'Cognita ' + StLinuxVersion + ' is installed. This Setup updates it to {#Version}. Press Next to check this PC.'
+        WizardForm.WelcomeLabel2.Caption := FmtMessage(CustomMessage('welcomeUpdate'), [StLinuxVersion, '{#Version}'])
       else
-        WizardForm.WelcomeLabel2.Caption := 'Cognita is installed. This Setup updates it to {#Version}. Press Next to check this PC.';
+        WizardForm.WelcomeLabel2.Caption := FmtMessage(CustomMessage('welcomeUpdateNoVersion'), ['{#Version}']);
     end
     else if InstallMode = ModeRepair then
-      WizardForm.WelcomeLabel2.Caption := 'Cognita is already set up on this PC. This Setup checks it and repairs what is wrong. Press Next to check this PC.'
+      WizardForm.WelcomeLabel2.Caption := CustomMessage('welcomeRepair')
     else if InstallMode = ModeReinstall then
-      WizardForm.WelcomeLabel2.Caption := 'Cognita was uninstalled from this PC and its data was kept. This Setup installs Cognita {#Version} again over that data. ' +
-        'Press Next to check this PC.'
+      WizardForm.WelcomeLabel2.Caption := FmtMessage(CustomMessage('welcomeReinstall'), ['{#Version}'])
     else if InstallMode = ModeFinish then
-      WizardForm.WelcomeLabel2.Caption := 'An earlier install of Cognita on this PC did not finish. This Setup continues it, and nothing already set up is lost. ' +
-        'Press Next to check this PC.'
+      WizardForm.WelcomeLabel2.Caption := CustomMessage('welcomeFinish')
     else
-      WizardForm.WelcomeLabel2.Caption := 'This installs Cognita {#Version} on your PC, and starts it whenever you sign in to Windows. ' +
-        'Press Next to check that this PC can run it.';
+      WizardForm.WelcomeLabel2.Caption := FmtMessage(CustomMessage('welcomeFresh'), ['{#Version}']);
   end
   else if CurPageID = PageWsl.ID then
   begin
@@ -3323,13 +3563,11 @@ begin
         restart later" radio buttons here and restarts Windows after Setup has exited. Our text replaces
         Inno's label; the radio buttons are kept visible and placed under it explicitly, so a label of a
         different height than Inno's cannot cover them. }
-      WizardForm.FinishedHeadingLabel.Caption := 'A restart is needed';
+      WizardForm.FinishedHeadingLabel.Caption := CustomMessage('restartHeading');
       if InstallResumeSaved then
-        WizardForm.FinishedLabel.Caption := 'Windows must restart to finish turning on WSL. Save your work in other ' +
-          'programs first. Setup opens again by itself after you sign back in, and continues from there.'
+        WizardForm.FinishedLabel.Caption := CustomMessage('restartResume')
       else
-        WizardForm.FinishedLabel.Caption := 'Windows must restart to finish turning on WSL. Save your work in other ' +
-          'programs first. Setup could not save where it stopped, so after the restart run Setup again to continue.';
+        WizardForm.FinishedLabel.Caption := CustomMessage('restartNoResume');
       WizardForm.FinishedLabel.AdjustHeight;
       WizardForm.YesRadio.Left := WizardForm.FinishedLabel.Left;
       WizardForm.YesRadio.Width := WizardForm.FinishedLabel.Width;
@@ -3350,7 +3588,7 @@ begin
         memo (a long failure used to push the buttons off the page), and a fixed row at the bottom
         (Save diagnostics, Open the log folder). The heading says which run it was. }
       WizardForm.FinishedHeadingLabel.Caption := FailHeading(InstallMode);
-      Cap := 'Step that failed:  ' + FailStage;
+      Cap := FmtMessage(CustomMessage('failedStep'), [FailStage]);
       if StillThereText(InstallMode) <> '' then
         Cap := Cap + #13#10#13#10 + StillThereText(InstallMode);
       WizardForm.FinishedLabel.Caption := Cap;
@@ -3359,7 +3597,7 @@ begin
       DiagButton.Left := WizardForm.FinishedLabel.Left;
       DiagButton.Top := Top;
       if FinDiagZip <> '' then
-        DiagButton.Caption := 'Show the file'
+        DiagButton.Caption := CustomMessage('showFile')
       else
         DiagButton.Caption := CustomMessage('saveDiagnostics');
       DiagButton.OnClick := @ShowDiagFileClick;
