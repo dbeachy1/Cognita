@@ -1945,12 +1945,12 @@ begin
   FolderReason.Caption := '';
 
   { Admin sign-in. The sub-caption is set per mode in CurPageChanged. The page is created with
-    the LONGER of the two captions:
+    a caption long enough for the update guidance:
     Inno places the fields below the caption's height at creation and never moves them, so a caption
     that later grows to two lines runs under the first field. }
   PageAdmin := CreateInputQueryPage(PageFolder.ID, 'Admin sign-in',
     'Choose the sign-in for Cognita Admin.',
-    'You use this user name and password to open Cognita Admin in your browser. Type the password twice.');
+    'Updating Cognita from an older version. Enter your current password once. To change it, run cognita password in a terminal.');
   Idx := PageAdmin.Add('User name:', False);
   PageAdmin.Values[Idx] := 'admin';
   Idx := PageAdmin.Add('Password:', True);
@@ -2658,13 +2658,20 @@ begin
     end
     else
     begin
-      { Repair, update and reinstall use the existing password to check Cognita afterwards.
-        Asking twice catches a hidden-field typo; it does not change the password. }
+      { Repair, update and reinstall use the existing password only to check Cognita afterwards. }
       PageAdmin.PromptLabels[1].Caption := 'Current password:';
-      PageAdmin.SubCaptionLabel.Caption := 'Type your current Admin password twice. Setup checks Cognita with it; the password is unchanged.';
+      if InstallMode = ModeUpdate then
+      begin
+        if StLinuxVersion <> '' then
+          PageAdmin.SubCaptionLabel.Caption := 'Updating Cognita ' + StLinuxVersion + ' to {#Version}. Enter your current Admin password once. To change it, run cognita password in a terminal.'
+        else
+          PageAdmin.SubCaptionLabel.Caption := 'Updating Cognita to {#Version}. Enter your current Admin password once. To change it, run cognita password in a terminal.';
+      end
+      else
+        PageAdmin.SubCaptionLabel.Caption := 'Enter your current Admin password once. To change it, run "cognita password" in a terminal.';
     end;
-    PageAdmin.PromptLabels[2].Visible := True;
-    PageAdmin.Edits[2].Visible := True;
+    PageAdmin.PromptLabels[2].Visible := not RunsOverInstalled;
+    PageAdmin.Edits[2].Visible := not RunsOverInstalled;
   end
   else if CurPageID = PageAccel.ID then
     ShowAccelPage
@@ -2958,7 +2965,7 @@ begin
     MsgBox('Type a password.', mbError, MB_OK);
     Exit;
   end;
-  if Pw <> Pw2 then
+  if (not RunsOverInstalled) and (Pw <> Pw2) then
   begin
     MsgBox('The two passwords are not the same.', mbError, MB_OK);
     Exit;
