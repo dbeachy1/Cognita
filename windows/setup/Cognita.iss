@@ -256,12 +256,12 @@ french.verifyPasswordCaption=Saisissez une seule fois votre mot de passe Admin a
 german.verifyPasswordCaption=Geben Sie Ihr aktuelles Admin-Kennwort einmal ein. Führen Sie zum Ändern cognita password in einem Terminal aus.
 italian.verifyPasswordCaption=Inserisci una sola volta la password Admin attuale. Per cambiarla, esegui cognita password in un terminale.
 brazilianportuguese.verifyPasswordCaption=Digite sua senha Admin atual uma vez. Para alterá-la, execute cognita password em um terminal.
-english.adminPasswordInvalid=That is not the current Admin password. Check it and try again.
-spanish.adminPasswordInvalid=Esa no es la contraseña actual de Admin. Compruébela e inténtelo de nuevo.
-french.adminPasswordInvalid=Ce n’est pas le mot de passe Admin actuel. Vérifiez-le et réessayez.
-german.adminPasswordInvalid=Das ist nicht das aktuelle Admin-Kennwort. Prüfen Sie es und versuchen Sie es erneut.
-italian.adminPasswordInvalid=Questa non è la password Admin attuale. Controllala e riprova.
-brazilianportuguese.adminPasswordInvalid=Essa não é a senha Admin atual. Confira e tente novamente.
+english.adminPasswordInvalid=That is not the current Admin password. Check it and try again.%n%nForgot it? Open Windows Terminal and run cognita password to set a new one, then return to Setup.
+spanish.adminPasswordInvalid=Esa no es la contraseña actual de Admin. Compruébela e inténtelo de nuevo.%n%n¿La olvidó? Abra Windows Terminal y ejecute cognita password para establecer una nueva. Después, vuelva a Setup.
+french.adminPasswordInvalid=Ce n’est pas le mot de passe Admin actuel. Vérifiez-le et réessayez.%n%nVous l’avez oublié ? Ouvrez Windows Terminal et exécutez cognita password pour en définir un nouveau, puis revenez à l’installation.
+german.adminPasswordInvalid=Das ist nicht das aktuelle Admin-Kennwort. Prüfen Sie es und versuchen Sie es erneut.%n%nVergessen? Öffnen Sie Windows Terminal und legen Sie mit cognita password ein neues fest. Kehren Sie dann zu Setup zurück.
+italian.adminPasswordInvalid=Questa non è la password Admin attuale. Controllala e riprova.%n%nL’hai dimenticata? Apri Windows Terminal ed esegui cognita password per impostarne una nuova, poi torna a Setup.
+brazilianportuguese.adminPasswordInvalid=Essa não é a senha Admin atual. Confira e tente novamente.%n%nEsqueceu a senha? Abra o Windows Terminal e execute cognita password para definir uma nova. Depois, volte ao instalador.
 english.adminPasswordLocked=Admin is temporarily refusing sign-ins after too many attempts. Wait a few minutes, then try again.
 spanish.adminPasswordLocked=Admin está rechazando temporalmente los inicios de sesión tras demasiados intentos. Espere unos minutos e inténtelo de nuevo.
 french.adminPasswordLocked=Admin refuse temporairement les connexions après trop de tentatives. Attendez quelques minutes, puis réessayez.
@@ -3284,6 +3284,8 @@ begin
   { Leave a little breathing room around the high-resolution Cognita mark in the header. }
   WizardForm.WizardSmallBitmapImage.Left := WizardForm.WizardSmallBitmapImage.Left - ScaleX(8);
   WizardForm.WizardSmallBitmapImage.Top := WizardForm.WizardSmallBitmapImage.Top + ScaleY(4);
+  WizardForm.WizardSmallBitmapImage.Width := WizardForm.WizardSmallBitmapImage.Width - ScaleX(8);
+  WizardForm.WizardSmallBitmapImage.Height := WizardForm.WizardSmallBitmapImage.Height - ScaleY(8);
   CloseQuietly := False;
   BusyPage := CreateOutputMarqueeProgressPage('Working', 'One moment...');
   ProgressPage := CreateOutputProgressPage('Installing Cognita',

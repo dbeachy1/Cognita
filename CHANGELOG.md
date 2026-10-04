@@ -1,5 +1,13 @@
 # Changelog
 
+## 15.5.0 — Clarify password recovery and fix Setup icon clipping (2026-10-04)
+
+- When an upgrade password is wrong, Windows Setup shows the `cognita password` command for
+  setting a new Admin password without the old one. This guidance is localized in all six UI
+  languages.
+- The small Setup header icon fits within its display area with space below it.
+- MCP arguments, results, and contract versions are unchanged. See `docs/RELEASE-15.5.0.md`.
+
 ## 15.4.0 — Complete localized Setup and Admin guidance (2026-10-04)
 
 - Windows Setup uses high-resolution Cognita artwork in its Welcome panel, title bar, and
