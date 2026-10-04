@@ -9,3 +9,9 @@
 ## Compatibility
 
 MCP arguments, results, and contract versions are unchanged.
+
+## Source for the Workspace runtime
+
+The release assets include `cognita-libkrunfw-corresponding-source-v0.7.0.tar`
+for the bundled Microsandbox firmware. Its SHA-256 and component revisions are
+recorded in `THIRD_PARTY_NOTICES.md`.

@@ -25,6 +25,8 @@ ENV COGNITA_VERSION=${COGNITA_VERSION} \
     PYTHONPATH=/opt/cognita
 
 COPY containers/workspace-runtime/microsandbox.lock /opt/microsandbox.lock
+COPY LICENSE /opt/cognita/LICENSE
+COPY THIRD_PARTY_NOTICES.md /opt/cognita/THIRD_PARTY_NOTICES.md
 COPY containers/workspace-runtime/requirements.in /opt/cognita/requirements.in
 COPY containers/broker-requirements.lock /opt/cognita-locks/
 COPY build-artifacts/microsandbox-0.7.0-cp310-abi3-manylinux_2_28_x86_64.whl /opt/build-artifacts/microsandbox-0.7.0-cp310-abi3-manylinux_2_28_x86_64.whl

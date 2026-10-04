@@ -59,6 +59,25 @@ model, and container contents before release.
   libjpeg-turbo, libpng, OpenJPEG and zlib) are under their own licenses. Their texts
   ship in the same wheel directory as above.
 
+## Microsandbox 0.7.0 and libkrunfw (Workspace runtime image)
+
+- The Workspace runtime contains the unmodified Microsandbox 0.7.0 Linux x86-64
+  `msb` executable (Apache-2.0; SHA-256
+  `bce88f9c017d0b01f785907da34b8126c1fa809838c79fed89b1abc2ca4f58a8`) and
+  `libkrunfw` shared library (SHA-256
+  `ce9a749e8471e89aa5e2ad88de0c1581c3384c100bcb107a75bb12739a12d590`).
+  These hashes match the [official Microsandbox 0.7.0 release](https://github.com/superradcompany/microsandbox/releases/tag/v0.7.0).
+- The release source is [Microsandbox commit `a427b436`](https://github.com/superradcompany/microsandbox/tree/a427b4365765cb633df3267e0cf3d118c25f1843),
+  whose `vendor/libkrunfw` submodule is [commit `cf4c22b9`](https://github.com/superradcompany/libkrunfw/tree/cf4c22b9f05c680928e6d96a9d198f5845573a87).
+  That firmware bundles Linux kernel 6.12.109. The firmware library code is
+  LGPL-2.1-only; its patches and bundled Linux kernel are GPL-2.0-only.
+- The matching Cognita release provides
+  `cognita-libkrunfw-corresponding-source-v0.7.0.tar` (SHA-256
+  `f7bacf91c690b723c97c7a2f6020ac2f65a553e4b1b3f188be3ae975dab84f9c`).
+  It contains that `libkrunfw` revision, its build files, patches and
+  configuration, and the Linux 6.12.109 source. The archive contains the
+  complete license texts and source.
+
 ## NVIDIA CUDA runtime libraries, cuDNN and cuSPARSELt (NVIDIA image only)
 
 The NVIDIA container image (`cognita-app:<version>-nvidia`) includes NVIDIA CUDA
