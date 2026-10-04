@@ -17,7 +17,7 @@ def test_version_is_server_sourced_for_both_shells():
     assert "__COGNITA_VERSION__" in LOGIN
     assert '"/api/bootstrap"' in ADMIN
     assert '"version": __version__' in ADMIN
-    assert "document.title = `Cognita ${bootstrap.version} Admin`" in JS
+    assert 'document.title = t("admin.title", { version: bootstrap.version })' in JS
 
 
 def test_workspace_contract_keeps_three_subtabs_and_unknown_safe_metrics():

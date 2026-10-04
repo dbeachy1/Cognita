@@ -80,7 +80,7 @@
       <header><strong data-i18n="admin.public_url.title">Canonical public URL</strong> <small id="public-url-status" class="muted" data-i18n="admin.loading">Loading…</small></header>
       <p class="muted" data-i18n="admin.public_url.description">This must exactly match the public Cloudflare Tunnel address clients use (including any path prefix), because it is copied into MCP connector links and OAuth issuer/resource metadata. It starts from deployment configuration, then an Admin-saved value is persisted in Cognita state so changing it does not require editing deployment configuration. Use an HTTPS URL; HTTP is allowed only for local development.</p>
       <form id="public-url-form">
-        <label for="public-base-url">Public base URL
+        <label for="public-base-url"><span data-i18n="admin.public_url.field">Public base URL</span>
           <input id="public-base-url" name="public_base_url" type="url" required maxlength="2048" placeholder="https://cognita.example.com" autocomplete="url">
         </label>
         <button type="submit" data-i18n="admin.public_url.save">Save public URL</button>
@@ -96,7 +96,7 @@
       <header>
         <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
           <strong data-i18n="admin.nav.connectors">Connectors</strong>
-          <small id="connectors-revision" class="muted">Loading…</small>
+          <small id="connectors-revision" class="muted" data-i18n="admin.loading">Loading…</small>
         </div>
       </header>
       <p data-i18n="admin.connectors.description">Connector settings control Knowledge, Workspace, and bridge access. Workspace tools and transfer are on by default and can be turned off per connector or per project.</p>
@@ -114,7 +114,7 @@
             <legend data-i18n="admin.connectors.workspace_capability">Workspace capability</legend>
             <label><input id="connector-workspace-enabled" type="checkbox" checked> <span data-i18n="admin.connectors.enable_workspace_tools">Enable Workspace tools</span></label>
             <label><span data-i18n="admin.connectors.transfer_default">Default Knowledge ↔ Workspace transfer</span>
-              <select id="connector-transfer-default"><option value="allow">Allow</option><option value="deny">Deny</option></select>
+              <select id="connector-transfer-default"><option value="allow" data-i18n="admin.connectors.option.allow">Allow</option><option value="deny" data-i18n="admin.connectors.option.deny">Deny</option></select>
             </label>
             <!-- 13.0.1: the confirmation is no longer required by the server; the
                  field stays in the payload for older servers and is hidden here. -->
@@ -123,7 +123,7 @@
           </fieldset>
           </div>
           <div class="grid">
-            <button id="connector-submit" type="submit">Add connector</button>
+            <button id="connector-submit" type="submit" data-i18n="admin.connectors.add">Add connector</button>
             <button id="connector-cancel" type="button" class="secondary outline" hidden data-i18n="admin.action.cancel_edit">Cancel edit</button>
           </div>
         </form>
@@ -155,12 +155,12 @@
     <article id="connector-transfer-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="connector-tab-transfer" hidden>
       <p id="connector-transfer-status" class="muted" role="status"></p>
       <div id="connector-transfer-content">
-          <p class="connector-empty-state" data-no-connectors hidden><span>Workspace transfer is unavailable until a connector is configured.</span> <button type="button" class="secondary outline" data-go-connector-setup data-i18n="admin.action.add_edit_connector">Add / edit connector</button></p>
+          <p class="connector-empty-state" data-no-connectors hidden><span data-i18n="admin.connectors.transfer_unavailable">Workspace transfer is unavailable until a connector is configured.</span> <button type="button" class="secondary outline" data-go-connector-setup data-i18n="admin.action.add_edit_connector">Add / edit connector</button></p>
           <div id="connector-transfer-view">
           <fieldset>
             <legend data-i18n="admin.connectors.transfer_defaults">Transfer defaults</legend>
             <label><span data-i18n="admin.connectors.transfer_default">Default Knowledge ↔ Workspace transfer</span>
-              <select id="connector-policy-transfer-default"><option value="deny">Deny</option><option value="allow">Allow</option></select>
+              <select id="connector-policy-transfer-default"><option value="deny" data-i18n="admin.connectors.option.deny">Deny</option><option value="allow" data-i18n="admin.connectors.option.allow">Allow</option></select>
             </label>
             <label><input id="connector-policy-high-trust-confirm" type="checkbox"> <span data-i18n="admin.connectors.high_trust_transfer">I understand that allowing transfer is a high-trust action</span></label>
           </fieldset>
@@ -180,7 +180,7 @@
       <div id="oauth-problems"></div>
       <table>
         <thead><tr><th data-i18n="admin.oauth.client">Client</th><th data-i18n="admin.oauth.connector_access">Connector and current access</th><th data-i18n="admin.oauth.authorized">Authorized</th><th data-i18n="admin.oauth.last_used">Last used</th><th></th></tr></thead>
-        <tbody id="grants-body"><tr><td colspan="5" aria-busy="true">Loading…</td></tr></tbody>
+        <tbody id="grants-body"><tr><td colspan="5" aria-busy="true" data-i18n="admin.loading">Loading…</td></tr></tbody>
       </table>
       <button id="revoke-all-grants" class="contrast outline" data-i18n="admin.oauth.revoke_all">Revoke all connected clients</button>
     </article>
@@ -196,7 +196,7 @@
       <div id="workspace-runtime-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="workspace-tab-runtime">
       <article id="workspace-lifecycle-section">
         <header><div class="workspace-card-header"><strong data-i18n="admin.workspaces.runtime">Workspace runtime</strong><small id="workspaces-status" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
-        <div id="workspace-runtime-cards" class="workspace-runtime-cards"><p aria-busy="true">Loading…</p></div>
+        <div id="workspace-runtime-cards" class="workspace-runtime-cards"><p aria-busy="true" data-i18n="admin.loading">Loading…</p></div>
         <div class="workspace-toolbar">
           <label><span data-i18n="admin.action.search">Search</span> <input id="workspace-search" type="search" autocomplete="off" placeholder="Connector or credential" data-i18n-attr="placeholder:admin.workspaces.search_placeholder"></label>
           <label><span data-i18n="admin.field.state">State</span> <select id="workspace-state"><option value="" data-i18n="admin.option.all_states">All states</option><option value="running" data-i18n="admin.option.running">Running</option><option value="stopped" data-i18n="admin.option.stopped">Stopped</option><option value="transition" data-i18n="admin.option.transition">Transition</option><option value="failed" data-i18n="admin.option.failed">Failed</option><option value="orphaned" data-i18n="admin.option.orphaned">Orphaned</option></select></label>
@@ -209,7 +209,7 @@
           <button id="workspace-refresh" type="button" class="secondary outline" data-i18n="admin.action.refresh">Refresh</button>
         </div>
         <div class="workspace-bulk-actions"><button id="workspace-bulk-remove" type="button" class="contrast outline" disabled data-i18n="admin.workspaces.remove_selected">Remove selected</button><span id="workspace-selection-summary" class="muted"></span></div>
-        <div id="workspaces-body" class="workspace-table-wrap"><p aria-busy="true">Loading…</p></div>
+        <div id="workspaces-body" class="workspace-table-wrap"><p aria-busy="true" data-i18n="admin.loading">Loading…</p></div>
       </article>
       </div>
       <div id="workspace-policy-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="workspace-tab-policy" hidden>
@@ -218,17 +218,17 @@
         <p class="muted" data-i18n="admin.workspaces.settings_description">One persistent Workspace per credential or OAuth grant, shared across chats. It is created automatically on first use; Pin retains files indefinitely.</p>
         <form id="workspace-settings-form" class="workspace-settings-form">
           <div class="workspace-settings-grid">
-            <label>Retention (days) <input id="workspace-retention-days" type="number" min="0" step="1"></label>
-            <label>Quota (bytes) <input id="workspace-quota-bytes" type="number" min="0" step="1"></label>
-            <label>Idle stop (seconds) <input id="workspace-idle-stop" type="number" min="0" step="1"></label>
-            <label>Host reserve (bytes) <input id="workspace-host-reserve" type="number" min="0" step="1"></label>
-            <label>Warning threshold (%) <input id="workspace-warning-threshold" type="number" min="0" max="100" step="1"></label>
-            <label>Maximum running <input id="workspace-max-running" type="number" min="0" step="1"></label>
-          <label>Network mode <select id="workspace-network-mode"><option value="off" data-i18n="admin.option.network_off_recommended">Off (recommended)</option><option value="allowlist" data-i18n="admin.option.network_allowlist">Allowlist</option><option value="unrestricted_public" data-i18n="admin.option.network_unrestricted">Unrestricted public Internet</option></select></label>
+            <label><span data-i18n="admin.workspace.settings.retention">Retention (days)</span> <input id="workspace-retention-days" type="number" min="0" step="1"></label>
+            <label><span data-i18n="admin.workspace.settings.quota">Quota (bytes)</span> <input id="workspace-quota-bytes" type="number" min="0" step="1"></label>
+            <label><span data-i18n="admin.workspace.settings.idle_stop">Idle stop (seconds)</span> <input id="workspace-idle-stop" type="number" min="0" step="1"></label>
+            <label><span data-i18n="admin.workspace.settings.host_reserve">Host reserve (bytes)</span> <input id="workspace-host-reserve" type="number" min="0" step="1"></label>
+            <label><span data-i18n="admin.workspace.settings.warning_threshold">Warning threshold (%)</span> <input id="workspace-warning-threshold" type="number" min="0" max="100" step="1"></label>
+            <label><span data-i18n="admin.workspace.settings.maximum_running">Maximum running</span> <input id="workspace-max-running" type="number" min="0" step="1"></label>
+          <label><span data-i18n="admin.workspace.settings.network_mode">Network mode</span> <select id="workspace-network-mode"><option value="off" data-i18n="admin.option.network_off_recommended">Off (recommended)</option><option value="allowlist" data-i18n="admin.option.network_allowlist">Allowlist</option><option value="unrestricted_public" data-i18n="admin.option.network_unrestricted">Unrestricted public Internet</option></select></label>
           <fieldset class="workspace-network-rules-fieldset"><legend data-i18n="admin.workspaces.allowed_domains_ports">Allowed outbound domains and ports</legend><p class="muted" data-i18n="admin.workspaces.network_help">Each exact or suffix domain may use the listed TCP ports over HTTP or HTTPS. Saved legacy scheme-specific entries remain unavailable until edited.</p><div id="workspace-network-rule-list"></div><button id="workspace-network-add-rule" type="button" class="secondary outline" data-i18n="admin.workspaces.add_domain_rule">Add domain rule</button><textarea id="workspace-network-rules" hidden aria-hidden="true"></textarea><small id="workspace-network-status" class="muted"></small></fieldset>
           </div>
           <label><input id="workspace-brave-enabled" type="checkbox"> <span data-i18n="admin.workspaces.brave_enable">Enable trusted-side Brave Search</span></label>
-          <label>Brave API key <input id="workspace-brave-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key"></label>
+          <label><span data-i18n="admin.workspace.settings.brave_key">Brave API key</span> <input id="workspace-brave-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key" data-i18n-attr="placeholder:admin.workspace.settings.brave_key_placeholder"></label>
           <label><input id="workspace-settings-confirm" type="checkbox"> <span data-i18n="admin.workspaces.external_services_confirm">I understand network and search settings can send Workspace data to external services.</span></label>
           <div class="actions"><button type="button" id="workspace-settings-preview" class="secondary outline" data-i18n="admin.workspaces.preview_policy">Preview policy</button><button type="button" id="workspace-brave-test" class="secondary outline" data-i18n="admin.workspaces.test_brave">Test Brave Search</button><button type="submit" data-i18n="admin.workspaces.save_settings">Save Workspace settings</button></div>
         </form>
@@ -238,11 +238,11 @@
       <article id="workspace-connectors-section">
         <header><div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;"><strong data-i18n="admin.workspaces.connectors">Workspace-only connectors</strong><small id="workspace-connectors-revision" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
         <p data-i18n="admin.workspaces.connectors_description">Workspace-only surfaces are independent from Knowledge connectors and accept named static credentials only. Each active credential owns one persistent Workspace.</p>
-        <div id="workspace-connectors-body"><p aria-busy="true">Loading…</p></div>
+        <div id="workspace-connectors-body"><p aria-busy="true" data-i18n="admin.loading">Loading…</p></div>
         <details open><summary><strong data-i18n="admin.workspaces.add_connector">Add Workspace-only connector</strong></summary>
           <form id="workspace-connector-form">
-            <label>Display name <input id="workspace-connector-name" maxlength="120" required></label>
-            <label>Immutable slug <input id="workspace-connector-slug" pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" required></label>
+            <label><span data-i18n="admin.connectors.display_name">Display name</span> <input id="workspace-connector-name" maxlength="120" required></label>
+            <label><span data-i18n="admin.workspace_connector.slug">Immutable slug</span> <input id="workspace-connector-slug" pattern="[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?" required></label>
             <label><input id="workspace-connector-enabled" type="checkbox"> <span data-i18n="admin.connectors.enabled">Enabled</span></label>
             <label><input id="workspace-connector-confirm" type="checkbox" required> <span data-i18n="admin.workspaces.high_trust_connector">I understand this creates a high-trust Workspace-only surface</span></label>
             <button type="submit" data-i18n="admin.workspaces.create_connector">Create Workspace-only connector</button>
@@ -263,11 +263,11 @@
         <form id="gpu-acceleration-form" class="gpu-settings-card">
           <h3 data-i18n="admin.gpu.knowledge_embedding">Knowledge embedding</h3>
           <label><input id="gpu-knowledge-enabled" type="checkbox"> <span data-i18n="admin.gpu.enable_embedding">Enable GPU embedding</span></label>
-          <label>Cards <select id="gpu-knowledge-cards"><option value="all" data-i18n="admin.gpu.all_cards">All usable cards</option><option value="specific" data-i18n="admin.gpu.specific_cards">Specific cards</option></select></label>
-          <label id="gpu-knowledge-card-ids-row" hidden>PCI addresses (one per line)<textarea id="gpu-knowledge-card-ids" rows="2" placeholder="0000:03:00.0"></textarea></label>
+          <label><span data-i18n="admin.gpu.cards">Cards</span> <select id="gpu-knowledge-cards"><option value="all" data-i18n="admin.gpu.all_cards">All usable cards</option><option value="specific" data-i18n="admin.gpu.specific_cards">Specific cards</option></select></label>
+          <label id="gpu-knowledge-card-ids-row" hidden><span data-i18n="admin.gpu.pci_addresses">PCI addresses (one per line)</span><textarea id="gpu-knowledge-card-ids" rows="2" placeholder="0000:03:00.0"></textarea></label>
           <h3 data-i18n="admin.gpu.ocr">OCR</h3>
-          <label>Device <select id="gpu-ocr-device"><option value="cpu">CPU (recommended fallback)</option><option value="gpu">GPU</option></select></label>
-          <label id="gpu-ocr-card-ids-row" hidden>GPU UUIDs in priority order<textarea id="gpu-ocr-card-ids" rows="2" placeholder="GPU-0123456789abcdef or GPU-4cd28834-e5a4-6b4e-85aa-3e54bcbf0630"></textarea></label>
+          <label><span data-i18n="admin.gpu.device">Device</span> <select id="gpu-ocr-device"><option value="cpu" data-i18n="admin.gpu.cpu_recommended">CPU (recommended fallback)</option><option value="gpu" data-i18n="admin.gpu.active">GPU</option></select></label>
+          <label id="gpu-ocr-card-ids-row" hidden><span data-i18n="admin.gpu.uuid_priority">GPU UUIDs in priority order</span><textarea id="gpu-ocr-card-ids" rows="2" placeholder="GPU-0123456789abcdef or GPU-4cd28834-e5a4-6b4e-85aa-3e54bcbf0630"></textarea></label>
           <div class="actions"><button type="submit" data-i18n="admin.gpu.save_policy">Save acceleration policy</button><button type="button" id="gpu-verify" class="secondary outline" data-i18n="admin.gpu.verify_runtime">Verify loaded runtime</button></div>
           <p id="gpu-acceleration-help" class="muted" role="status"></p>
         </form>
@@ -280,13 +280,13 @@
       <p data-i18n="admin.authentication.description">OAuth and named static credentials are independent ways to authenticate. Static secrets are surface-scoped, encrypted for recovery, and shown only after current-password reauthentication.</p>
       <details id="authentication-global-details" open>
         <summary><strong data-i18n="admin.authentication.global_defaults">Global defaults</strong> <span id="authentication-global-summary" class="muted"></span></summary>
-        <section id="authentication-global" aria-label="Global authentication policy"><p aria-busy="true">Loading…</p></section>
+        <section id="authentication-global" aria-label="Global authentication policy" data-i18n-attr="aria-label:admin.authentication.global_policy"><p aria-busy="true" data-i18n="admin.loading">Loading…</p></section>
       </details>
       <div class="auth-toolbar">
-        <label for="authentication-search">Search projects <input id="authentication-search" type="search" autocomplete="off" placeholder="Project name"></label>
+        <label for="authentication-search"><span data-i18n="admin.authentication.search_projects">Search projects</span> <input id="authentication-search" type="search" autocomplete="off" placeholder="Project name" data-i18n-attr="placeholder:admin.authentication.project_name"></label>
         <div class="auth-toolbar-actions"><button type="button" class="secondary outline" id="authentication-expand-all" data-i18n="admin.authentication.expand_all">Expand all</button><button type="button" class="secondary outline" id="authentication-collapse-all" data-i18n="admin.authentication.collapse_all">Collapse all</button></div>
       </div>
-      <div id="authentication-projects" aria-live="polite"><p aria-busy="true">Loading…</p></div>
+      <div id="authentication-projects" aria-live="polite"><p aria-busy="true" data-i18n="admin.loading">Loading…</p></div>
       <div id="authentication-warning" class="auth-warning" role="alert" hidden></div>
       <div id="authentication-repair" class="auth-repair" hidden></div>
     </article>
@@ -300,7 +300,7 @@
 
   <dialog id="project-settings-dialog"><article><header><strong data-i18n="admin.dialog.project_settings_title">Project settings</strong></header><form id="project-settings-form"><p id="project-settings-name" class="muted"></p><label><input id="project-settings-exclude" type="checkbox"> <span data-i18n="admin.projects.exclude_permission_defaults">Exclude from default permissions</span></label><small class="muted" data-i18n="admin.projects.exclude_permission_help">All-project connectors will not include this project automatically. Explicit Read-only or Read/write access still grants it.</small><footer><button type="button" class="secondary outline" id="project-settings-cancel" data-i18n="admin.action.cancel">Cancel</button><button type="button" class="secondary outline" id="project-settings-auth" data-i18n="admin.action.configure_authentication">Configure authentication</button><button type="submit" id="project-settings-save" data-i18n="admin.action.save_settings">Save settings</button></footer></form></article></dialog>
 
-  <dialog id="modal" x-data="modal" x-ref="dlg" @cancel.prevent="cancel()"><article style="min-width:24rem; max-width:34rem;"><header><strong x-text="title"></strong></header><p x-text="body" style="white-space:pre-line;"></p><template x-for="field in fields" :key="field.name"><label><span x-text="field.label"></span><template x-if="field.type === 'select'"><select x-model="values[field.name]"><template x-for="option in field.options" :key="option.value"><option :value="option.value" x-text="option.label"></option></template></select></template><template x-if="field.type !== 'select'"><input :type="field.type || 'text'" x-model="values[field.name]" :maxlength="field.maxlength || 120" autocomplete="off" @keydown.enter.prevent="ok()"></template></label></template><label x-show="checkboxLabel"><input type="checkbox" x-model="checked"> <span x-text="checkboxLabel"></span></label><footer><button class="secondary outline" x-show="mode === 'confirm' || mode === 'form'" @click="cancel()">Cancel</button><button :class="danger ? 'contrast' : ''" @click="ok()" x-text="confirmLabel"></button></footer></article></dialog>
+  <dialog id="modal" x-data="modal" x-ref="dlg" @cancel.prevent="cancel()"><article style="min-width:24rem; max-width:34rem;"><header><strong x-text="title"></strong></header><p x-text="body" style="white-space:pre-line;"></p><template x-for="field in fields" :key="field.name"><label><span x-text="field.label"></span><template x-if="field.type === 'select'"><select x-model="values[field.name]"><template x-for="option in field.options" :key="option.value"><option :value="option.value" x-text="option.label"></option></template></select></template><template x-if="field.type !== 'select'"><input :type="field.type || 'text'" x-model="values[field.name]" :maxlength="field.maxlength || 120" autocomplete="off" @keydown.enter.prevent="ok()"></template></label></template><label x-show="checkboxLabel"><input type="checkbox" x-model="checked"> <span x-text="checkboxLabel"></span></label><footer><button class="secondary outline" x-show="mode === 'confirm' || mode === 'form'" @click="cancel()" x-text="cancelLabel"></button><button :class="danger ? 'contrast' : ''" @click="ok()" x-text="confirmLabel"></button></footer></article></dialog>
 
   <script src="/static/admin-state.js?v=__COGNITA_VERSION__"></script>
   <script src="/static/admin-locale.js?v=__COGNITA_VERSION__"></script>

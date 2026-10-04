@@ -252,7 +252,7 @@ async function saveProjectSettings(event) {
     $("#project-settings-dialog").close();
     await refreshAdminMutation("project:update");
   } catch (err) {
-    await uiNotice({ title: "Could not save project settings", body: err.message });
+    await uiNotice({ title: t("admin.projects.settings_save_failed"), body: err.message });
   } finally {
     button.removeAttribute("aria-busy");
     button.disabled = false;
@@ -271,16 +271,16 @@ async function saveProjectSettings(event) {
 
 document.addEventListener("alpine:init", () => {
   Alpine.data("modal", () => ({
-    mode: "notice", title: "", body: "", checkboxLabel: "", confirmLabel: "OK",
+    mode: "notice", title: "", body: "", checkboxLabel: "", confirmLabel: t("admin.action.ok"), cancelLabel: t("admin.action.cancel"),
     danger: false, checked: false, fields: [], values: {}, _resolve: null,
     init() {
       window.uiConfirm = (opts) =>
-        this._open({ mode: "confirm", confirmLabel: "Confirm", ...opts });
+        this._open({ mode: "confirm", confirmLabel: t("admin.action.confirm"), ...opts });
       window.uiNotice = (opts) =>
-        this._open({ mode: "notice", confirmLabel: "OK", ...opts });
+        this._open({ mode: "notice", confirmLabel: t("admin.action.ok"), ...opts });
       window.uiForm = (opts) =>
         this._open({
-          mode: "form", confirmLabel: "OK", ...opts,
+          mode: "form", confirmLabel: t("admin.action.ok"), ...opts,
           values: Object.fromEntries((opts.fields || []).map((field) => [field.name, field.value ?? ""])),
         });
     },
@@ -370,7 +370,7 @@ async function api(path, opts = {}) {
   if (res.status === 401) {
     // Session expired or missing — bounce to the login page ("/" serves it).
     window.location.href = "/";
-    throw new Error("Session expired");
+    throw new Error(t("admin.login.session_expired"));
   }
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
@@ -493,7 +493,7 @@ async function initBootstrap() {
       state.version = bootstrap.version;
       const version = document.querySelector("#cognita-version");
       if (version) version.textContent = bootstrap.version;
-      document.title = `Cognita ${bootstrap.version} Admin`;
+      document.title = t("admin.title", { version: bootstrap.version });
     }
   } catch { /* the server-rendered version remains authoritative */ }
 }
@@ -512,16 +512,16 @@ function esc(s) {
 
 async function loadProjects() {
   const body = $("#projects-body");
-  body.innerHTML = `<tr><td colspan="6" aria-busy="true">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="6" aria-busy="true">${esc(t("admin.loading"))}</td></tr>`;
   let data;
   try {
     data = await api("/api/projects");
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="6">Failed to load: ${esc(err.message)}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">${esc(t("admin.projects.load_failed"))}: ${esc(err.message)}</td></tr>`;
     return;
   }
   if (!data.projects.length) {
-    body.innerHTML = `<tr><td colspan="6"><em>No projects yet. Add one below.</em></td></tr>`;
+    body.innerHTML = `<tr><td colspan="6"><em>${esc(t("admin.projects.empty_state"))}</em></td></tr>`;
     return;
   }
   body.innerHTML = data.projects
@@ -566,7 +566,7 @@ async function fillDocCount(name) {
       note.className = "reindex-error";
       note.style.display = "block";
       note.style.color = "var(--pico-del-color)";
-      note.textContent = s.reindex_error;
+      note.textContent = `${t("admin.projects.reindex_failed")}: ${t("admin.technical_detail")}: ${s.reindex_error}`;
       folderCell.appendChild(note);
     }
   } catch {
@@ -586,10 +586,10 @@ async function copyText(text, btn) {
   let ok = true;
   try {
     await navigator.clipboard.writeText(text);
-    btn.textContent = "Copied!";
+    btn.textContent = t("admin.action.copied_item");
   } catch {
     ok = false;
-    btn.textContent = "Copy failed"; // manual click retries
+    btn.textContent = t("admin.action.copy_failed"); // manual click retries
   }
   state.timer = setTimeout(() => {
     btn.textContent = state.originalLabel;
@@ -1065,14 +1065,14 @@ async function loadWorkspaceConnectors(cached = null, preloaded = false) {
     state.workspaceConnectors = Array.isArray(data && data.workspace_connectors) ? data.workspace_connectors : [];
     state.workspaceConnectorsRevision = Number.isInteger(data && data.revision) ? data.revision : 0;
     const label = $("#workspace-connectors-revision");
-    if (label) label.textContent = "Policy revision " + state.workspaceConnectorsRevision;
+    if (label) label.textContent = t("admin.workspace_connector.policy_revision", { revision: state.workspaceConnectorsRevision });
     renderWorkspaceConnectors(data || {});
     return data;
   } catch (err) {
     const label = $("#workspace-connectors-revision");
-    if (label) label.textContent = "Unavailable";
+    if (label) label.textContent = t("admin.status.unavailable");
     const body = $("#workspace-connectors-body");
-    if (body) body.innerHTML = '<p role="alert">Workspace connector policy unavailable: ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace_connector.policy_unavailable")) + ': ' + esc(err.message) + '</p>';
     return null;
   }
 }
@@ -1101,7 +1101,7 @@ async function loadWorkspaces(cached = null, preloaded = false) {
     return data;
   } catch (err) {
     const body = $("#workspaces-body");
-    if (body) body.innerHTML = '<p role="alert">Workspace lifecycle unavailable: ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.workspace.lifecycle_unavailable")) + ': ' + esc(err.message) + '</p>';
     return null;
   }
 }
@@ -1114,7 +1114,7 @@ async function loadWorkspaceRuntime(cached = null, preloaded = false) {
     return data;
   } catch (err) {
     const label = $("#workspaces-status");
-    if (label) label.textContent = "Runtime unavailable";
+    if (label) label.textContent = t("admin.workspace.runtime_unavailable");
     // Do not leave a successful capacity sample on screen after a refresh
     // fails. Clear numeric values and mark the replacement state as stale.
     state.workspaceRuntime = {
@@ -1145,7 +1145,7 @@ async function loadWorkspaceSettings(cached = null, preloaded = false) {
     return data;
   } catch (err) {
     const label = $("#workspace-settings-status");
-    if (label) label.textContent = "Settings unavailable";
+    if (label) label.textContent = t("admin.status.unavailable");
     return null;
   }
 }
@@ -1158,9 +1158,9 @@ async function loadGpuAcceleration(cached = null, preloaded = false) {
     return data;
   } catch (err) {
     const label = $("#gpu-acceleration-status");
-    if (label) label.textContent = "Unavailable";
+    if (label) label.textContent = t("admin.gpu.unavailable");
     const body = $("#gpu-effective-state");
-    if (body) body.innerHTML = '<p role="alert">GPU acceleration status unavailable: ' + esc(err.message) + '</p>';
+    if (body) body.innerHTML = '<p role="alert">' + esc(t("admin.gpu.status_unavailable")) + ': ' + esc(err.message) + '</p>';
     return null;
   }
 }
@@ -1170,43 +1170,37 @@ async function loadGpuAcceleration(cached = null, preloaded = false) {
 // NVIDIA driver being older than the CUDA 13 floor.
 // Every reason the status can report (acceleration.FALLBACK_REASONS), in words. An unknown
 // token still shows as itself rather than disappearing.
-const GPU_REASON_TEXT = Object.freeze({
-  driver_too_old: "The NVIDIA driver is older than R580; CUDA 13 needs R580 or newer.",
-  profile_cpu: "This install uses the CPU image, which has no GPU runtime.",
-  device_nodes_missing: "The GPU devices are not visible inside the container.",
-  device_permission_denied: "The container is not allowed to open the GPU devices.",
-  runtime_missing: "The GPU runtime is not installed in this image.",
-  runtime_integrity_failed: "The GPU runtime in this image failed its integrity check.",
-  provider_unavailable: "The GPU provider did not load.",
-  provider_cpu_fallback: "The GPU provider loaded but ran on the CPU.",
-  canary_failed: "The card gave a different answer from the CPU on the test input.",
-  model_unqualified: "The OCR model did not pass its check on the card.",
-  not_selected: "This card is not selected.",
-  configured_card_missing: "A selected card is no longer present.",
-  stable_uuid_missing: "This card has no stable ID, so OCR cannot be bound to it.",
-  insufficient_vram: "The card does not have enough free memory.",
-  busy: "The card is busy with other work.",
-  telemetry_unavailable: "The card's memory and load could not be read.",
-  cooldown: "The card failed recently and is waiting before it is tried again.",
-  quarantined: "The card failed its checks and is switched off until Cognita restarts.",
-  configuration_invalid: "The saved acceleration settings are invalid.",
-  restart_required: "Saved changes take effect after a restart.",
-  verification_timeout: "The check did not finish in time.",
-  worker_cleanup_failed: "The check could not release the card cleanly.",
-  knowledge_gpu_off: "OCR uses a card only while Knowledge GPU is on.",
+const GPU_REASON_IDS = Object.freeze({
+  driver_too_old: "admin.gpu.reason.driver_too_old", profile_cpu: "admin.gpu.reason.profile_cpu",
+  device_nodes_missing: "admin.gpu.reason.device_nodes_missing", device_permission_denied: "admin.gpu.reason.device_permission_denied",
+  runtime_missing: "admin.gpu.reason.runtime_missing", runtime_integrity_failed: "admin.gpu.reason.runtime_integrity_failed",
+  provider_unavailable: "admin.gpu.reason.provider_unavailable", provider_cpu_fallback: "admin.gpu.reason.provider_cpu_fallback",
+  canary_failed: "admin.gpu.reason.canary_failed", model_unqualified: "admin.gpu.reason.model_unqualified",
+  not_selected: "admin.gpu.reason.not_selected", configured_card_missing: "admin.gpu.reason.configured_card_missing",
+  stable_uuid_missing: "admin.gpu.reason.stable_uuid_missing", insufficient_vram: "admin.gpu.reason.insufficient_vram",
+  busy: "admin.gpu.reason.busy", telemetry_unavailable: "admin.gpu.reason.telemetry_unavailable",
+  cooldown: "admin.gpu.reason.cooldown", quarantined: "admin.gpu.reason.quarantined",
+  configuration_invalid: "admin.gpu.reason.configuration_invalid", restart_required: "admin.gpu.reason.restart_required",
+  verification_timeout: "admin.gpu.reason.verification_timeout", worker_cleanup_failed: "admin.gpu.reason.worker_cleanup_failed",
+  knowledge_gpu_off: "admin.gpu.reason.knowledge_gpu_off",
+});
+const GPU_VERIFY_STATE_IDS = Object.freeze({
+  passed: "admin.gpu.verify_state.passed", fallback: "admin.gpu.verify_state.fallback",
+  failed: "admin.gpu.verify_state.failed", timeout: "admin.gpu.verify_state.timeout",
 });
 
 function gpuReasonText(reason) {
-  return GPU_REASON_TEXT[reason] || reason;
+  const id = GPU_REASON_IDS[reason];
+  return id ? t(id) : reason;
 }
 
 // The empty-cards sentence, from the status's own profile: the vendor label comes from the
 // server's profile table (deployment.vendor_label), and a CPU profile exposes no cards at all.
 function gpuNoCardsText(deployment) {
   const profile = (deployment && deployment.profile) || "cpu";
-  if (profile === "cpu") return "No GPU cards are exposed to this deployment (CPU profile).";
+  if (profile === "cpu") return t("admin.gpu.no_cards_cpu");
   const vendor = (deployment && deployment.vendor_label) || "GPU";
-  return `No ${vendor} cards detected in this deployment.`;
+  return t("admin.gpu.no_cards_vendor", { vendor });
 }
 
 function renderGpuAcceleration(data) {
@@ -1218,17 +1212,18 @@ function renderGpuAcceleration(data) {
   const effective = data.effective || {};
   const restart = data.restart || {};
   const label = $("#gpu-acceleration-status");
-  if (label) label.textContent = `${deployment.profile || "cpu"} · configured r${configured.revision ?? "—"} · loaded r${loaded.revision ?? "—"}`;
+  if (label) label.textContent = t("admin.gpu.revision_status", { profile: deployment.profile || "cpu", configured: configured.revision ?? "—", loaded: loaded.revision ?? "—" });
   const stateCard = $("#gpu-effective-state");
   // 15.0.3: before Verify has run in this process the service is already using the card
   // (indexing checks each card itself when it starts it), so say so, and say it is unchecked.
   const unverified = ((data.verification || {}).state || "not_run") === "not_run";
-  const onCard = (gpu) => gpu ? (unverified ? "GPU (not checked since restart)" : "GPU") : "CPU fallback";
-  if (stateCard) stateCard.innerHTML = `<h3>Effective state</h3><p><strong>Profile:</strong> ${esc(deployment.profile || "cpu")}</p><p><strong>Knowledge:</strong> ${onCard(effective.knowledge_gpu)} · <strong>OCR:</strong> ${onCard(effective.ocr_device === "gpu")}</p>${restart.required ? '<p class="auth-warning" role="alert"><strong>Restart required.</strong> Saved policy is not loaded yet.</p>' : ""}<p class="muted">${esc((effective.fallback_reasons || []).map(gpuReasonText).join(" ") || "No fallback reason")}</p>`;
+  const onCard = (gpu) => gpu ? (unverified ? t("admin.gpu.unverified") : t("admin.gpu.active")) : t("admin.gpu.cpu_fallback");
+  if (stateCard) stateCard.innerHTML = `<h3>${esc(t("admin.gpu.effective_state"))}</h3><p><strong>${esc(t("admin.gpu.profile"))}:</strong> ${esc(deployment.profile || "cpu")}</p><p><strong>${esc(t("admin.gpu.knowledge"))}:</strong> ${esc(onCard(effective.knowledge_gpu))} · <strong>${esc(t("admin.gpu.ocr"))}:</strong> ${esc(onCard(effective.ocr_device === "gpu"))}</p>${restart.required ? `<p class="auth-warning" role="alert"><strong>${esc(t("admin.gpu.restart_required"))}</strong> ${esc(t("admin.gpu.restart_not_loaded"))}</p>` : ""}<p class="muted">${esc((effective.fallback_reasons || []).map(gpuReasonText).join(" ") || t("admin.gpu.no_fallback_reason"))}</p>`;
   const cards = $("#gpu-detected-cards");
   if (cards) {
     const rows = Array.isArray(data.cards) ? data.cards : [];
-    cards.innerHTML = `<h3>Detected cards</h3>${rows.length ? `<ul>${rows.map((card) => `<li><strong>${esc(card.name || card.pci_address)}</strong> <span class="muted">${esc(card.pci_address)}${card.gpu_uuid ? ` · <code>${esc(card.gpu_uuid)}</code>` : ""} · ${formatBytes(Number(card.vram_free_bytes) || 0)} free / ${formatBytes(Number(card.vram_total_bytes) || 0)} · Knowledge ${card.knowledge_usable ? (unverified ? "ready (not checked)" : "ready") : "fallback"} · OCR ${card.ocr_usable ? (unverified ? "ready (not checked)" : "ready") : "fallback"}${card.reasons?.length ? " · " + esc(card.reasons.map(gpuReasonText).join(" ")) : ""}${card.indexing_state === "quarantined" && card.indexing_reason ? " (" + esc(card.indexing_reason) + ")" : ""}</span></li>`).join("")}</ul>` : `<p class="muted">${esc(gpuNoCardsText(deployment))}</p>`}`;
+    const cardReady = unverified ? t("admin.gpu.ready_unverified") : t("admin.gpu.ready");
+    cards.innerHTML = `<h3>${esc(t("admin.gpu.detected_cards"))}</h3>${rows.length ? `<ul>${rows.map((card) => `<li><strong>${esc(card.name || card.pci_address)}</strong> <span class="muted">${esc(card.pci_address)}${card.gpu_uuid ? ` · <code>${esc(card.gpu_uuid)}</code>` : ""} · ${formatBytes(Number(card.vram_free_bytes) || 0)} ${esc(t("admin.gpu.free"))} / ${formatBytes(Number(card.vram_total_bytes) || 0)} · ${esc(t("admin.gpu.knowledge"))} ${card.knowledge_usable ? cardReady : esc(t("admin.gpu.fallback"))} · ${esc(t("admin.gpu.ocr"))} ${card.ocr_usable ? cardReady : esc(t("admin.gpu.fallback"))}${card.reasons?.length ? " · " + esc(card.reasons.map(gpuReasonText).join(" ")) : ""}${card.indexing_state === "quarantined" && card.indexing_reason ? " (" + esc(card.indexing_reason) + ")" : ""}</span></li>`).join("")}</ul>` : `<p class="muted">${esc(gpuNoCardsText(deployment))}</p>`}`;
   }
   const knowledge = configured.knowledge || {};
   const ocr = configured.ocr || {};
@@ -1239,7 +1234,7 @@ function renderGpuAcceleration(data) {
   const ocrIds = $("#gpu-ocr-card-ids"); if (ocrIds) ocrIds.value = (ocr.gpu_device_ids || []).join("\n");
   const specific = $("#gpu-knowledge-card-ids-row"); if (specific) specific.hidden = cardsMode?.value !== "specific";
   const ocrSpecific = $("#gpu-ocr-card-ids-row"); if (ocrSpecific) ocrSpecific.hidden = ocrDevice?.value !== "gpu";
-  const help = $("#gpu-acceleration-help"); if (help) help.textContent = restart.required ? "Save succeeded; restart Cognita to load this policy." : "The running process reports the loaded policy above.";
+  const help = $("#gpu-acceleration-help"); if (help) help.textContent = restart.required ? t("admin.gpu.saved_restart") : t("admin.gpu.loaded_policy");
 }
 
 function workspaceValue(row, ...keys) {
@@ -1273,7 +1268,7 @@ async function fetchCredentialWorkspaceTarget(credentialId) {
   const result = await api("/api/workspaces?" + query.toString());
   const rows = Array.isArray(result && result.workspaces) ? result.workspaces : [];
   const matches = rows.filter((row) => String(row.credential_id || row.key_id || "") === String(credentialId));
-  if (matches.length > 1) throw new Error("Credential maps to more than one Workspace");
+  if (matches.length > 1) throw new Error(t("admin.credential.multiple_workspaces"));
   return { workspace: matches[0] || null, revision: result && result.revision };
 }
 
@@ -1366,11 +1361,11 @@ function renderWorkspaceSettings(data) {
   const networkStatus = $("#workspace-network-status");
   if (networkStatus) {
     networkStatus.textContent = unavailable.length
-      ? `Unavailable legacy rule${unavailable.length === 1 ? "" : "s"}: ${unavailable.map((rule) => rule.domain || "(unknown domain)").join(", ")}. Edit its domain or ports to enable both HTTP and HTTPS.`
-      : "HTTP and HTTPS use the listed ports. Saved legacy scheme-specific entries remain unavailable until edited.";
+      ? t(unavailable.length === 1 ? "admin.workspace.network.legacy_unavailable_one" : "admin.workspace.network.legacy_unavailable_many", { domains: unavailable.map((rule) => rule.domain || t("admin.status.unknown")).join(", ") })
+      : t("admin.workspace.network.port_guidance");
   }
   const brave = $("#workspace-brave-enabled"); if (brave && settings.brave_enabled !== undefined) brave.checked = Boolean(settings.brave_enabled);
-  const label = $("#workspace-settings-status"); if (label) label.textContent = "Revision " + workspaceValue(settings, "revision");
+  const label = $("#workspace-settings-status"); if (label) label.textContent = t("admin.workspace.revision", { revision: workspaceValue(settings, "revision") });
 }
 
 function workspaceNetworkEditorShape(rule) {
@@ -1503,11 +1498,11 @@ async function loadPublicBaseUrl(cached = null) {
     const input = $("#public-base-url");
     if (input && document.activeElement !== input) input.value = data.public_base_url || "";
     const status = $("#public-url-status");
-    if (status) status.textContent = data.source === "admin" ? "Saved by Admin" : "Deployment default";
+    if (status) status.textContent = data.source === "admin" ? t("admin.settings.saved_by_admin") : t("admin.settings.deployment_default");
     return data;
   } catch (err) {
     const status = $("#public-url-status");
-    if (status) status.textContent = "Unavailable";
+    if (status) status.textContent = t("admin.status.unavailable");
     return null;
   }
 }
@@ -1776,7 +1771,7 @@ document.addEventListener("click", (event) => {
 $("#workspace-connector-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!$("#workspace-connector-confirm").checked) {
-    await uiNotice({ title: "Confirmation required", body: "Creating a Workspace-only connector is a high-trust action. Confirm the isolated execution surface before saving." });
+    await uiNotice({ title: t("admin.workspace_connector.confirmation_required"), body: t("admin.workspace_connector.create_warning") });
     return;
   }
   try {
@@ -1792,7 +1787,7 @@ $("#workspace-connector-form").addEventListener("submit", async (event) => {
     });
     event.target.reset();
     await refreshAdminMutation("workspace-connector:create");
-  } catch (err) { await uiNotice({ title: "Workspace connector creation failed", body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.create_failed"), body: err.message }); }
 });
 
 $("#workspace-connectors-body").addEventListener("click", async (event) => {
@@ -1808,13 +1803,13 @@ $("#workspace-connectors-body").addEventListener("click", async (event) => {
     if (!panel.hidden) await renderCredentialList("workspace", id, panel);
     return;
   }
-  const confirmation = await uiConfirm({ title: "Disable Workspace-only connector", body: "Disable this surface? Existing Workspaces remain retained; clients will stop authenticating.", confirmLabel: "Disable", danger: true });
+  const confirmation = await uiConfirm({ title: t("admin.workspace_connector.disable_title"), body: t("admin.workspace_connector.disable_body"), confirmLabel: t("admin.workspace_connector.disable"), danger: true });
   if (!confirmation.ok) return;
   const current = state.workspaceConnectors.find((item) => String(item.id || item.surface_id) === String(id));
   try {
     await api("/api/workspace-connectors/" + encodeURIComponent(id), { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: current && current.revision || state.workspaceConnectorsRevision, confirm: true }) });
     await refreshAdminMutation("workspace-connector:delete");
-  } catch (err) { await uiNotice({ title: "Workspace connector disable failed", body: err.message }); }
+  } catch (err) { await uiNotice({ title: t("admin.workspace_connector.disable_failed"), body: err.message }); }
 });
 
 document.addEventListener("click", async (event) => {
@@ -1889,7 +1884,7 @@ document.addEventListener("click", async (event) => {
           return;
         }
         if (!Number.isInteger(credentialIndex && credentialIndex.revision)) {
-          throw new Error("Credential revision is unavailable; refresh the credential list");
+          throw new Error(t("admin.credential.revision_unavailable"));
         }
         requestBody.expected_revision = credentialIndex.revision;
         const authoritative = await fetchCredentialWorkspaceTarget(action.dataset.credentialId);
@@ -1918,7 +1913,7 @@ document.addEventListener("click", async (event) => {
         const workspaceOwner = liveWorkspace && liveWorkspace.owner_status;
         const workspaceRevision = liveWorkspace && liveWorkspace.revision;
         if (liveWorkspace && !Number.isInteger(workspaceRevision)) {
-          throw new Error("Workspace revision is unavailable; refresh the Workspace inventory");
+          throw new Error(t("admin.workspace.revision_unavailable"));
         }
         const target = workspaceId || t("admin.credential.target.lazy");
         const stateText = workspaceState || t("admin.credential.target.not_created");
@@ -2012,7 +2007,7 @@ async function loadDocumentRoots() {
   $("#documents-root-fields").hidden = !rootMode;
   $("#documents-dir-field").hidden = rootMode;
   documentsPathInput.required = !rootMode;
-  documentsPathButton.textContent = rootMode ? "Test folder" : "Test path";
+  documentsPathButton.textContent = rootMode ? t("admin.projects.test_folder") : t("admin.projects.test_path");
   const choice = $("#documents-root-choice");
   const single = $("#documents-root-single");
   choice.hidden = !(documentRoots.length > 1);
@@ -2038,13 +2033,13 @@ documentsPathButton.addEventListener("click", async () => {
   const rootMode = documentRoots.length > 0;
   const documentsDir = documentsPathInput.value.trim();
   if (!rootMode && !documentsDir) {
-    documentsPathStatus.textContent = "Enter an absolute folder path first.";
+    documentsPathStatus.textContent = t("admin.projects.absolute_path_required");
     documentsPathStatus.style.color = "var(--pico-del-color)";
     return;
   }
   documentsPathButton.setAttribute("aria-busy", "true");
   documentsPathButton.disabled = true;
-  documentsPathStatus.textContent = "Checking…";
+  documentsPathStatus.textContent = t("admin.projects.checking_path");
   documentsPathStatus.style.color = "";
   try {
     const info = await api("/api/projects/path-info", {
@@ -2065,7 +2060,7 @@ documentsPathButton.addEventListener("click", async () => {
     documentsPathStatus.textContent = presentOutcome(info);
     documentsPathStatus.style.color = "var(--pico-ins-color)";
   } catch (err) {
-    documentsPathStatus.textContent = `Path check failed: ${err.message}`;
+    documentsPathStatus.textContent = `${t("admin.projects.path_check_failed")}: ${err.message}`;
     documentsPathStatus.style.color = "var(--pico-del-color)";
   } finally {
     documentsPathButton.removeAttribute("aria-busy");
@@ -2108,12 +2103,12 @@ addForm.addEventListener("submit", async (event) => {
     }
     const actions = $("#project-created-actions");
     actions.hidden = false;
-    actions.innerHTML = `<strong>${esc(createdName)} was created.</strong> <button type="button" data-created-auth>Configure authentication</button> <button type="button" class="secondary outline" data-created-another>Create another</button>`;
+    actions.innerHTML = `<strong>${esc(t("admin.projects.created", { name: createdName }))}</strong> <button type="button" data-created-auth>${esc(t("admin.action.configure_authentication"))}</button> <button type="button" class="secondary outline" data-created-another>${esc(t("admin.projects.create_another"))}</button>`;
     actions.querySelector("[data-created-auth]").focus();
     actions.querySelector("[data-created-auth]").addEventListener("click", () => window.adminNavigate("#authentication/" + encodeURIComponent(createdName)));
     actions.querySelector("[data-created-another]").addEventListener("click", () => { actions.hidden = true; window.adminNavigate("#projects/create"); $("#add-form input[name=name]").focus(); });
   } catch (err) {
-    await uiNotice({ title: "Could not add project", body: err.message });
+    await uiNotice({ title: t("admin.projects.add_failed"), body: err.message });
   } finally {
     button.removeAttribute("aria-busy");
     button.disabled = false;
@@ -2154,10 +2149,10 @@ $("#add-form").addEventListener("submit", async (e) => {
     form.exclude_from_default_permissions.checked = false;
     const url = info.connector_url || info.connector_path;
     await copyText(url, btn);
-    uiNotice({ title: "Project added", body: `OAuth connector URL copied:\n${url}` });
+    uiNotice({ title: t("admin.projects.added"), body: t("admin.projects.connector_url_copied", { url }) });
     loadProjects();
   } catch (err) {
-    uiNotice({ title: "Could not add project", body: err.message });
+    uiNotice({ title: t("admin.projects.add_failed"), body: err.message });
   } finally {
     btn.removeAttribute("aria-busy");
     btn.disabled = false;
@@ -2182,20 +2177,20 @@ $("#projects-body").addEventListener("click", async (e) => {
     btn.setAttribute("aria-busy", "true");
     try {
       await api(`/api/projects/${encodeURIComponent(name)}/reindex`, { method: "POST" });
-      uiNotice({ title: "Reindex", body: `Reindex started for "${name}".` });
+      uiNotice({ title: t("admin.projects.reindex"), body: t("admin.projects.reindex_started", { name }) });
       await refreshAdminMutation("reindex");
       fillDocCount(name);
     } catch (err) {
-      uiNotice({ title: "Reindex failed", body: err.message });
+      uiNotice({ title: t("admin.projects.reindex_failed"), body: err.message });
     } finally {
       btn.removeAttribute("aria-busy");
     }
   } else if (act === "remove") {
     const { ok, checked } = await uiConfirm({
-      title: "Remove project",
-      body: `Remove project "${name}" from Cognita?\n\nSource documents are never deleted.`,
-      checkboxLabel: "Also delete its index data (rebuildable by re-adding the project)",
-      confirmLabel: "Remove",
+      title: t("admin.projects.remove.title"),
+      body: t("admin.projects.remove.body", { name }),
+      checkboxLabel: t("admin.projects.remove.index_data"),
+      confirmLabel: t("admin.action.remove"),
       danger: true,
     });
     if (!ok) return;
@@ -2203,7 +2198,7 @@ $("#projects-body").addEventListener("click", async (e) => {
       await api(`/api/projects/${encodeURIComponent(name)}?deleteData=${checked}`, { method: "DELETE" });
       await refreshAdminMutation("project:delete");
     } catch (err) {
-      uiNotice({ title: "Remove failed", body: err.message });
+      uiNotice({ title: t("admin.projects.remove_failed"), body: err.message });
     }
   }
 });
@@ -2506,11 +2501,11 @@ $("#workspace-settings-form").addEventListener("submit", async (event) => {
   let networkRules;
   try {
     networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules());
-  } catch (err) { await uiNotice({ title: "Invalid allowlist rules", body: err.message }); return; }
+  } catch (err) { await uiNotice({ title: t("admin.workspace.network.invalid_rules"), body: err.message }); return; }
   const body = { expected_revision: settings.revision || 0, retention_days: Number($("#workspace-retention-days").value), quota_bytes: Number($("#workspace-quota-bytes").value), idle_stop_seconds: Number($("#workspace-idle-stop").value), host_reserve_bytes: Number($("#workspace-host-reserve").value), warning_threshold_percent: Number($("#workspace-warning-threshold").value), max_running_workspaces: Number($("#workspace-max-running").value), network_mode: networkMode, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked, idempotency_token: crypto.randomUUID() };
   const key = $("#workspace-brave-key").value; if (key) body.brave_api_key = key;
   try { await api("/api/workspace-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); $("#workspace-brave-key").value = ""; $("#workspace-settings-confirm").checked = false; await refreshAdminMutation("workspace:settings"); }
-  catch (err) { await uiNotice({ title: "Workspace policy save failed", body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.workspace.policy_save_failed"), body: err.message }); }
 });
 $("#public-url-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2524,16 +2519,16 @@ $("#public-url-form").addEventListener("submit", async (event) => {
     });
     await refreshAdminMutation("public-base-url:update");
   } catch (err) {
-    await uiNotice({ title: "Public URL save failed", body: err.message });
+    await uiNotice({ title: t("admin.workspace.public_url_save_failed"), body: err.message });
   } finally {
     if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
   }
 });
 $("#workspace-settings-preview").addEventListener("click", async () => {
-  try { const networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules()); const result = await api("/api/workspace-settings/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: (state.workspaceSettings || {}).revision || 0, network_mode: $("#workspace-network-mode").value, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked }) }); await uiNotice({ title: "Policy preview", body: JSON.stringify(result.preview || {}, null, 2) }); }
-  catch (err) { await uiNotice({ title: "Policy preview failed", body: err.message }); }
+  try { const networkRules = workspaceNetworkPayload(syncWorkspaceNetworkRules()); const result = await api("/api/workspace-settings/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: (state.workspaceSettings || {}).revision || 0, network_mode: $("#workspace-network-mode").value, network_rules: networkRules, brave_enabled: $("#workspace-brave-enabled").checked, confirm_high_trust: $("#workspace-settings-confirm").checked }) }); await uiNotice({ title: t("admin.workspace.policy_preview"), body: JSON.stringify(result.preview || {}, null, 2) }); }
+  catch (err) { await uiNotice({ title: t("admin.workspace.policy_preview_failed"), body: err.message }); }
 });
-$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: "Brave Search test", body: `${result.ok ? "Success" : "Not available"}: ${result.category}` }); } catch (err) { await uiNotice({ title: "Brave Search test failed", body: err.message }); } });
+$("#workspace-brave-test").addEventListener("click", async () => { try { const result = await api("/api/workspace-settings/test-brave", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: t("admin.workspace.brave_test"), body: `${t(result.ok ? "admin.status.success" : "admin.status.unavailable")}\n\n${t("admin.technical_detail")}: ${result.category}` }); } catch (err) { await uiNotice({ title: t("admin.workspace.brave_test_failed"), body: err.message }); } });
 $("#gpu-knowledge-cards").addEventListener("change", (event) => { $("#gpu-knowledge-card-ids-row").hidden = event.target.value !== "specific"; });
 $("#gpu-ocr-device").addEventListener("change", (event) => { $("#gpu-ocr-card-ids-row").hidden = event.target.value !== "gpu"; });
 $("#gpu-acceleration-form").addEventListener("submit", async (event) => {
@@ -2545,11 +2540,11 @@ $("#gpu-acceleration-form").addEventListener("submit", async (event) => {
   const ocrIds = ocrDevice === "gpu" ? $("#gpu-ocr-card-ids").value.split(/\s+/).map((item) => item.trim()).filter(Boolean) : [];
   const payload = { expected_revision: Number(current.revision || 0), idempotency_token: crypto.randomUUID(), knowledge: { gpu_enabled: $("#gpu-knowledge-enabled").checked, gpu_device_ids: knowledgeIds }, ocr: { device: ocrDevice, gpu_device_ids: ocrIds } };
   try { await api("/api/settings/gpu-acceleration", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); await refreshAdminMutation("gpu-acceleration:save"); }
-  catch (err) { await uiNotice({ title: "GPU acceleration save failed", body: err.message }); }
+  catch (err) { await uiNotice({ title: t("admin.gpu.save_failed"), body: err.message }); }
 });
 $("#gpu-verify").addEventListener("click", async () => {
-  try { const result = await api("/api/settings/gpu-acceleration/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await uiNotice({ title: "GPU verification", body: `${result.state || "completed"}: ${Array.isArray(result.cards) ? result.cards.length : 0} card result(s)` }); await refreshAdminMutation("gpu-acceleration:verify"); }
-  catch (err) { await uiNotice({ title: "GPU verification failed", body: err.message }); }
+  try { const result = await api("/api/settings/gpu-acceleration/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); const stateId = GPU_VERIFY_STATE_IDS[result.state]; const stateLabel = stateId ? t(stateId) : `${t("admin.technical_detail")}: ${result.state || "unknown"}`; await uiNotice({ title: t("admin.gpu.verification"), body: t("admin.gpu.verification_results", { state: stateLabel, count: Array.isArray(result.cards) ? result.cards.length : 0 }) }); await refreshAdminMutation("gpu-acceleration:verify"); }
+  catch (err) { await uiNotice({ title: t("admin.gpu.verification_failed"), body: err.message }); }
 });
 $("#authentication-search").addEventListener("input", (event) => { authState.search = event.target.value; renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
 $("#authentication-expand-all").addEventListener("click", () => { authState.projects.forEach((p) => authState.expanded.add(p.name)); renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
@@ -2573,7 +2568,7 @@ $("#revoke-all-grants").addEventListener("click", async () => {
     .filter((grant) => grantConnectorId(grant) === String(connector.id))
     .map((grant) => String(grant.id)) : [];
   if (!grantIds.length) return;
-  const { ok } = await uiConfirm({ title: "Revoke all OAuth clients", body: "Every OAuth client connected to \"" + connector.name + "\" must authorize again.", confirmLabel: "Revoke all", danger: true });
+  const { ok } = await uiConfirm({ title: t("admin.oauth.revoke_all_title"), body: t("admin.oauth.revoke_all_body", { connector: connector.name }), confirmLabel: t("admin.oauth.revoke_all"), danger: true });
   if (!ok) return;
   // The existing API revokes one stable connection identity at a time.  Use
   // only the IDs from the selected connector's already loaded slice so this
