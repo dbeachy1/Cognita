@@ -325,8 +325,23 @@ function csrfToken() {
   return entry ? decodeURIComponent(entry.slice("cognita_csrf=".length)) : "";
 }
 
+function presentOutcome(payload, outcome = "admin.action.completed") {
+  const locale = window.CognitaAdminLocale;
+  if (payload && typeof payload.presentation_id === "string" && locale) {
+    try { return locale.t(payload.presentation_id, payload.presentation_values || {}); }
+    catch { /* malformed or older response: retain the documented generic fallback */ }
+  }
+  const raw = payload && [payload.detail, payload.message, payload.error]
+    .find((value) => typeof value === "string" && value.length > 0);
+  return raw && locale
+    ? `${locale.t(outcome)}\n\n${locale.t("admin.technical_detail")}: ${raw}`
+    : (locale ? locale.t(outcome) : (raw || ""));
+}
+
 function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes.toLocaleString()} B`;
+  const locale = window.CognitaAdminLocale;
+  const number = (value, options) => locale ? locale.number(value, options) : value.toLocaleString();
+  if (bytes < 1024) return `${number(bytes)} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];
   let value = bytes;
   let unit = -1;
@@ -335,12 +350,12 @@ function formatBytes(bytes) {
     unit += 1;
   } while (value >= 1024 && unit < units.length - 1);
   const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(digits)} ${units[unit]}`;
+  return `${number(value, { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${units[unit]}`;
 }
 
 function formatMaybeBytes(value) {
   return value === null || value === undefined || value === "—" ||
-    !Number.isFinite(Number(value)) ? "Unavailable" : formatBytes(Number(value));
+    !Number.isFinite(Number(value)) ? window.CognitaAdminLocale.t("admin.status.unavailable") : formatBytes(Number(value));
 }
 
 async function api(path, opts = {}) {
@@ -360,7 +375,7 @@ async function api(path, opts = {}) {
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
     const msg = (data && (data.detail || data.message || data.error)) || res.statusText;
-    const error = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    const error = new Error(presentOutcome(data || { detail: typeof msg === "string" ? msg : JSON.stringify(msg) }, "admin.action.failed"));
     error.status = res.status;
     error.reason = data && data.reason;
     error.payload = data;
@@ -579,10 +594,11 @@ async function copyText(text, btn) {
 }
 
 function when(ts) {
-  if (!ts) return "Never";
+  if (!ts) return window.CognitaAdminLocale.t("admin.status.never");
   const value = typeof ts === "number" ? ts * 1000 : ts;
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "Unavailable" : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? window.CognitaAdminLocale.t("admin.status.unavailable") :
+    (window.CognitaAdminLocale ? window.CognitaAdminLocale.date(parsed, { dateStyle: "medium", timeStyle: "short" }) : parsed.toLocaleString());
 }
 
 // ---- Cognita 9 project, connector, and authorization views ----
@@ -2025,15 +2041,12 @@ documentsPathButton.addEventListener("click", async () => {
     if (rootMode) {
       // The server's plain sentence is the message; green only when Cognita can read and write.
       // 19.2: name the folder the way a person knows it when that differs from the container path.
-      documentsPathStatus.textContent = info.display && info.display !== info.path
-        ? `${info.display}: ${info.message}` : info.message;
+      documentsPathStatus.textContent = presentOutcome(info);
       documentsPathStatus.style.color = info.readable && info.writable
         ? "var(--pico-ins-color)" : "var(--pico-del-color)";
       return;
     }
-    documentsPathStatus.textContent =
-      `Valid path — ${info.file_count.toLocaleString()} files, ` +
-      `${formatBytes(info.total_bytes)} (${info.total_bytes.toLocaleString()} bytes)`;
+    documentsPathStatus.textContent = presentOutcome(info);
     documentsPathStatus.style.color = "var(--pico-ins-color)";
   } catch (err) {
     documentsPathStatus.textContent = `Path check failed: ${err.message}`;

@@ -12,10 +12,123 @@
   "admin.nav.authentication": "Authentication",
   "admin.nav.workspaces": "Workspaces",
   "admin.nav.settings": "Settings",
+  "admin.action.refresh": "Refresh",
+  "admin.field.name": "Name",
+  "admin.field.status": "Status",
+  "admin.field.actions": "Actions",
+  "admin.projects.view": "View",
+  "admin.projects.create_new": "Create New",
+  "admin.projects.title": "Projects",
+  "admin.projects.description": "Projects are managed separately from connector access. A project may be a member of more than one connector.",
+  "admin.projects.documents_folder": "Documents folder",
+  "admin.projects.docs": "Docs",
+  "admin.projects.authorized_clients": "Authorized clients",
+  "admin.projects.add_project": "Add project",
+  "admin.projects.name_help": "Use the exact project name clients will pass to project-scoped tools.",
+  "admin.projects.documents_root": "Documents root",
+  "admin.projects.folder_inside": "Folder inside it",
+  "admin.projects.folder_help": "A folder that already exists inside the documents root. Leave empty to use the root itself.",
+  "admin.projects.documents_absolute": "Documents folder (absolute path)",
+  "admin.projects.test_path": "Test path",
+  "admin.projects.local_writable": "Local maintenance writable (connector access is configured above)",
+  "admin.projects.exclude_default": "Exclude from default permissions",
+  "admin.projects.exclude_help": "All-project connectors will not include this project automatically. Explicit Read-only or Read/write access still grants it.",
+  "admin.public_url.title": "Canonical public URL",
+  "admin.public_url.save": "Save public URL",
+  "admin.connectors.settings": "Connector settings",
+  "admin.connectors.description": "Connector settings control Knowledge, Workspace, and bridge access. Workspace tools and transfer are on by default and can be turned off per connector or per project.",
+  "admin.oauth.clients_description": "These are live OAuth authorizations. Each client is grouped by connector resource and shows current project access; connector definitions and authorizations are separate controls.",
+  "admin.oauth.client": "Client",
+  "admin.oauth.connector_access": "Connector and current access",
+  "admin.oauth.authorized": "Authorized",
+  "admin.oauth.last_used": "Last used",
+  "admin.oauth.revoke_all": "Revoke all connected clients",
+  "admin.action.search": "Search",
+  "admin.action.sort": "Sort",
+  "admin.field.state": "State",
+  "admin.workspaces.runtime": "Workspace runtime",
+  "admin.workspaces.settings": "Workspace settings",
+  "admin.workspaces.connectors": "Workspace-only connectors",
+  "admin.workspaces.owner": "Owner",
+  "admin.workspaces.pinned": "Pinned",
+  "admin.workspaces.expiry": "Expiry",
+  "admin.workspaces.warning": "Warning",
+  "admin.workspaces.settings_description": "One persistent Workspace per credential or OAuth grant, shared across chats. It is created automatically on first use; Pin retains files indefinitely.",
+  "admin.workspaces.connectors_description": "Workspace-only surfaces are independent from Knowledge connectors and accept named static credentials only. Each active credential owns one persistent Workspace.",
+  "admin.settings.gpu": "GPU acceleration",
+  "admin.authentication.description": "OAuth and named static credentials are independent ways to authenticate. Static secrets are surface-scoped, encrypted for recovery, and shown only after current-password reauthentication.",
+  "admin.theme.label": "Theme",
+  "admin.workspaces.search_placeholder": "Connector or credential",
+  "admin.option.all_states": "All states",
+  "admin.option.running": "Running",
+  "admin.option.stopped": "Stopped",
+  "admin.option.transition": "Transition",
+  "admin.option.failed": "Failed",
+  "admin.option.orphaned": "Orphaned",
+  "admin.option.all_owners": "All owners",
+  "admin.option.active": "Active",
+  "admin.option.revoked": "Revoked",
+  "admin.option.tombstoned": "Tombstoned",
+  "admin.option.all": "All",
+  "admin.option.pinned": "Pinned",
+  "admin.option.not_pinned": "Not pinned",
+  "admin.option.expired": "Expired",
+  "admin.option.not_expired": "Not expired",
+  "admin.option.at_threshold": "At threshold",
+  "admin.option.below_threshold": "Below threshold",
+  "admin.sort.credential": "Credential",
+  "admin.sort.connector": "Connector",
+  "admin.sort.state": "State",
+  "admin.sort.created": "Created",
+  "admin.sort.last_accessed": "Last accessed",
+  "admin.sort.deletion_due": "Deletion due",
+  "admin.sort.actual_allocation": "Actual allocation",
+  "admin.sort.apparent_size": "Apparent size",
+  "admin.sort.quota_percent": "Quota percentage",
+  "admin.theme.system": "System",
+  "admin.theme.light": "Light",
+  "admin.theme.dark": "Dark",
+  "admin.folder.invalid": "The folder {folder} is invalid.",
+  "admin.folder.missing": "The folder {folder} does not exist. Create it first.",
+  "admin.folder.file": "The path {folder} points to a file, not a folder.",
+  "admin.folder.unreadable": "Cognita cannot read the folder {folder}. Check its permissions.",
+  "admin.folder.readwrite": "Cognita can read and write to the folder {folder}.",
+  "admin.folder.readonly": "Cognita can read the folder {folder}, but cannot write to it. Editing documents will fail.",
+  "admin.folder.path_required": "A documents folder path is required.",
   "admin.loading": "Loading…",
+  "admin.status.unavailable": "Unavailable",
+  "admin.status.never": "Never",
   "admin.action.failed": "The action could not be completed.",
   "admin.action.completed": "The action completed.",
   "admin.technical_detail": "Technical detail",
   "admin.project.folder_invalid": "The folder {folder} is invalid.",
   "admin.project.path_checked": "The folder {folder} is available."
+  ,"oauth.title.login": "Sign in · Cognita"
+  ,"oauth.login.heading": "Sign in to Cognita"
+  ,"oauth.login.intro": "Sign in to continue authorizing this connection."
+  ,"oauth.login.username": "Username"
+  ,"oauth.login.password": "Password"
+  ,"oauth.login.continue": "Continue"
+  ,"oauth.login.too_many_attempts": "Too many attempts. Please wait and try again."
+  ,"oauth.login.invalid_credentials": "The username or password is incorrect."
+  ,"oauth.language.label": "Language"
+  ,"oauth.language.submit": "Change language"
+  ,"oauth.consent.title_error": "Authorization error"
+  ,"oauth.consent.title": "Authorize · Cognita"
+  ,"oauth.consent.heading_error": "Authorization could not continue"
+  ,"oauth.consent.error_return": "Return to the requesting application and try again."
+  ,"oauth.consent.heading": "Authorize {application}?"
+  ,"oauth.consent.intro": "Cognita is asking for access through this connector."
+  ,"oauth.consent.connector_access": "Connector access"
+  ,"oauth.consent.project_mode_all": "{name} includes enabled projects with {access} default access unless a project is excluded from defaults. Explicit overrides are shown below, and future enabled projects are included unless excluded. Access settings are managed by your administrator and may change."
+  ,"oauth.consent.project_mode_selected": "{name} is limited to the selected enabled projects below. Access settings are managed by your administrator and may change."
+  ,"oauth.consent.no_projects": "No enabled projects are currently available."
+  ,"oauth.consent.unavailable_connector": "This request does not identify an available Cognita connector."
+  ,"oauth.consent.review": "Review the request before continuing. You can deny access at any time."
+  ,"oauth.consent.deny": "Deny"
+  ,"oauth.consent.authorize": "Authorize"
+  ,"oauth.consent.error_unknown": "This authorization request is invalid or has expired."
+  ,"oauth.consent.error_invalid_request": "The authorization request could not be validated."
+  ,"oauth.access.read": "Read"
+  ,"oauth.access.write": "Write"
 }

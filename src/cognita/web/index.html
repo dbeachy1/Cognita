@@ -31,43 +31,43 @@
 
     <section id="panel-projects" class="admin-panel" role="tabpanel" aria-labelledby="tab-projects">
       <nav class="admin-tabs admin-subtabs" role="tablist" aria-label="Project views">
-        <button id="tab-projects-view" role="tab" aria-controls="projects-section" aria-selected="true" tabindex="0" data-route="#projects/view">View</button>
-        <button id="tab-projects-create" role="tab" aria-controls="add-project-section" aria-selected="false" tabindex="-1" data-route="#projects/create">Create New</button>
+        <button id="tab-projects-view" role="tab" aria-controls="projects-section" aria-selected="true" tabindex="0" data-route="#projects/view" data-i18n="admin.projects.view">View</button>
+        <button id="tab-projects-create" role="tab" aria-controls="add-project-section" aria-selected="false" tabindex="-1" data-route="#projects/create" data-i18n="admin.projects.create_new">Create New</button>
       </nav>
 
     <article id="projects-section" role="tabpanel" aria-labelledby="tab-projects-view">
       <header>
         <div style="display:flex; justify-content:space-between; align-items:center;">
-          <strong>Projects</strong>
-          <button id="refresh-btn" class="secondary outline" style="margin:0; padding:.25rem .75rem;">Refresh</button>
+          <strong data-i18n="admin.projects.title">Projects</strong>
+          <button id="refresh-btn" class="secondary outline" style="margin:0; padding:.25rem .75rem;" data-i18n="admin.action.refresh">Refresh</button>
         </div>
       </header>
-      <p class="muted">Projects are managed separately from connector access. A project may be a member of more than one connector.</p>
+      <p class="muted" data-i18n="admin.projects.description">Projects are managed separately from connector access. A project may be a member of more than one connector.</p>
       <table>
-        <thead><tr><th>Name</th><th>Documents folder</th><th>Docs</th><th>Status</th><th>Authorized clients</th><th>Actions</th></tr></thead>
-        <tbody id="projects-body"><tr><td colspan="6" aria-busy="true">Loading…</td></tr></tbody>
+        <thead><tr><th data-i18n="admin.field.name">Name</th><th data-i18n="admin.projects.documents_folder">Documents folder</th><th data-i18n="admin.projects.docs">Docs</th><th data-i18n="admin.field.status">Status</th><th data-i18n="admin.projects.authorized_clients">Authorized clients</th><th data-i18n="admin.field.actions">Actions</th></tr></thead>
+        <tbody id="projects-body"><tr><td colspan="6" aria-busy="true" data-i18n="admin.loading">Loading…</td></tr></tbody>
       </table>
       <div id="project-created-actions" class="project-created-actions" role="status" aria-live="polite" hidden></div>
     </article>
 
     <article id="add-project-section" role="tabpanel" aria-labelledby="tab-projects-create" hidden>
-      <header><strong>Add project</strong></header>
+      <header><strong data-i18n="admin.projects.add_project">Add project</strong></header>
       <form id="add-form">
-        <label>Name <input name="name" placeholder="Example" required pattern="[A-Za-z0-9][A-Za-z0-9-]*" title="Letters, digits, hyphens; must start alphanumeric"><small class="muted">Use the exact project name clients will pass to project-scoped tools.</small></label>
+        <label><span data-i18n="admin.field.name">Name</span> <input name="name" placeholder="Example" required pattern="[A-Za-z0-9][A-Za-z0-9-]*" title="Letters, digits, hyphens; must start alphanumeric"><small class="muted" data-i18n="admin.projects.name_help">Use the exact project name clients will pass to project-scoped tools.</small></label>
         <div id="documents-root-fields" hidden>
-          <label id="documents-root-choice" hidden>Documents root <select name="documents_root"></select></label>
-          <p id="documents-root-single" hidden>Documents root: <code id="documents-root-text"></code></p>
-          <label>Folder inside it <input name="documents_folder" placeholder="Project Files" autocomplete="off"><small class="muted">A folder that already exists inside the documents root. Leave empty to use the root itself.</small></label>
+          <label id="documents-root-choice" hidden><span data-i18n="admin.projects.documents_root">Documents root</span> <select name="documents_root"></select></label>
+          <p id="documents-root-single" hidden><span data-i18n="admin.projects.documents_root">Documents root</span>: <code id="documents-root-text"></code></p>
+          <label><span data-i18n="admin.projects.folder_inside">Folder inside it</span> <input name="documents_folder" placeholder="Project Files" autocomplete="off"><small class="muted" data-i18n="admin.projects.folder_help">A folder that already exists inside the documents root. Leave empty to use the root itself.</small></label>
         </div>
-        <label id="documents-dir-field">Documents folder (absolute path) <input name="documents_dir" placeholder="C:\Users\you\Documents\Project Files" required></label>
+        <label id="documents-dir-field"><span data-i18n="admin.projects.documents_absolute">Documents folder (absolute path)</span> <input name="documents_dir" placeholder="C:\Users\you\Documents\Project Files" required></label>
         <div style="display:flex; align-items:center; gap:.75rem; margin-top:-.5rem; margin-bottom:1rem;">
-          <button type="button" id="test-documents-path" class="secondary outline" style="width:auto; margin:0;">Test path</button>
+          <button type="button" id="test-documents-path" class="secondary outline" style="width:auto; margin:0;" data-i18n="admin.projects.test_path">Test path</button>
           <small id="documents-path-status" class="muted" role="status" aria-live="polite"></small>
         </div>
-        <label><input type="checkbox" name="writable" checked> Local maintenance writable (connector access is configured above)</label>
-        <label><input type="checkbox" name="exclude_from_default_permissions"> Exclude from default permissions</label>
-        <small class="muted">All-project connectors will not include this project automatically. Explicit Read-only or Read/write access still grants it.</small>
-        <button type="submit">Add project</button>
+        <label><input type="checkbox" name="writable" checked> <span data-i18n="admin.projects.local_writable">Local maintenance writable (connector access is configured above)</span></label>
+        <label><input type="checkbox" name="exclude_from_default_permissions"> <span data-i18n="admin.projects.exclude_default">Exclude from default permissions</span></label>
+        <small class="muted" data-i18n="admin.projects.exclude_help">All-project connectors will not include this project automatically. Explicit Read-only or Read/write access still grants it.</small>
+        <button type="submit" data-i18n="admin.projects.add_project">Add project</button>
       </form>
     </article>
     </section>
@@ -77,17 +77,17 @@
     <nav id="connector-tabs" class="admin-tabs admin-secondary-tabs connector-function-tabs" role="tablist" aria-label="Selected connector views" hidden></nav>
     <div id="connector-setup-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="connector-tab-setup">
     <article id="public-url-section">
-      <header><strong>Canonical public URL</strong> <small id="public-url-status" class="muted">Loading…</small></header>
+      <header><strong data-i18n="admin.public_url.title">Canonical public URL</strong> <small id="public-url-status" class="muted" data-i18n="admin.loading">Loading…</small></header>
       <p class="muted">This must exactly match the public Cloudflare Tunnel address clients use (including any path prefix), because it is copied into MCP connector links and OAuth issuer/resource metadata. It starts from deployment configuration, then an Admin-saved value is persisted in Cognita state so changing it does not require editing deployment configuration. Use an HTTPS URL; HTTP is allowed only for local development.</p>
       <form id="public-url-form">
         <label for="public-base-url">Public base URL
           <input id="public-base-url" name="public_base_url" type="url" required maxlength="2048" placeholder="https://cognita.example.com" autocomplete="url">
         </label>
-        <button type="submit">Save public URL</button>
+        <button type="submit" data-i18n="admin.public_url.save">Save public URL</button>
       </form>
     </article>
     <article id="connector-settings-details" hidden>
-      <header><strong id="connector-settings-heading">Connector settings</strong></header>
+      <header><strong id="connector-settings-heading" data-i18n="admin.connectors.settings">Connector settings</strong></header>
       <p id="connector-settings-summary" class="connector-summary"></p>
       <div id="connector-mcp-urls" class="connector-mcp-urls"></div>
       <div id="connector-settings-credentials" class="connector-credentials"></div>
@@ -95,11 +95,11 @@
     <article id="connectors-section">
       <header>
         <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;">
-          <strong>Connectors</strong>
+          <strong data-i18n="admin.nav.connectors">Connectors</strong>
           <small id="connectors-revision" class="muted">Loading…</small>
         </div>
       </header>
-      <p>Connector settings control Knowledge, Workspace, and bridge access. Workspace tools and transfer are on by default and can be turned off per connector or per project.</p>
+      <p data-i18n="admin.connectors.description">Connector settings control Knowledge, Workspace, and bridge access. Workspace tools and transfer are on by default and can be turned off per connector or per project.</p>
       <div id="connectors-body"><p aria-busy="true">Loading connector records…</p></div>
       <details id="connector-editor" open>
         <summary><strong id="connector-editor-title">Add connector</strong></summary>
@@ -175,38 +175,38 @@
     </article>
     <article id="connector-clients-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="connector-tab-clients" hidden>
     <article id="oauth-card" data-section="authorized-clients">
-      <header><strong>Authorized clients</strong> <small id="oauth-status" class="muted">Loading…</small></header>
-      <p>These are live OAuth authorizations. Each client is grouped by connector resource and shows current project access; connector definitions and authorizations are separate controls.</p>
+      <header><strong data-i18n="admin.projects.authorized_clients">Authorized clients</strong> <small id="oauth-status" class="muted" data-i18n="admin.loading">Loading…</small></header>
+      <p data-i18n="admin.oauth.clients_description">These are live OAuth authorizations. Each client is grouped by connector resource and shows current project access; connector definitions and authorizations are separate controls.</p>
       <div id="oauth-problems"></div>
       <table>
-        <thead><tr><th>Client</th><th>Connector and current access</th><th>Authorized</th><th>Last used</th><th></th></tr></thead>
+        <thead><tr><th data-i18n="admin.oauth.client">Client</th><th data-i18n="admin.oauth.connector_access">Connector and current access</th><th data-i18n="admin.oauth.authorized">Authorized</th><th data-i18n="admin.oauth.last_used">Last used</th><th></th></tr></thead>
         <tbody id="grants-body"><tr><td colspan="5" aria-busy="true">Loading…</td></tr></tbody>
       </table>
-      <button id="revoke-all-grants" class="contrast outline">Revoke all connected clients</button>
+      <button id="revoke-all-grants" class="contrast outline" data-i18n="admin.oauth.revoke_all">Revoke all connected clients</button>
     </article>
     </article>
     </section>
 
     <section id="panel-workspaces" class="admin-panel" role="tabpanel" aria-labelledby="tab-workspaces" hidden>
       <nav id="workspace-tabs" class="admin-tabs admin-secondary-tabs" role="tablist" aria-label="Workspace views">
-        <button id="workspace-tab-runtime" role="tab" aria-controls="workspace-runtime-panel" aria-selected="true" tabindex="0" data-route="#workspaces/runtime">Workspace runtime</button>
-        <button id="workspace-tab-policy" role="tab" aria-controls="workspace-policy-panel" aria-selected="false" tabindex="-1" data-route="#workspaces/policy">Workspace settings</button>
-        <button id="workspace-tab-connectors" role="tab" aria-controls="workspace-connectors-panel" aria-selected="false" tabindex="-1" data-route="#workspaces/connectors">Workspace-only connectors</button>
+        <button id="workspace-tab-runtime" role="tab" aria-controls="workspace-runtime-panel" aria-selected="true" tabindex="0" data-route="#workspaces/runtime" data-i18n="admin.workspaces.runtime">Workspace runtime</button>
+        <button id="workspace-tab-policy" role="tab" aria-controls="workspace-policy-panel" aria-selected="false" tabindex="-1" data-route="#workspaces/policy" data-i18n="admin.workspaces.settings">Workspace settings</button>
+        <button id="workspace-tab-connectors" role="tab" aria-controls="workspace-connectors-panel" aria-selected="false" tabindex="-1" data-route="#workspaces/connectors" data-i18n="admin.workspaces.connectors">Workspace-only connectors</button>
       </nav>
       <div id="workspace-runtime-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="workspace-tab-runtime">
       <article id="workspace-lifecycle-section">
-        <header><div class="workspace-card-header"><strong>Workspace runtime</strong><small id="workspaces-status" class="muted">Loading…</small></div></header>
+        <header><div class="workspace-card-header"><strong data-i18n="admin.workspaces.runtime">Workspace runtime</strong><small id="workspaces-status" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
         <div id="workspace-runtime-cards" class="workspace-runtime-cards"><p aria-busy="true">Loading…</p></div>
         <div class="workspace-toolbar">
-          <label>Search <input id="workspace-search" type="search" autocomplete="off" placeholder="Connector or credential"></label>
-          <label>State <select id="workspace-state"><option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option><option value="transition">Transition</option><option value="failed">Failed</option><option value="orphaned">Orphaned</option></select></label>
-          <label>Owner <select id="workspace-owner"><option value="">All owners</option><option value="active">Active</option><option value="revoked">Revoked</option><option value="orphaned">Orphaned</option><option value="tombstoned">Tombstoned</option></select></label>
-          <label>Pinned <select id="workspace-pinned"><option value="">All</option><option value="true">Pinned</option><option value="false">Not pinned</option></select></label>
-          <label>Expiry <select id="workspace-expired"><option value="">All</option><option value="true">Expired</option><option value="false">Not expired</option></select></label>
-          <label>Warning <select id="workspace-warning"><option value="">All</option><option value="true">At threshold</option><option value="false">Below threshold</option></select></label>
-          <label>Sort <select id="workspace-sort"><option value="credential">Credential</option><option value="connector">Connector</option><option value="state">State</option><option value="created">Created</option><option value="last_accessed">Last accessed</option><option value="deletion_due">Deletion due</option><option value="actual_allocation">Actual allocation</option><option value="apparent_size">Apparent size</option><option value="quota_percent">Quota percentage</option></select></label>
+          <label><span data-i18n="admin.action.search">Search</span> <input id="workspace-search" type="search" autocomplete="off" placeholder="Connector or credential" data-i18n-attr="placeholder:admin.workspaces.search_placeholder"></label>
+          <label><span data-i18n="admin.field.state">State</span> <select id="workspace-state"><option value="" data-i18n="admin.option.all_states">All states</option><option value="running" data-i18n="admin.option.running">Running</option><option value="stopped" data-i18n="admin.option.stopped">Stopped</option><option value="transition" data-i18n="admin.option.transition">Transition</option><option value="failed" data-i18n="admin.option.failed">Failed</option><option value="orphaned" data-i18n="admin.option.orphaned">Orphaned</option></select></label>
+          <label><span data-i18n="admin.workspaces.owner">Owner</span> <select id="workspace-owner"><option value="" data-i18n="admin.option.all_owners">All owners</option><option value="active" data-i18n="admin.option.active">Active</option><option value="revoked" data-i18n="admin.option.revoked">Revoked</option><option value="orphaned" data-i18n="admin.option.orphaned">Orphaned</option><option value="tombstoned" data-i18n="admin.option.tombstoned">Tombstoned</option></select></label>
+          <label><span data-i18n="admin.workspaces.pinned">Pinned</span> <select id="workspace-pinned"><option value="" data-i18n="admin.option.all">All</option><option value="true" data-i18n="admin.option.pinned">Pinned</option><option value="false" data-i18n="admin.option.not_pinned">Not pinned</option></select></label>
+          <label><span data-i18n="admin.workspaces.expiry">Expiry</span> <select id="workspace-expired"><option value="" data-i18n="admin.option.all">All</option><option value="true" data-i18n="admin.option.expired">Expired</option><option value="false" data-i18n="admin.option.not_expired">Not expired</option></select></label>
+          <label><span data-i18n="admin.workspaces.warning">Warning</span> <select id="workspace-warning"><option value="" data-i18n="admin.option.all">All</option><option value="true" data-i18n="admin.option.at_threshold">At threshold</option><option value="false" data-i18n="admin.option.below_threshold">Below threshold</option></select></label>
+          <label><span data-i18n="admin.action.sort">Sort</span> <select id="workspace-sort"><option value="credential" data-i18n="admin.sort.credential">Credential</option><option value="connector" data-i18n="admin.sort.connector">Connector</option><option value="state" data-i18n="admin.sort.state">State</option><option value="created" data-i18n="admin.sort.created">Created</option><option value="last_accessed" data-i18n="admin.sort.last_accessed">Last accessed</option><option value="deletion_due" data-i18n="admin.sort.deletion_due">Deletion due</option><option value="actual_allocation" data-i18n="admin.sort.actual_allocation">Actual allocation</option><option value="apparent_size" data-i18n="admin.sort.apparent_size">Apparent size</option><option value="quota_percent" data-i18n="admin.sort.quota_percent">Quota percentage</option></select></label>
           <button id="workspace-sort-direction" type="button" class="secondary outline" aria-label="Toggle sort direction">Ascending</button>
-          <button id="workspace-refresh" type="button" class="secondary outline">Refresh</button>
+          <button id="workspace-refresh" type="button" class="secondary outline" data-i18n="admin.action.refresh">Refresh</button>
         </div>
         <div class="workspace-bulk-actions"><button id="workspace-bulk-remove" type="button" class="contrast outline" disabled>Remove selected</button><span id="workspace-selection-summary" class="muted"></span></div>
         <div id="workspaces-body" class="workspace-table-wrap"><p aria-busy="true">Loading…</p></div>
@@ -214,8 +214,8 @@
       </div>
       <div id="workspace-policy-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="workspace-tab-policy" hidden>
       <article id="workspace-settings-section">
-        <header><div class="workspace-card-header"><strong>Workspace settings</strong><small id="workspace-settings-status" class="muted">Loading…</small></div></header>
-        <p class="muted">One persistent Workspace per credential or OAuth grant, shared across chats. It is created automatically on first use; Pin retains files indefinitely.</p>
+        <header><div class="workspace-card-header"><strong data-i18n="admin.workspaces.settings">Workspace settings</strong><small id="workspace-settings-status" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
+        <p class="muted" data-i18n="admin.workspaces.settings_description">One persistent Workspace per credential or OAuth grant, shared across chats. It is created automatically on first use; Pin retains files indefinitely.</p>
         <form id="workspace-settings-form" class="workspace-settings-form">
           <div class="workspace-settings-grid">
             <label>Retention (days) <input id="workspace-retention-days" type="number" min="0" step="1"></label>
@@ -236,8 +236,8 @@
       </div>
       <div id="workspace-connectors-panel" class="admin-subpanel" role="tabpanel" aria-labelledby="workspace-tab-connectors" hidden>
       <article id="workspace-connectors-section">
-        <header><div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;"><strong>Workspace-only connectors</strong><small id="workspace-connectors-revision" class="muted">Loading…</small></div></header>
-        <p>Workspace-only surfaces are independent from Knowledge connectors and accept named static credentials only. Each active credential owns one persistent Workspace.</p>
+        <header><div style="display:flex; justify-content:space-between; align-items:center; gap:1rem;"><strong data-i18n="admin.workspaces.connectors">Workspace-only connectors</strong><small id="workspace-connectors-revision" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
+        <p data-i18n="admin.workspaces.connectors_description">Workspace-only surfaces are independent from Knowledge connectors and accept named static credentials only. Each active credential owns one persistent Workspace.</p>
         <div id="workspace-connectors-body"><p aria-busy="true">Loading…</p></div>
         <details open><summary><strong>Add Workspace-only connector</strong></summary>
           <form id="workspace-connector-form">
@@ -257,7 +257,7 @@
         <button id="tab-settings-gpu" role="tab" aria-selected="true" tabindex="0" data-route="#settings/gpu-acceleration">GPU acceleration</button>
       </nav>
       <article id="gpu-acceleration-section" aria-labelledby="tab-settings-gpu">
-        <header><div class="workspace-card-header"><strong>GPU acceleration</strong><small id="gpu-acceleration-status" class="muted">Loading…</small></div></header>
+        <header><div class="workspace-card-header"><strong data-i18n="admin.settings.gpu">GPU acceleration</strong><small id="gpu-acceleration-status" class="muted" data-i18n="admin.loading">Loading…</small></div></header>
         <div id="gpu-effective-state" class="gpu-settings-card" role="status" aria-live="polite"><p aria-busy="true">Loading runtime state…</p></div>
         <div id="gpu-detected-cards" class="gpu-settings-card"><h3>Detected cards</h3><p aria-busy="true">Loading cards…</p></div>
         <form id="gpu-acceleration-form" class="gpu-settings-card">
@@ -276,8 +276,8 @@
 
     <section id="panel-authentication" class="admin-panel" role="tabpanel" aria-labelledby="tab-authentication" hidden>
     <article id="authentication-card" data-section="authentication">
-      <header><strong>Authentication</strong> <small id="authentication-revision" class="muted">Loading…</small></header>
-      <p>OAuth and named static credentials are independent ways to authenticate. Static secrets are surface-scoped, encrypted for recovery, and shown only after current-password reauthentication.</p>
+      <header><strong data-i18n="admin.nav.authentication">Authentication</strong> <small id="authentication-revision" class="muted" data-i18n="admin.loading">Loading…</small></header>
+      <p data-i18n="admin.authentication.description">OAuth and named static credentials are independent ways to authenticate. Static secrets are surface-scoped, encrypted for recovery, and shown only after current-password reauthentication.</p>
       <details id="authentication-global-details" open>
         <summary><strong>Global defaults</strong> <span id="authentication-global-summary" class="muted"></span></summary>
         <section id="authentication-global" aria-label="Global authentication policy"><p aria-busy="true">Loading…</p></section>
@@ -293,7 +293,7 @@
     </section>
   </main>
 
-  <div class="theme-switch"><label for="theme-select" class="muted">Theme</label><select id="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+  <div class="theme-switch"><label for="theme-select" class="muted" data-i18n="admin.theme.label">Theme</label><select id="theme-select" aria-label="Color theme"><option value="system" data-i18n="admin.theme.system">System</option><option value="light" data-i18n="admin.theme.light">Light</option><option value="dark" data-i18n="admin.theme.dark">Dark</option></select></div>
 
   <dialog id="key-dialog" aria-labelledby="key-dialog-title"><article><header><strong id="key-dialog-title">Static private key — shown once</strong></header><p id="key-dialog-scope" class="muted"></p><p class="muted">Copy this key now. It cannot be recovered or shown again. Send it only as <code>Authorization: Bearer &lt;key&gt;</code>.</p><div class="key-box"><code id="new-auth-key" tabindex="-1"></code><button id="copy-auth-key" style="margin:0;">Copy key</button></div><p id="key-dialog-status" class="shell-status" role="status" aria-live="polite"></p><footer><button id="auth-key-done">Done</button></footer></article></dialog>
   <dialog id="credential-secret-dialog" aria-labelledby="credential-secret-title"><article><header><strong id="credential-secret-title">Credential secret — shown once</strong></header><p class="muted">Copy this secret now. It is not stored in browser state or shown in the credential list.</p><div class="key-box"><code id="credential-secret-value" tabindex="-1"></code><button id="copy-credential-secret" style="margin:0;">Copy secret</button></div><footer><button id="credential-secret-done">Done</button></footer></article></dialog>

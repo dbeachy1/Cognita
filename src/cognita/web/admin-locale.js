@@ -19,16 +19,16 @@
   };
   const choose = () => {
     const cookie = cookieLocale();
-    if (cookie) return resolve(cookie);
+    if (locales.includes(cookie) || Object.hasOwn(regionless, cookie.toLowerCase())) return resolve(cookie);
     for (const language of navigator.languages || [navigator.language]) {
       const normalized = String(language || "").trim().replaceAll("_", "-");
       if (locales.includes(normalized)) return normalized;
-      const mapped = regionless[normalized.split("-")[0].toLowerCase()];
+      const mapped = regionless[normalized.toLowerCase()];
       if (mapped) return mapped;
     }
     return "en-US";
   };
-  const locale = choose();
+  let locale = choose();
   const format = (message, values) => String(message).replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_all, name) => {
     if (!values || !Object.hasOwn(values, name)) throw new Error(`Missing translation value: ${name}`);
     return String(values[name]);
@@ -69,9 +69,19 @@
     },
   };
   api.ready = (async () => {
-    const response = await fetch(`/static/locales/${locale}.json?v=${encodeURIComponent(document.documentElement.dataset.version || "")}`, { cache: "force-cache" });
-    if (!response.ok) throw new Error(`Could not load ${locale} message catalog`);
-    api.catalog = await response.json();
+    let response;
+    try {
+      response = await fetch(`/static/locales/${locale}.json`, { cache: "force-cache" });
+      if (!response.ok) throw new Error(`Could not load ${locale} message catalog`);
+      api.catalog = await response.json();
+    } catch (error) {
+      if (locale === "en-US") throw error;
+      locale = "en-US";
+      api.locale = locale;
+      response = await fetch("/static/locales/en-US.json", { cache: "force-cache" });
+      if (!response.ok) throw new Error("Could not load the English message catalog");
+      api.catalog = await response.json();
+    }
     if (locale === "en-US") api.english = api.catalog;
     else {
       const english = await fetch("/static/locales/en-US.json", { cache: "force-cache" });

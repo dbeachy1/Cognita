@@ -13,6 +13,7 @@ from typing import Mapping
 SUPPORTED_LOCALES = ("en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR")
 _REGIONLESS = {"es": "es-ES", "fr": "fr-FR", "de": "de-DE", "it": "it-IT"}
 _PLACEHOLDER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
 
 
 def resolve_locale(value: str | None) -> str:
@@ -47,6 +48,8 @@ def load_catalog(
 
 
 def _placeholders(message: str) -> set[str]:
+    if _HTML_TAG.search(message):
+        raise ValueError("catalog messages must not contain HTML markup")
     names = set()
     for _, field, format_spec, conversion in Formatter().parse(message):
         if field is None:
