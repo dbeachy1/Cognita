@@ -1293,21 +1293,23 @@ function renderWorkspaceRuntime(data) {
   if (label) label.textContent = workspaceValue(runtime, "status", "runtime");
   const cards = $("#workspace-runtime-cards");
   if (!cards) return;
+  const formatCount = (value) => value !== "—" && Number.isFinite(Number(value))
+    ? window.CognitaAdminLocale.number(Number(value)) : String(value);
   cards.innerHTML = [
-    ["Runtime", workspaceValue(runtime, "runtime")],
-    ["Probe", workspaceValue(runtime, "runtime_probe_status", "status")],
-    ["Running", workspaceValue(runtime, "running_count") + " / " + workspaceValue(runtime, "running_capacity", "capacity")],
-    ["Host root", workspaceValue(storage, "host_root")],
-    ["Container root", workspaceValue(storage, "container_root")],
-    ["Filesystem", formatMaybeBytes(workspaceValue(storage, "filesystem_capacity_bytes"))],
-    ["Free / reserve", formatMaybeBytes(workspaceValue(storage, "filesystem_free_bytes")) + " / " + formatMaybeBytes(workspaceValue(storage, "reserve_bytes"))],
-    ["Admissible free", formatMaybeBytes(workspaceValue(storage, "admissible_free_bytes", "usable_capacity_bytes"))],
-    ["Allocated", formatMaybeBytes(workspaceValue(storage, "workspace_allocated_bytes", "actual_allocation_bytes"))],
-    ["Apparent", formatMaybeBytes(workspaceValue(storage, "workspace_apparent_bytes", "apparent_allocation_bytes"))],
-    ["Measurement status", workspaceValue(storage, "measurement_status")],
-    ["Measurement reason", workspaceValue(storage, "measurement_reason")],
-    ["Measurement source", workspaceValue(storage, "measurement_source")],
-    ["Measured at", workspaceValue(storage, "measured_at")],
+    [t("admin.workspace.metric.runtime"), workspaceValue(runtime, "runtime")],
+    [t("admin.workspace.metric.probe"), workspaceValue(runtime, "runtime_probe_status", "status")],
+    [t("admin.workspace.metric.running"), formatCount(workspaceValue(runtime, "running_count")) + " / " + formatCount(workspaceValue(runtime, "running_capacity", "capacity"))],
+    [t("admin.workspace.metric.host_root"), workspaceValue(storage, "host_root")],
+    [t("admin.workspace.metric.container_root"), workspaceValue(storage, "container_root")],
+    [t("admin.workspace.metric.filesystem"), formatMaybeBytes(workspaceValue(storage, "filesystem_capacity_bytes"))],
+    [t("admin.workspace.metric.free_reserve"), formatMaybeBytes(workspaceValue(storage, "filesystem_free_bytes")) + " / " + formatMaybeBytes(workspaceValue(storage, "reserve_bytes"))],
+    [t("admin.workspace.metric.admissible_free"), formatMaybeBytes(workspaceValue(storage, "admissible_free_bytes", "usable_capacity_bytes"))],
+    [t("admin.workspace.metric.allocated"), formatMaybeBytes(workspaceValue(storage, "workspace_allocated_bytes", "actual_allocation_bytes"))],
+    [t("admin.workspace.metric.apparent"), formatMaybeBytes(workspaceValue(storage, "workspace_apparent_bytes", "apparent_allocation_bytes"))],
+    [t("admin.workspace.metric.measurement_status"), workspaceValue(storage, "measurement_status")],
+    [t("admin.workspace.metric.measurement_reason"), workspaceValue(storage, "measurement_reason")],
+    [t("admin.workspace.metric.measurement_source"), workspaceValue(storage, "measurement_source")],
+    [t("admin.workspace.metric.measured_at"), when(workspaceValue(storage, "measured_at"))],
   ].map(([name, value]) => '<div class="workspace-runtime-card"><small>' + esc(name) + '</small><strong>' + esc(value) + '</strong></div>').join("");
 }
 
@@ -1315,24 +1317,25 @@ function renderWorkspaces(data) {
   const body = $("#workspaces-body");
   if (!body) return;
   const rows = Array.isArray(data && data.workspaces) ? data.workspaces : state.workspaces;
-  if (!rows.length) { body.innerHTML = '<p class="muted">No Workspaces have been created.</p>'; updateWorkspaceSelection(); return; }
-  body.innerHTML = '<table><thead><tr><th><span class="sr-only">Select</span></th><th>Credential</th><th>State</th><th>Activity / expiry</th><th>Usage</th><th>Paths</th><th>Actions</th></tr></thead><tbody>' + rows.map((row) => {
+  if (!rows.length) { body.innerHTML = '<p class="muted">' + esc(t("admin.workspace.empty")) + '</p>'; updateWorkspaceSelection(); return; }
+  body.innerHTML = '<table><thead><tr><th><span class="sr-only">' + esc(t("admin.workspace.column.select")) + '</span></th><th>' + esc(t("admin.workspace.column.credential")) + '</th><th>' + esc(t("admin.workspace.column.state")) + '</th><th>' + esc(t("admin.workspace.column.activity")) + '</th><th>' + esc(t("admin.workspace.column.usage")) + '</th><th>' + esc(t("admin.workspace.column.paths")) + '</th><th>' + esc(t("admin.workspace.column.actions")) + '</th></tr></thead><tbody>' + rows.map((row) => {
     const id = workspaceValue(row, "workspace_id", "id");
     const stateValue = workspaceValue(row, "state", "status");
     const actual = workspaceValue(row, "actual_bytes", "used_bytes");
     const apparent = workspaceValue(row, "apparent_bytes");
     const quota = workspaceValue(row, "quota_bytes");
     const removeAllowed = ["verified", "absent"].includes(row.path_status);
+    const stateKey = ({ running: "admin.option.running", stopped: "admin.option.stopped", transition: "admin.option.transition", failed: "admin.option.failed", orphaned: "admin.option.orphaned" })[String(stateValue).toLowerCase()] || "admin.status.unavailable";
     return '<tr data-workspace-id="' + esc(id) + '">' +
-      '<td><input type="checkbox" data-workspace-select aria-label="Select Workspace ' + esc(id) + '"></td>' +
+      '<td><input type="checkbox" data-workspace-select aria-label="' + esc(t("admin.workspace.column.select")) + ' Workspace ' + esc(id) + '"></td>' +
       '<td><strong>' + esc(workspaceValue(row, "credential_label", "label")) + '</strong><br><small>' + esc(workspaceValue(row, "credential_id", "key_id")) + '</small><br><small>' + esc(workspaceValue(row, "connector_name", "surface_name")) + '</small></td>' +
-      '<td><span class="pill ' + esc(String(stateValue).toLowerCase()) + '">' + esc(stateValue) + '</span><br><small>Revision ' + esc(workspaceValue(row, "revision")) + '</small></td>' +
-      '<td><small>Created: ' + esc(workspaceValue(row, "created_at")) + '</small><br><small>Last activity: ' + esc(workspaceValue(row, "last_activity_at", "last_accessed_at")) + '</small><br><small>Idle: ' + esc(workspaceValue(row, "idle_duration_seconds")) + 's · Lease: ' + esc(workspaceValue(row, "lease_expires_at")) + '</small><br><small>Delete due: ' + esc(workspaceValue(row, "deletion_due_at", "expiry_at")) + '</small><br><small>' + esc(row.pinned ? "Pinned" : workspaceValue(row, "retention")) + '</small></td>' +
-      '<td><small>Actual: ' + esc(formatMaybeBytes(actual)) + '</small><br><small>Apparent: ' + esc(formatMaybeBytes(apparent)) + '</small><br><small>' + esc(actual === "—" || quota === "—" ? "Unavailable" : formatMaybeBytes(actual) + " / " + formatMaybeBytes(quota)) + '</small><br><small>' + esc(workspaceValue(row, "quota_percent")) + '% · ' + esc(workspaceValue(row, "usage_status")) + '</small></td>' +
-      '<td><code>' + esc(workspaceValue(row, "host_path")) + '</code><br><small>Path: ' + esc(workspaceValue(row, "path_status")) + '</small><br><small>Container: ' + esc(workspaceValue(row, "container_path")) + '</small></td>' +
-      '<td><small>Error: ' + esc(workspaceValue(row, "last_error_code")) + '</small><br><small>Owner: ' + esc(workspaceValue(row, "owner_status")) + '</small><div class="actions"><button type="button" data-workspace-op="diagnostics" class="secondary outline">Diagnostics</button>' + (stateValue === "failed" ? '<button type="button" data-workspace-op="retry" class="secondary outline">Retry</button>' : '') + '<button type="button" data-workspace-op="' + (stateValue === "running" ? "stop" : "start") + '">' + (stateValue === "running" ? "Stop" : "Start") + '</button><button type="button" data-workspace-op="' + (row.pinned ? "unpin" : "pin") + '" class="secondary outline">' + (row.pinned ? "Unpin" : "Pin") + '</button><button type="button" data-workspace-op="remove" class="contrast outline"' + (removeAllowed ? '' : ' disabled title="Removal is unavailable until the runtime verifies its owned path"') + '>Remove</button></div></td>' +
+      '<td><span class="pill ' + esc(String(stateValue).toLowerCase()) + '">' + esc(t(stateKey)) + '</span><br><small>' + esc(t("admin.workspace.field.revision")) + ' ' + esc(workspaceValue(row, "revision")) + '</small></td>' +
+      '<td><small>' + esc(t("admin.workspace.field.created")) + ': ' + esc(when(workspaceValue(row, "created_at"))) + '</small><br><small>' + esc(t("admin.workspace.field.last_activity")) + ': ' + esc(when(workspaceValue(row, "last_activity_at", "last_accessed_at"))) + '</small><br><small>' + esc(t("admin.workspace.field.idle")) + ': ' + esc(workspaceValue(row, "idle_duration_seconds")) + 's · ' + esc(t("admin.workspace.field.lease")) + ': ' + esc(when(workspaceValue(row, "lease_expires_at"))) + '</small><br><small>' + esc(t("admin.workspace.field.delete_due")) + ': ' + esc(when(workspaceValue(row, "deletion_due_at", "expiry_at"))) + '</small><br><small>' + esc(row.pinned ? t("admin.workspace.field.pinned") : workspaceValue(row, "retention")) + '</small></td>' +
+      '<td><small>' + esc(t("admin.workspace.field.actual")) + ': ' + esc(formatMaybeBytes(actual)) + '</small><br><small>' + esc(t("admin.workspace.field.apparent")) + ': ' + esc(formatMaybeBytes(apparent)) + '</small><br><small>' + esc(actual === "—" || quota === "—" ? t("admin.status.unavailable") : formatMaybeBytes(actual) + " / " + formatMaybeBytes(quota)) + '</small><br><small>' + esc(workspaceValue(row, "quota_percent")) + '% · ' + esc(workspaceValue(row, "usage_status")) + '</small></td>' +
+      '<td><code>' + esc(workspaceValue(row, "host_path")) + '</code><br><small>' + esc(t("admin.workspace.field.path")) + ': ' + esc(workspaceValue(row, "path_status")) + '</small><br><small>' + esc(t("admin.workspace.field.container")) + ': ' + esc(workspaceValue(row, "container_path")) + '</small></td>' +
+      '<td><small>' + esc(t("admin.workspace.field.error")) + ': ' + esc(workspaceValue(row, "last_error_code")) + '</small><br><small>' + esc(t("admin.workspace.field.owner")) + ': ' + esc(workspaceValue(row, "owner_status")) + '</small><div class="actions"><button type="button" data-workspace-op="diagnostics" class="secondary outline">' + esc(t("admin.workspace.action.diagnostics")) + '</button>' + (stateValue === "failed" ? '<button type="button" data-workspace-op="retry" class="secondary outline">' + esc(t("admin.workspace.action.retry")) + '</button>' : '') + '<button type="button" data-workspace-op="' + (stateValue === "running" ? "stop" : "start") + '">' + esc(t(stateValue === "running" ? "admin.workspace.action.stop" : "admin.workspace.action.start")) + '</button><button type="button" data-workspace-op="' + (row.pinned ? "unpin" : "pin") + '" class="secondary outline">' + esc(t(row.pinned ? "admin.workspace.action.unpin" : "admin.workspace.action.pin")) + '</button><button type="button" data-workspace-op="remove" class="contrast outline"' + (removeAllowed ? '' : ' disabled title="' + esc(t("admin.workspace.removal_unavailable")) + '"') + '>' + esc(t("admin.workspace.action.remove")) + '</button></div></td>' +
       '</tr>';
-  }).join("") + '</tbody></table><div class="workspace-pagination"><button type="button" class="secondary outline" data-workspace-page="first"' + (state.workspaceCursor || state.workspaceCursorStack.length ? '' : ' disabled') + '>First page</button><button type="button" class="secondary outline" data-workspace-page="previous"' + (state.workspaceCursorStack.length ? '' : ' disabled') + '>Previous</button>' + (state.workspaceNextCursor ? '<button type="button" id="workspace-next-page" class="secondary outline" data-workspace-page="next" data-workspace-next-cursor="' + esc(state.workspaceNextCursor) + '">Next page</button>' : '<small class="muted">End of Workspace inventory</small>') + '</div>';
+  }).join("") + '</tbody></table><div class="workspace-pagination"><button type="button" class="secondary outline" data-workspace-page="first"' + (state.workspaceCursor || state.workspaceCursorStack.length ? '' : ' disabled') + '>' + esc(t("admin.workspace.page.first")) + '</button><button type="button" class="secondary outline" data-workspace-page="previous"' + (state.workspaceCursorStack.length ? '' : ' disabled') + '>' + esc(t("admin.workspace.page.previous")) + '</button>' + (state.workspaceNextCursor ? '<button type="button" id="workspace-next-page" class="secondary outline" data-workspace-page="next" data-workspace-next-cursor="' + esc(state.workspaceNextCursor) + '">' + esc(t("admin.workspace.page.next")) + '</button>' : '<small class="muted">' + esc(t("admin.workspace.page.end")) + '</small>') + '</div>';
   updateWorkspaceSelection();
 }
 
@@ -1443,7 +1446,7 @@ function workspaceNetworkPayload(editorRules) {
 function updateWorkspaceSelection() {
   const count = document.querySelectorAll("[data-workspace-select]:checked").length;
   const button = $("#workspace-bulk-remove"); if (button) button.disabled = count === 0;
-  const label = $("#workspace-selection-summary"); if (label) label.textContent = count ? count + " selected" : "";
+  const label = $("#workspace-selection-summary"); if (label) label.textContent = count ? t("admin.workspace.selected_count", { count: window.CognitaAdminLocale.number(count) }) : "";
 }
 
 function renderWorkspaceConnectors(data) {
@@ -2358,7 +2361,7 @@ $("#authentication-card").addEventListener("click", async (event) => {
 $("#authentication-card").addEventListener("change", (event) => { if (event.target.id === "auth-global-oauth") { globalDraft().oauth_enabled = event.target.checked; renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); return; } const row = event.target.closest("[data-auth-project]"); if (!row) return; const project = authState.projects.find((p) => p.name === row.dataset.authProject); const draft = projectDraft(row.dataset.authProject, project); authState.drafts.set(row.dataset.authProject, draft); draft.oauth_mode = row.querySelector("[data-auth-override]").checked ? row.querySelector("[data-auth-oauth]").value : "inherit"; renderAuthentication({ revision: authState.revision, global: authState.global, projects: authState.projects, warnings: authState.warnings }); });
 $("#workspace-search").addEventListener("input", () => { resetWorkspacePagination(); loadWorkspaces(); });
 ["#workspace-state", "#workspace-owner", "#workspace-pinned", "#workspace-expired", "#workspace-warning", "#workspace-sort"].forEach((selector) => $(selector)?.addEventListener("change", () => { resetWorkspacePagination(); loadWorkspaces(); }));
-$("#workspace-sort-direction").addEventListener("click", (event) => { state.workspaceSortDirection = state.workspaceSortDirection === "desc" ? "asc" : "desc"; event.currentTarget.textContent = state.workspaceSortDirection === "desc" ? "Descending" : "Ascending"; resetWorkspacePagination(); loadWorkspaces(); });
+$("#workspace-sort-direction").addEventListener("click", (event) => { state.workspaceSortDirection = state.workspaceSortDirection === "desc" ? "asc" : "desc"; event.currentTarget.textContent = t(state.workspaceSortDirection === "desc" ? "admin.sort.descending" : "admin.sort_direction"); resetWorkspacePagination(); loadWorkspaces(); });
 $("#workspace-refresh").addEventListener("click", () => { resetWorkspacePagination(); return Promise.all([loadWorkspaces(), loadWorkspaceRuntime(), loadWorkspaceSettings()]); });
 $("#workspaces-body").addEventListener("change", (event) => { if (event.target.matches("[data-workspace-select]")) updateWorkspaceSelection(); });
 $("#workspaces-body").addEventListener("click", async (event) => {
