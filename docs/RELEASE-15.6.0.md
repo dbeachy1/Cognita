@@ -9,12 +9,14 @@
 - Setup diagnostics record English identifiers and reasons rather than translated UI text.
 - The README's six-language UI note is at the end, with logging and console scripts noted as
   English-only.
+- Windows Setup, its uninstaller, and the launcher are signed and timestamped through
+  Microsoft Azure Artifact Signing with Douglas Beachy as publisher. Setup's signature is
+  verified before its release checksum is generated.
 
 ## Compatibility
 
 MCP arguments, results, and contract versions are unchanged. Application and MCP logs and
 console scripts remain in English.
 
-The GitHub release provides a Windows Setup download and a Linux source archive. The Linux
-archive uses the published container images. Windows Setup is unsigned; Windows Smart App
-Control can block unsigned applications.
+The release includes a signed Windows Setup download and a Linux source archive. The Linux
+archive uses the release's container images. SHA-256 checksums accompany the downloads.

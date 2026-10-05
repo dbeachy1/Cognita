@@ -37,7 +37,9 @@ $env:COGNITA_SIGNING_DLIB = 'C:\Program Files (x86)\Microsoft\ArtifactSigningCli
 Or pass `--signing-metadata`, `--signtool`, and `--signing-dlib` directly. Explicit command-line paths override their matching environment variables. All three paths must resolve to files. The build uses SHA-256 and Microsoft's Artifact Signing timestamp service (`http://timestamp.acs.microsoft.com`), then runs `signtool verify /pa /all /tw` on the launcher and final Setup.
 
 ```powershell
-python windows\build_setup.py --image PATH --src PATH --upload
+python windows\build_setup.py --image PATH --src PATH
 ```
 
-`--upload` attaches Setup and its hash only after signing and signature verification succeed. Real account names, endpoints, metadata files, and credentials belong in local configuration or the machine's credential provider, never in committed files.
+The command prepares Setup and its hash locally. `--upload` attaches them to an existing GitHub release after signing and signature verification succeed. Uploading to a published release makes the assets public immediately. Agents may prepare local artifacts or upload to a verified private/draft destination; Doug controls public publication and repository/package visibility.
+
+Real account names, endpoints, metadata files, and credentials belong in local configuration or the machine's credential provider, never in committed files.

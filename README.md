@@ -94,12 +94,12 @@ the BIOS/UEFI (most PCs have it on; on a virtual machine, nested virtualization)
 internet connection for the first install. That install downloads about 1.5 GB of software and
 3.6 GB of search models.
 
-Download `Cognita-Setup-15.6.0-r1.exe` from the
+Download the Windows Setup executable from the
 [latest release](https://github.com/dbeachy1/Cognita/releases/latest) and run it. You do not
 need to be an administrator; Windows asks your permission once, the first time, to turn on WSL.
-This build is not signed yet, so Windows SmartScreen may say "Windows protected your PC": click
-**More info**, then **Run anyway**. (A PC with Smart App Control turned on refuses unsigned
-programs outright; Setup cannot run there until a signed build is published.)
+Setup is signed and timestamped with Microsoft Azure Artifact Signing. Its verified publisher
+is **Douglas Beachy**. To check the download, right-click the executable, open **Properties >
+Digital Signatures**, and verify the signature. The release includes its SHA-256 checksum.
 
 Setup checks your PC first and says exactly what is wrong, and how to fix it, before it changes
 anything. Then it asks only what it cannot know:
