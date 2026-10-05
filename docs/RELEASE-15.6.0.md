@@ -20,3 +20,9 @@ console scripts remain in English.
 
 The release includes a signed Windows Setup download and a Linux source archive. The Linux
 archive uses the release's container images. SHA-256 checksums accompany the downloads.
+
+The separate `cognita-license-notices-15.6.0.zip` companion contains retained component
+licenses and `source-notice-manifest.json`, with exact corresponding-source download
+links, versions, hashes, and build inputs. The matching firmware source is provided as
+`cognita-libkrunfw-corresponding-source-v0.7.0.tar`. These source downloads are optional
+and are not needed to install or run Cognita.
