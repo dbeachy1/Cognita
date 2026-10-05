@@ -1,0 +1,370 @@
+"""Persistent project state shared by book preparation and folder policy.
+
+The database is intentionally source-side state: it survives resets of the
+disposable search database and is never initialized as a side effect of a read.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import sqlite3
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+STATE_DIRECTORY = ".cognita-storage"
+DATABASE_FILENAME = "state.sqlite"
+INITIALIZED_FILENAME = "initialized.json"
+BOOTSTRAP_FILENAME = "bootstrap.json"
+SCHEMA_VERSION = 1
+
+
+class ProjectStateError(RuntimeError):
+    """A persistent state root is damaged or cannot be safely opened."""
+
+
+@dataclass(frozen=True)
+class FolderPolicy:
+    policy_revision: int
+    rules: tuple[tuple[str, bool], ...]
+
+
+class ProjectState:
+    """SQLite authority stored at ``<project>/.cognita-storage/state.sqlite``."""
+
+    def __init__(self, project_root: Path, *, timeout: float = 10.0):
+        self.project_root = Path(project_root).resolve(strict=True)
+        if not self.project_root.is_dir():
+            raise ProjectStateError("project source is not a directory")
+        self.root = self.project_root / STATE_DIRECTORY
+        self.database = self.root / DATABASE_FILENAME
+        self.timeout = timeout
+
+    @classmethod
+    def discover(cls, project_root: Path, *, timeout: float = 10.0) -> ProjectState | None:
+        """Open existing authority, return ``None`` for a pristine project.
+
+        Any nonempty state directory is evidence that initialization happened;
+        a missing marker or database in that case is a hard failure, never a
+        reason to create an empty policy database.
+        """
+        project_root = Path(project_root)
+        state_root = project_root / STATE_DIRECTORY
+        if not state_root.exists():
+            return None
+        try:
+            if state_root.is_symlink() or not state_root.is_dir():
+                raise ProjectStateError("reserved project state path is not a directory")
+            entries = list(state_root.iterdir())
+            if not entries:
+                return None
+            marker = state_root / INITIALIZED_FILENAME
+            database = state_root / DATABASE_FILENAME
+            bootstrap = state_root / BOOTSTRAP_FILENAME
+            if not marker.exists() and bootstrap.exists():
+                # Only this create-only, versioned intent can authorize finish
+                # of an interrupted first creation. No prior policy can exist.
+                cls._validate_bootstrap(bootstrap)
+                return cls._finish_bootstrap(project_root, timeout=timeout)
+            if not marker.is_file() or not database.is_file():
+                raise ProjectStateError("initialized project state is missing its marker or database")
+            state = cls(project_root, timeout=timeout)
+            state._validate_marker()
+            state._validate_database()
+            return state
+        except ProjectStateError:
+            raise
+        except OSError as exc:
+            raise ProjectStateError("project state is unreadable") from exc
+
+    @classmethod
+    def initialize(cls, project_root: Path, *, timeout: float = 10.0) -> ProjectState:
+        """Create state after the caller has acquired the project write lock."""
+        project_root = Path(project_root).resolve(strict=True)
+        state_root = project_root / STATE_DIRECTORY
+        if state_root.is_symlink():
+            raise ProjectStateError("reserved project state path cannot be a symlink")
+        state_root.mkdir(exist_ok=True)
+        marker = state_root / INITIALIZED_FILENAME
+        database = state_root / DATABASE_FILENAME
+        bootstrap = state_root / BOOTSTRAP_FILENAME
+        if marker.exists() or database.exists():
+            existing = cls.discover(project_root, timeout=timeout)
+            if existing is None:
+                raise ProjectStateError("project state initialization is inconsistent")
+            return existing
+        if any(state_root.iterdir()) and not bootstrap.exists():
+            raise ProjectStateError("reserved project state contains unrecognized files")
+        if not bootstrap.exists():
+            payload = {"schema_version": SCHEMA_VERSION, "database": DATABASE_FILENAME}
+            cls._write_create_only(bootstrap, json.dumps(payload, separators=(",", ":")).encode())
+        else:
+            cls._validate_bootstrap(bootstrap)
+        return cls._finish_bootstrap(project_root, timeout=timeout)
+
+    @classmethod
+    def _finish_bootstrap(cls, project_root: Path, *, timeout: float) -> ProjectState:
+        state = cls(project_root, timeout=timeout)
+        state._create_schema()
+        marker = {
+            "schema_version": SCHEMA_VERSION,
+            "database": DATABASE_FILENAME,
+        }
+        cls._write_atomic(
+            state.root / INITIALIZED_FILENAME,
+            json.dumps(marker, sort_keys=True, separators=(",", ":")).encode(),
+        )
+        try:
+            (state.root / BOOTSTRAP_FILENAME).unlink(missing_ok=True)
+        except OSError as exc:
+            raise ProjectStateError("could not finalize project state bootstrap") from exc
+        return state
+
+    @staticmethod
+    def _write_create_only(path: Path, data: bytes) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    @staticmethod
+    def _write_atomic(path: Path, data: bytes) -> None:
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    @staticmethod
+    def _validate_bootstrap(path: Path) -> None:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ProjectStateError("project state bootstrap journal is unreadable") from exc
+        if value != {"schema_version": SCHEMA_VERSION, "database": DATABASE_FILENAME}:
+            raise ProjectStateError("project state bootstrap journal is invalid")
+
+    def _validate_marker(self) -> None:
+        try:
+            value = json.loads((self.root / INITIALIZED_FILENAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ProjectStateError("project state marker is unreadable") from exc
+        if value != {"schema_version": SCHEMA_VERSION, "database": DATABASE_FILENAME}:
+            raise ProjectStateError("project state marker has an unsupported schema")
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database, timeout=self.timeout, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("PRAGMA journal_mode=DELETE")
+        return connection
+
+    def _create_schema(self) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS state_meta (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS folder_policy (
+                        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                        policy_revision INTEGER NOT NULL CHECK(policy_revision>=0)
+                    );
+                    CREATE TABLE IF NOT EXISTS folder_rules (
+                        path TEXT PRIMARY KEY,
+                        indexed INTEGER NOT NULL CHECK(indexed IN (0,1))
+                    );
+                    CREATE TABLE IF NOT EXISTS operation_receipts (
+                        owner_key TEXT NOT NULL,
+                        project TEXT NOT NULL,
+                        tool TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        args_sha256 TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY(owner_key, project, tool, operation_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS policy_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        revision INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        details_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE IF NOT EXISTS publication_journal (
+                        journal_id TEXT PRIMARY KEY,
+                        kind TEXT NOT NULL,
+                        phase TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE TABLE IF NOT EXISTS book_config (
+                        singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                        book_id TEXT NOT NULL,
+                        layout_filepath TEXT NOT NULL,
+                        layout_revision INTEGER NOT NULL,
+                        layout_sha256 TEXT NOT NULL,
+                        config_generation INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS book_views (
+                        view_id TEXT PRIMARY KEY,
+                        chapter_id TEXT NOT NULL,
+                        scope_json TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        expires_at TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS book_namespaces (
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        manifest_revision INTEGER,
+                        media_revision INTEGER NOT NULL DEFAULT 0,
+                        head_revision INTEGER,
+                        current_snapshot_id TEXT,
+                        current_plan_sha256 TEXT,
+                        PRIMARY KEY(chapter_id, scope_key)
+                    );
+                    CREATE TABLE IF NOT EXISTS book_snapshots (
+                        snapshot_id TEXT PRIMARY KEY,
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        manifest_revision INTEGER NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        UNIQUE(chapter_id, scope_key, manifest_revision)
+                    );
+                    """
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO state_meta(key,value) VALUES('schema_version',?)",
+                    (str(SCHEMA_VERSION),),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO folder_policy(singleton,policy_revision) VALUES(1,0)"
+                )
+                version = connection.execute(
+                    "SELECT value FROM state_meta WHERE key='schema_version'"
+                ).fetchone()
+                if version is None or version["value"] != str(SCHEMA_VERSION):
+                    raise ProjectStateError("project state database has an unsupported schema")
+                connection.commit()
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("project state database could not be initialized") from exc
+
+    def _validate_database(self) -> None:
+        try:
+            with self._connect() as connection:
+                result = connection.execute("PRAGMA quick_check").fetchone()
+                version = connection.execute(
+                    "SELECT value FROM state_meta WHERE key='schema_version'"
+                ).fetchone()
+                if result is None or result[0] != "ok" or version is None:
+                    raise ProjectStateError("project state database is corrupt or incomplete")
+                if version["value"] != str(SCHEMA_VERSION):
+                    raise ProjectStateError("project state database has an unsupported schema")
+                connection.execute("SELECT policy_revision FROM folder_policy WHERE singleton=1")
+        except ProjectStateError:
+            raise
+        except sqlite3.DatabaseError as exc:
+            raise ProjectStateError("project state database is unreadable or corrupt") from exc
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        """Run one short rollback-journal transaction."""
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def folder_policy(self) -> FolderPolicy:
+        with self._connect() as connection:
+            revision = connection.execute(
+                "SELECT policy_revision FROM folder_policy WHERE singleton=1"
+            ).fetchone()
+            rules = connection.execute(
+                "SELECT path,indexed FROM folder_rules ORDER BY path"
+            ).fetchall()
+        if revision is None:
+            raise ProjectStateError("folder policy state is missing")
+        return FolderPolicy(
+            int(revision["policy_revision"]),
+            tuple((row["path"], bool(row["indexed"])) for row in rules),
+        )
+
+    def set_folder_rule(
+        self, path: str, indexed: bool, expected_revision: int,
+        *, owner_key: str, project: str, tool: str, operation_id: str,
+        args_sha256: str, result: dict, job_id: str | None = None,
+    ) -> tuple[str, dict, int]:
+        """Apply a rule with replay-before-CAS and record receipt atomically."""
+        payload = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            receipt = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts "
+                "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (owner_key, project, tool, operation_id),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["args_sha256"] != args_sha256:
+                    return "conflict", {}, -1
+                return "replay", json.loads(receipt["payload_json"]), -1
+            row = connection.execute(
+                "SELECT policy_revision FROM folder_policy WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("folder policy state is missing")
+            current = int(row["policy_revision"])
+            if current != expected_revision:
+                return "stale", {}, current
+            next_revision = current + 1
+            connection.execute(
+                "INSERT INTO folder_rules(path,indexed) VALUES(?,?) "
+                "ON CONFLICT(path) DO UPDATE SET indexed=excluded.indexed",
+                (path, int(indexed)),
+            )
+            connection.execute(
+                "UPDATE folder_policy SET policy_revision=? WHERE singleton=1",
+                (next_revision,),
+            )
+            if job_id is not None:
+                connection.execute(
+                    "INSERT INTO policy_jobs(job_id,revision,state,details_json) VALUES(?,?,?,?)",
+                    (job_id, next_revision, "queued", "{}"),
+                )
+            value = dict(result)
+            value["policy_revision"] = next_revision
+            connection.execute(
+                "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) "
+                "VALUES(?,?,?,?,?,?)",
+                (owner_key, project, tool, operation_id, args_sha256,
+                 json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+            )
+            return "committed", value, next_revision
+
+    def receipt(
+        self, *, owner_key: str, project: str, tool: str, operation_id: str,
+    ) -> tuple[str, dict] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts "
+                "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (owner_key, project, tool, operation_id),
+            ).fetchone()
+        return None if row is None else (row["args_sha256"], json.loads(row["payload_json"]))
