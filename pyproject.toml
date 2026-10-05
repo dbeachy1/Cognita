@@ -15,7 +15,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
     "pyyaml>=6.0",
-    "pydantic>=2.7",
+    "pydantic>=2.12",
     "pydantic-settings>=2.3",
     "argon2-cffi>=23.1",
     "cryptography>=42.0",
@@ -45,6 +45,8 @@ dependencies = [
     "beautifulsoup4>=4.12",  # add_from_url HTML -> text (was knowledge-rag's dep)
     "watchdog>=4",  # 4.0-M4 Cognita-side file watcher (was knowledge-rag's dep)
     "jsonschema>=4.23",
+    "rfc8785==0.1.4",
+    "regex==2026.9.29",
 ]
 
 [project.optional-dependencies]
@@ -74,6 +76,7 @@ where = ["src"]
 "cognita.oauth_service" = ["templates/**/*.html"]
 "cognita" = ["web/*", "web/locales/*.json"]
 "cognita.selftest_fixtures" = ["data/manifest.json", "data/cognita-selftest/ocr/*"]
+"cognita.books" = ["schemas/*.json"]
 
 [tool.ruff]
 line-length = 100
