@@ -82,17 +82,24 @@ model, and container contents before release.
 
 The NVIDIA container image (`cognita-app:<version>-nvidia`) includes NVIDIA CUDA
 runtime libraries (libcudart, libcublas/libcublasLt, libcufft, libcurand, libcusparse,
-libcusolver, libnvrtc, libnvJitLink, libcupti, libnvToolsExt, libcufile), NVIDIA cuDNN
+libcusolver, libnvrtc, libnvJitLink, libcupti, libcufile), NVIDIA cuDNN
 and NVIDIA cuSPARSELt, installed unmodified from NVIDIA's PyPI wheels. These components
 are NOT covered by Cognita's Apache-2.0 license. They are proprietary software of NVIDIA
 Corporation, redistributed as part of this application under:
 
-- License Agreement for NVIDIA Software Development Kits (CUDA Toolkit EULA),
-  https://docs.nvidia.com/cuda/eula/index.html
+- License Agreement for NVIDIA Software Development Kits and CUDA Toolkit
+  Supplement, CUDA 13.0.2:
+  https://docs.nvidia.com/cuda/archive/13.0.2/eula/index.html
 - NVIDIA cuDNN Software License Agreement,
   https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html
 - NVIDIA cuSPARSELt Software License Agreement,
   https://docs.nvidia.com/cuda/cusparselt/license.html
+
+The complete license texts supplied with the installed wheels remain under their
+`*.dist-info/licenses/` directories and govern the versions shipped. The companion
+notice `NVIDIA-CUDA-13.0.2-EULA.html` retains the versioned CUDA agreement and
+redistribution appendix, including libnvJitLink and libcufile, which are absent
+from the older CUDA agreement text included in those wheels.
 
 By pulling and using the NVIDIA image you accept those NVIDIA terms. Under them the
 NVIDIA components are licensed to run only on systems with NVIDIA GPUs, may be used
@@ -100,8 +107,22 @@ only by this application, and may not be extracted, modified or redistributed
 separately from it. The NVIDIA driver itself is not included; it is provided by the
 host and governed by NVIDIA's driver license.
 
-## NVSHMEM, NCCL, cuda-python (NVIDIA image only)
+## NVSHMEM 3.4.5 (NVIDIA image only)
 
-- NVSHMEM: Apache License 2.0 (https://github.com/NVIDIA/nvshmem).
+NVSHMEM 3.4.5 is distributed under the NVIDIA Software Development Kits license
+agreement and NVSHMEM supplement, which permits distribution of SDK portions as
+part of an application with material additional functionality, for use on systems
+with NVIDIA GPUs. Its complete versioned terms and incorporated third-party
+notices are at
+https://github.com/NVIDIA/nvshmem/blob/v3.4.5-0/License.txt and retained in the
+companion notice `NVIDIA-NVSHMEM-3.4.5-License.txt`. The additional notices include
+BSD-licensed code from DF-NVSHMEM, Sandia OpenSHMEM and other projects. Preserve
+those notices along with the original wheel license text. The license of newer
+NVSHMEM releases does not replace the terms for this shipped version.
+
+## NVTX, NCCL, cuda-python (NVIDIA image only)
+
+- NVTX (`nvidia-nvtx` 13.0.85): Apache License 2.0. The complete license and
+  copyright notices ship in the wheel's `*.dist-info/licenses/License.txt`.
 - NCCL: BSD 3-Clause (https://github.com/NVIDIA/nccl).
 - cuda-bindings, cuda-pathfinder: Apache License 2.0 (https://github.com/NVIDIA/cuda-python).
