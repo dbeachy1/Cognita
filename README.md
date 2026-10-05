@@ -3,6 +3,9 @@ on your own computer. You point it at your folders; it indexes them locally and 
 the assistant through the Model Context Protocol (MCP). Your files stay on your machine: the
 only things Cognita downloads are its own software and search models.
 
+The Windows installer and web interface are localized into **U.S. English, Spanish,
+French, German, Italian, and Brazilian Portuguese**.
+
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
 it can run code, process files and search the web, then copy results back into your documents.
 
@@ -289,8 +292,6 @@ Restart Cognita to apply the setting: run `./cognita restart` on Linux or
 directory scans; normal Word documents remain indexable. A retry warning for
 another path requires checking that path's underlying error.
 
-## Languages
+## Diagnostic language
 
-Cognita's Windows installer and web UI (Admin and OAuth) support U.S. English,
-Spanish, French, German, Italian, and Brazilian Portuguese. Diagnostic logging
-and console scripts remain in English.
+Diagnostic logging and console scripts remain in English.

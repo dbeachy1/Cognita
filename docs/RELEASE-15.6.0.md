@@ -7,8 +7,8 @@
   of a message ID.
 - Inline Admin failures show labeled English technical detail when no translated outcome exists.
 - Setup diagnostics record English identifiers and reasons rather than translated UI text.
-- The README's six-language UI note is at the end, with logging and console scripts noted as
-  English-only.
+- The README highlights the six-language interface near the beginning; logging and console
+  scripts remain English-only.
 - Windows Setup, its uninstaller, and the launcher are signed and timestamped through
   Microsoft Azure Artifact Signing with Douglas Beachy as publisher. Setup's signature is
   verified before its release checksum is generated.
