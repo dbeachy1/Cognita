@@ -63,8 +63,6 @@ cd Cognita
 ./cognita install
 ```
 
-You can also clone this repository and run `./cognita install` from the clone.
-
 The install asks only what it cannot know:
 
 1. Your documents folder (default `~/Documents`).
