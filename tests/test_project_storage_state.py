@@ -103,3 +103,61 @@ def test_interrupted_first_bootstrap_is_the_only_markerless_recovery_case(tmp_pa
     assert (root / DATABASE_FILENAME).is_file()
     assert (root / INITIALIZED_FILENAME).is_file()
     assert not (root / BOOTSTRAP_FILENAME).exists()
+
+
+def test_view_and_snapshot_records_are_durable_and_snapshot_receipt_is_atomic(tmp_path):
+    state = ProjectState.initialize(tmp_path)
+    state.save_view(
+        view_id="view-1", chapter_id="chapter-1", scope_json='{"kind":"production"}',
+        payload={"prose_sha256": "a" * 64, "text": "fixture"},
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert ProjectState.discover(tmp_path).load_view("view-1")["payload"]["text"] == "fixture"
+
+    kwargs = dict(
+        snapshot_id="snapshot-1", chapter_id="chapter-1", scope_key="production",
+        expected_manifest_revision=None,
+        payload={"snapshot_filepath": "Chapters/One/Audiobook/Snapshots/snapshot-1"},
+        request_plan_sha256="b" * 64,
+        receipt_owner_key="principal:owner:connector-a", project="fixture",
+        tool="audiobook_prepare_chapter", operation_id="prepare-1",
+        args_sha256="c" * 64, result={"snapshot_id": "snapshot-1"},
+    )
+    status, revision, result = state.commit_snapshot(**kwargs)
+    replay = state.commit_snapshot(**kwargs | {"expected_manifest_revision": 0})
+
+    assert status == "committed" and revision == 1
+    assert result == {"snapshot_id": "snapshot-1", "manifest_revision": 1}
+    assert replay == ("replay", -1, result)
+    reopened = ProjectState.discover(tmp_path)
+    assert reopened.namespace("chapter-1", "production")["current_snapshot_id"] == "snapshot-1"
+    assert reopened.snapshot("snapshot-1")["payload"]["snapshot_filepath"].endswith("snapshot-1")
+
+
+def test_snapshot_receipt_conflict_and_manifest_cas_are_atomic(tmp_path):
+    state = ProjectState.initialize(tmp_path)
+    base = dict(
+        chapter_id="chapter-1", scope_key="production", request_plan_sha256="b" * 64,
+        receipt_owner_key="owner", project="fixture", tool="audiobook_prepare_chapter",
+        operation_id="prepare-1", args_sha256="c" * 64,
+    )
+    first = state.commit_snapshot(
+        snapshot_id="snapshot-1", expected_manifest_revision=None,
+        payload={"value": 1}, result={"snapshot_id": "snapshot-1"}, **base,
+    )
+    with pytest.raises(ProjectStateError, match="operation_id_conflict"):
+        state.commit_snapshot(
+            snapshot_id="snapshot-2", expected_manifest_revision=1,
+            payload={"value": 2}, result={"snapshot_id": "snapshot-2"},
+            **(base | {"args_sha256": "d" * 64}),
+        )
+    with pytest.raises(ProjectStateError, match="stale_manifest"):
+        state.commit_snapshot(
+            snapshot_id="snapshot-3", expected_manifest_revision=7,
+            payload={"value": 3}, result={"snapshot_id": "snapshot-3"},
+            **(base | {"operation_id": "prepare-2"}),
+        )
+
+    assert first[0:2] == ("committed", 1)
+    assert state.namespace("chapter-1", "production")["current_snapshot_id"] == "snapshot-1"
+    assert state.snapshot("snapshot-2") is None

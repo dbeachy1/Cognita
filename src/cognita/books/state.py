@@ -358,6 +358,30 @@ class ProjectState:
             )
             return "committed", value, next_revision
 
+    def update_policy_job(self, job_id: str, state: str, details: dict) -> None:
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "UPDATE policy_jobs SET state=?,details_json=?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE job_id=?",
+                (state, json.dumps(details, sort_keys=True, separators=(",", ":")), job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ProjectStateError("policy_job_not_found")
+
+    def policy_job(self, job_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT job_id,revision,state,details_json,updated_at FROM policy_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "job_id": row["job_id"], "policy_revision": int(row["revision"]),
+            "state": row["state"], "details": json.loads(row["details_json"]),
+            "updated_at": row["updated_at"],
+        }
+
     def receipt(
         self, *, owner_key: str, project: str, tool: str, operation_id: str,
     ) -> tuple[str, dict] | None:
@@ -368,3 +392,103 @@ class ProjectState:
                 (owner_key, project, tool, operation_id),
             ).fetchone()
         return None if row is None else (row["args_sha256"], json.loads(row["payload_json"]))
+
+    def save_view(
+        self, *, view_id: str, chapter_id: str, scope_json: str,
+        payload: dict, expires_at: str,
+    ) -> None:
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO book_views(view_id,chapter_id,scope_json,payload_json,expires_at) "
+                "VALUES(?,?,?,?,?)",
+                (view_id, chapter_id, scope_json,
+                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")), expires_at),
+            )
+
+    def load_view(self, view_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT chapter_id,scope_json,payload_json,expires_at "
+                "FROM book_views WHERE view_id=?",
+                (view_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "chapter_id": row["chapter_id"], "scope_json": row["scope_json"],
+            "payload": json.loads(row["payload_json"]), "expires_at": row["expires_at"],
+        }
+
+    def namespace(self, chapter_id: str, scope_key: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT manifest_revision,media_revision,head_revision,current_snapshot_id,"
+                "current_plan_sha256 FROM book_namespaces WHERE chapter_id=? AND scope_key=?",
+                (chapter_id, scope_key),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def snapshot(self, snapshot_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT chapter_id,scope_key,manifest_revision,payload_json "
+                "FROM book_snapshots WHERE snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "chapter_id": row["chapter_id"], "scope_key": row["scope_key"],
+            "manifest_revision": int(row["manifest_revision"]),
+            "payload": json.loads(row["payload_json"]),
+        }
+
+    def commit_snapshot(
+        self, *, snapshot_id: str, chapter_id: str, scope_key: str,
+        expected_manifest_revision: int | None, payload: dict,
+        request_plan_sha256: str, receipt_owner_key: str, project: str,
+        tool: str, operation_id: str, args_sha256: str, result: dict,
+    ) -> tuple[str, int, dict]:
+        """Commit one immutable snapshot reference under the chapter namespace CAS."""
+        with self.transaction() as connection:
+            prior = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts "
+                "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (receipt_owner_key, project, tool, operation_id),
+            ).fetchone()
+            if prior is not None:
+                if prior["args_sha256"] != args_sha256:
+                    raise ProjectStateError("operation_id_conflict")
+                return "replay", -1, json.loads(prior["payload_json"])
+            row = connection.execute(
+                "SELECT manifest_revision FROM book_namespaces "
+                "WHERE chapter_id=? AND scope_key=?",
+                (chapter_id, scope_key),
+            ).fetchone()
+            current = None if row is None else row["manifest_revision"]
+            if current != expected_manifest_revision:
+                raise ProjectStateError("stale_manifest")
+            next_revision = 1 if current is None else int(current) + 1
+            committed_result = dict(result)
+            committed_result["manifest_revision"] = next_revision
+            connection.execute(
+                "INSERT INTO book_snapshots(snapshot_id,chapter_id,scope_key,manifest_revision,payload_json) "
+                "VALUES(?,?,?,?,?)",
+                (snapshot_id, chapter_id, scope_key, next_revision,
+                 json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+            )
+            connection.execute(
+                "INSERT INTO book_namespaces(chapter_id,scope_key,manifest_revision,media_revision,"
+                "head_revision,current_snapshot_id,current_plan_sha256) VALUES(?,?,?,0,NULL,?,?) "
+                "ON CONFLICT(chapter_id,scope_key) DO UPDATE SET "
+                "manifest_revision=excluded.manifest_revision,current_snapshot_id=excluded.current_snapshot_id,"
+                "current_plan_sha256=excluded.current_plan_sha256",
+                (chapter_id, scope_key, next_revision, snapshot_id, request_plan_sha256),
+            )
+            connection.execute(
+                "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) "
+                "VALUES(?,?,?,?,?,?)",
+                (receipt_owner_key, project, tool, operation_id, args_sha256,
+                 json.dumps(committed_result, ensure_ascii=False, separators=(",", ":"))),
+            )
+            return "committed", next_revision, committed_result
