@@ -162,6 +162,11 @@
 #pragma message "Cognita Setup {#Version} revision {#Revision}"
 
 [Setup]
+#ifdef SigningEnabled
+SignTool=azurecodesign
+SignedUninstaller=yes
+SignToolRunMinimized=yes
+#endif
 ; A fixed AppId: a newer Setup over an older install is an update (section 7.3).
 AppId={{17D9746C-1795-4815-9300-7ECE429CEE13}
 AppName=Cognita

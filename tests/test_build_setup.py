@@ -44,18 +44,23 @@ size_src_tarball: {len(SRC_BYTES)}
 
 
 class FakeRunner:
-    """Stands in for csc.exe, ISCC.exe and gh: records argv, writes what the real tool would."""
+    """Stands in for csc.exe, ISCC.exe, signtool.exe and gh."""
 
     def __init__(self, gh_files: dict[str, bytes] | None = None):
         self.calls: list[list[str]] = []
         self.gh_files = gh_files if gh_files is not None else {}
         self.exit_codes: dict[str, int] = {}
+        self.fail_signtool_action: str | None = None
+        self.fail_signtool_target: str | None = None
 
     def __call__(self, argv, *, cwd=None):
         argv = [str(a) for a in argv]
         self.calls.append(argv)
         tool = Path(argv[0]).name.lower()
         code = self.exit_codes.get(tool, 0)
+        if (tool == "signtool.exe" and self.fail_signtool_action == argv[1]
+                and (self.fail_signtool_target is None or Path(argv[-1]).name == self.fail_signtool_target)):
+            code = 1
         if code != 0:
             return bs.RunResult(code, "", f"{tool} failed on purpose")
         if tool == "csc.exe":
@@ -65,6 +70,11 @@ class FakeRunner:
             defines = {a[2:].split("=", 1)[0]: a.split("=", 1)[1] for a in argv if a.startswith("/D")}
             exe = Path(defines["OutputDir"]) / f"Cognita-Setup-{defines['Version']}-r{defines['Revision']}.exe"
             exe.write_bytes(b"MZ setup " + defines["Revision"].encode())
+            if any(arg.startswith("/Sazurecodesign=") for arg in argv):
+                exe.write_bytes(exe.read_bytes() + b" signed by Inno")
+        elif tool == "signtool.exe" and argv[1] == "sign":
+            target = Path(argv[-1])
+            target.write_bytes(target.read_bytes() + b" signed")
         elif tool == "gh" and argv[1:3] == ["release", "download"]:
             target = Path(argv[argv.index("--dir") + 1])
             for index, arg in enumerate(argv):
@@ -119,8 +129,21 @@ def workspace(tmp_path):
     image.write_bytes(IMAGE_BYTES)
     src = tmp_path / "local-src.tar.gz"
     src.write_bytes(SRC_BYTES)
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({
+        "Endpoint": "https://example.codesigning.azure.net/",
+        "CodeSigningAccountName": "fixture-account",
+        "CertificateProfileName": "fixture-profile",
+    }), encoding="utf-8")
+    signtool = tmp_path / "Windows SDK" / "signtool.exe"
+    signtool.parent.mkdir()
+    signtool.write_bytes(b"")
+    dlib = tmp_path / "Artifact Signing" / "Azure.CodeSigning.Dlib.dll"
+    dlib.parent.mkdir()
+    dlib.write_bytes(b"")
     return {
         "repo": repo, "csc": csc, "iscc": iscc, "release": release, "image": image, "src": src,
+        "metadata": metadata, "signtool": signtool, "dlib": dlib,
         "dist": tmp_path / "dist", "env": {"WINDIR": str(tmp_path / "windir"), "LOCALAPPDATA": str(tmp_path / "localapp")},
     }
 
@@ -449,9 +472,15 @@ def test_a_double_quote_in_a_path_is_refused_not_passed_to_iscc():
 # --- upload and signing ----------------------------------------------------------------------
 
 
+def signing_options(ws):
+    return {
+        "signing_metadata": ws["metadata"], "signtool": ws["signtool"], "signing_dlib": ws["dlib"],
+    }
+
+
 def test_upload_attaches_the_setup_and_its_hash_to_the_release(workspace):
     runner = FakeRunner()
-    exe, _ = run_build(workspace, runner, upload=True)
+    exe, _ = run_build(workspace, runner, upload=True, **signing_options(workspace))
     sha_file = exe.with_name(exe.name + ".sha256")
     assert runner.calls_of("gh") == [
         ["gh", "release", "upload", "v14.1.0", str(exe), str(sha_file), "--clobber"],
@@ -465,9 +494,120 @@ def test_nothing_is_uploaded_without_the_flag(workspace):
     assert any("upload: skipped" in line for line in logs)
 
 
-def test_the_signing_hook_does_nothing_yet_and_says_so(workspace):
+def test_unsigned_local_build_remains_available(workspace):
     _, logs = run_build(workspace, FakeRunner())
-    assert any("signing: skipped" in line for line in logs)
+    assert any("signing: skipped (no signing configuration)" in line for line in logs)
+
+
+def test_upload_requires_signing_configuration_before_building(workspace):
+    runner = FakeRunner()
+    with pytest.raises(bs.BuildError, match="--upload requires"):
+        run_build(workspace, runner, upload=True)
+    assert runner.calls == []
+
+
+def test_signed_build_signs_and_verifies_launcher_before_iscc(workspace):
+    runner = FakeRunner()
+    run_build(workspace, runner, **signing_options(workspace))
+    launcher_sign = next(i for i, call in enumerate(runner.calls) if Path(call[0]).name == "signtool.exe" and call[1] == "sign")
+    launcher_verify = next(i for i, call in enumerate(runner.calls) if Path(call[0]).name == "signtool.exe" and call[1] == "verify")
+    iscc_index = next(i for i, call in enumerate(runner.calls) if Path(call[0]).name == "ISCC.exe")
+    assert launcher_sign < launcher_verify < iscc_index
+    sign_call = runner.calls[launcher_sign]
+    assert sign_call[1:] == [
+        "sign", "/fd", "SHA256", "/tr", bs.SIGNING_TIMESTAMP_URL, "/td", "SHA256",
+        "/dlib", str(workspace["dlib"]), "/dmdf", str(workspace["metadata"]),
+        str(workspace["dist"] / "build-setup" / "cognita.exe"),
+    ]
+    iscc_call = runner.calls[iscc_index]
+    assert "/DSigningEnabled=1" in iscc_call
+    assert any(arg.startswith("/Sazurecodesign=") and "$q" in arg and "$f" in arg for arg in iscc_call)
+
+
+def test_inno_signing_is_enabled_only_for_signed_compiles():
+    iss = (REPO / "windows" / "setup" / "Cognita.iss").read_text(encoding="utf-8")
+    assert "#ifdef SigningEnabled\nSignTool=azurecodesign\nSignedUninstaller=yes\nSignToolRunMinimized=yes\n#endif" in iss
+
+
+def test_signing_paths_can_come_from_environment(workspace):
+    runner = FakeRunner()
+    env = {
+        **workspace["env"],
+        bs.SIGNING_METADATA_ENV: str(workspace["metadata"]),
+        bs.SIGNTOOL_ENV: str(workspace["signtool"]),
+        bs.SIGNING_DLIB_ENV: str(workspace["dlib"]),
+    }
+    bs.build(make_options(workspace), runner=runner, env=env, log=lambda line: None, repo_root=workspace["repo"])
+    assert any(Path(call[0]).name == "signtool.exe" and call[1] == "sign" for call in runner.calls)
+
+
+def test_relative_paths_are_absolute_by_the_time_iscc_receives_them(workspace, monkeypatch):
+    monkeypatch.chdir(workspace["repo"].parent)
+    runner = FakeRunner()
+    options = make_options(
+        workspace,
+        image=Path("local-image.tar.gz"), src=Path("local-src.tar.gz"),
+        dist_dir=Path("relative-dist"), build_dir=Path("relative-dist/build-setup"),
+        signing_metadata=Path("metadata.json"), signtool=Path("Windows SDK/signtool.exe"),
+        signing_dlib=Path("Artifact Signing/Azure.CodeSigning.Dlib.dll"),
+    )
+    exe = bs.build(options, runner=runner, env=workspace["env"], log=lambda line: None, repo_root=workspace["repo"])
+    [iscc_call] = runner.calls_of("iscc.exe")
+    defines = {arg[2:].split("=", 1)[0]: arg.split("=", 1)[1] for arg in iscc_call if arg.startswith("/D")}
+    assert defines["ImagePath"] == str(workspace["image"].resolve())
+    assert defines["SrcPath"] == str(workspace["src"].resolve())
+    assert defines["OutputDir"] == str((workspace["repo"].parent / "relative-dist").resolve())
+    assert str(workspace["dlib"].resolve()) in next(arg for arg in iscc_call if arg.startswith("/Sazurecodesign="))
+    assert exe.is_absolute()
+
+
+def test_setup_is_verified_after_inno_signing_before_hash_and_upload(workspace):
+    runner = FakeRunner()
+    exe, _ = run_build(workspace, runner, upload=True, **signing_options(workspace))
+    calls = runner.calls
+    setup_verify = next(i for i, call in enumerate(calls) if Path(call[0]).name == "signtool.exe" and call[1] == "verify" and call[-1] == str(exe))
+    upload = next(i for i, call in enumerate(calls) if Path(call[0]).name == "gh")
+    assert calls[setup_verify][1:5] == ["verify", "/pa", "/all", "/tw"]
+    assert setup_verify < upload
+    expected = hashlib.sha256(exe.read_bytes()).hexdigest()
+    sha_file = exe.with_name(exe.name + ".sha256")
+    assert sha_file.read_bytes() == f"{expected}  {exe.name}\n".encode("ascii")
+
+
+def test_signing_failure_stops_before_iscc_and_hashing(workspace):
+    runner = FakeRunner()
+    runner.fail_signtool_action = "sign"
+    with pytest.raises(bs.BuildError, match="SignTool failed"):
+        run_build(workspace, runner, **signing_options(workspace))
+    assert runner.calls_of("iscc.exe") == []
+    assert not list(workspace["dist"].glob("*.sha256"))
+
+
+def test_signature_verification_failure_stops_before_hashing(workspace):
+    runner = FakeRunner()
+    runner.fail_signtool_action = "verify"
+    with pytest.raises(bs.BuildError, match="SignTool verification failed"):
+        run_build(workspace, runner, **signing_options(workspace))
+    assert runner.calls_of("iscc.exe") == []
+    assert not list(workspace["dist"].glob("*.sha256"))
+
+
+def test_setup_verification_failure_stops_before_hash_and_upload(workspace):
+    runner = FakeRunner()
+    runner.fail_signtool_action = "verify"
+    runner.fail_signtool_target = "Cognita-Setup-14.1.0-r1.exe"
+    old_sha = workspace["dist"] / "Cognita-Setup-14.1.0-r1.exe.sha256"
+    old_sha.parent.mkdir(parents=True)
+    old_sha.write_text("stale hash", encoding="ascii")
+    with pytest.raises(bs.BuildError, match="SignTool verification failed"):
+        run_build(workspace, runner, upload=True, **signing_options(workspace))
+    assert runner.calls_of("gh") == []
+    assert not old_sha.exists()
+
+
+def test_incomplete_signing_configuration_fails_closed(workspace):
+    with pytest.raises(bs.BuildError, match="missing --signtool, --signing-dlib"):
+        run_build(workspace, FakeRunner(), signing_metadata=workspace["metadata"])
 
 
 def test_every_log_line_carries_a_local_timestamp(capsys):
