@@ -71,6 +71,8 @@ The install asks only what it cannot know:
 4. Whether to turn on Workspace, only when the machine supports it.
 5. Whether to set up remote access now (see below; you can do it later).
 
+**AMD acceleration** has been tested on Linux with dual AMD R9700 GPUs.
+
 **NVIDIA acceleration** needs the NVIDIA driver at version 580 or newer and the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
 which gives Docker its `nvidia` runtime. The installer offers NVIDIA only when both are there,
