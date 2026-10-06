@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import difflib
 import hashlib
 import json
 
@@ -21,31 +20,48 @@ def text_page(text: str, start: int, maximum: int) -> dict[str, object]:
     }
 
 
-def spoken_interval(speech_text: str, spoken_text: str, start: int, end: int) -> str:
-    """Return a speech interval with only the frozen added-tag deletions removed.
+def spoken_interval(
+    speech_text: str,
+    spoken_text: str,
+    start: int,
+    end: int,
+    tag_deletion_spans: list[list[int]] | tuple[tuple[int, int], ...] | None = None,
+) -> str:
+    """Return the frozen spoken projection for a speech-coordinate interval.
 
-    Prepared snapshots retain both projections.  Their relationship is a
-    deletion-only transform, so equal blocks map exact code-point boundaries
-    and deleted tag spans collapse at one spoken boundary.  A different
-    transform is malformed historical evidence rather than a cue to read live
-    Word bytes.
+    Spans are the validated tag deletions captured when the snapshot was
+    prepared. Older snapshots without spans are safe only when both frozen
+    projections are identical; guessing alignment can move repeated text.
     """
     if not (0 <= start <= end <= len(speech_text)):
         raise ValueError("invalid frozen speech interval")
-    boundaries: list[int | None] = [None] * (len(speech_text) + 1)
-    matcher = difflib.SequenceMatcher(a=speech_text, b=spoken_text, autojunk=False)
-    for kind, left_start, left_end, right_start, right_end in matcher.get_opcodes():
-        if kind == "equal":
-            for offset in range(left_end - left_start + 1):
-                boundaries[left_start + offset] = right_start + offset
-        elif kind == "delete":
-            for offset in range(left_start, left_end + 1):
-                boundaries[offset] = right_start
-        else:
-            raise ValueError("frozen spoken projection is not a tag deletion transform")
-    if boundaries[start] is None or boundaries[end] is None:
-        raise ValueError("frozen projection boundaries are unavailable")
-    return spoken_text[int(boundaries[start]):int(boundaries[end])]
+    if tag_deletion_spans is None:
+        if speech_text != spoken_text:
+            raise ValueError("frozen tag deletion spans are unavailable")
+        return speech_text[start:end]
+
+    previous_end = 0
+    removed_total = 0
+    for span in tag_deletion_spans:
+        if (len(span) != 2 or any(isinstance(point, bool) or not isinstance(point, int) for point in span)):
+            raise ValueError("frozen tag deletion span is malformed")
+        left, right = span
+        if left < previous_end or left < 0 or right <= left or right > len(speech_text):
+            raise ValueError("frozen tag deletion spans are inconsistent")
+        removed_total += right - left
+        previous_end = right
+
+    if len(speech_text) - removed_total != len(spoken_text):
+        raise ValueError("frozen spoken projection does not match tag deletion spans")
+    # Deletion spans are half-open. Boundaries inside a tag collapse to the
+    # tag's spoken boundary, including intervals crossing its edge.
+    removed_before_start = sum(max(0, min(right, start) - left)
+                               for left, right in tag_deletion_spans if left < start)
+    removed_before_end = sum(max(0, min(right, end) - left)
+                             for left, right in tag_deletion_spans if left < end)
+    mapped_start = start - removed_before_start
+    mapped_end = end - removed_before_end
+    return spoken_text[mapped_start:mapped_end]
 
 
 def paired_text_page(prompt: str, spoken: str, offset: int, maximum: int) -> tuple[dict[str, object], dict[str, object], int]:

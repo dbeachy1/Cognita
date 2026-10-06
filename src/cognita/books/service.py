@@ -948,9 +948,19 @@ class BookService:
                 raise BookServiceError("publication_failed", "The immutable source snapshot could not be staged.") from exc
         chunks: list[dict[str, Any]] = []
         plan_rows: list[dict[str, Any]] = []
+        tag_deletion_spans = [
+            [paragraph.speech_start + start, paragraph.speech_start + end]
+            for paragraph in projected.paragraphs
+            if paragraph.speech_start is not None
+            for start, end in paragraph.tags
+        ]
         requested_chunks = {item.chunk_id: item for item in request.chunks}
         for order, item in enumerate(ranges):
             text = projected.speech_text[item.start:item.end]
+            spoken_text = spoken_interval(
+                projected.speech_text, projected.spoken_projection,
+                item.start, item.end, tag_deletion_spans,
+            )
             requested = requested_chunks[item.chunk_id]
             request_spec = (
                 _data(requested.request_spec)
@@ -962,14 +972,14 @@ class BookService:
                 "source_segments": _data(item.source_segments),
                 "codepoint_count": item.codepoint_count, "limit_count": item.limit_count,
                 "prompt_sha256": item.prompt_sha256,
-                "spoken_text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "spoken_text_sha256": hashlib.sha256(spoken_text.encode("utf-8")).hexdigest(),
                 "request_sha256": (
                     request_fingerprint(text, requested.request_spec)
                     if requested.request_spec is not None else None
                 ),
                 "request_spec": request_spec,
                 "replaces_chunk_ids": [], "replaced_by_chunk_ids": [],
-                "opening_phrase": text[:120], "closing_phrase": text[-120:],
+                "opening_phrase": spoken_text[:120], "closing_phrase": spoken_text[-120:],
                 "take_ids": [], "accepted_take_id": None,
                 "reuse_status": "new", "reusable_take_ids": [],
             }
@@ -997,6 +1007,7 @@ class BookService:
             "tagged_filepath": tagged_path.relative_to(self.root).as_posix(),
             "speech_text": projected.speech_text,
             "spoken_projection": projected.spoken_projection,
+            "tag_deletion_spans": tag_deletion_spans,
             "prose_projection": projected.prose_projection,
             "production_settings_sha256": production_settings_sha256,
             "production_target": prepared_production_target,
@@ -1095,7 +1106,8 @@ class BookService:
             first_chunk = metadata[offset][1]
             try:
                 first_spoken = spoken_interval(snap.get("speech_text", ""), snap.get("spoken_projection", ""),
-                                                first_chunk["start"], first_chunk["end"])
+                                                first_chunk["start"], first_chunk["end"],
+                                                snap.get("tag_deletion_spans"))
             except ValueError as exc:
                 raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
             first_prompt = snap.get("speech_text", "")[first_chunk["start"]:first_chunk["end"]]
@@ -1118,7 +1130,8 @@ class BookService:
             for chunk in page_chunks[:1]:
                 prompt = speech_text[chunk["start"]:chunk["end"]]
                 try:
-                    spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"])
+                    spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"],
+                                             snap.get("tag_deletion_spans"))
                 except ValueError as exc:
                     raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
                 try:
@@ -1137,7 +1150,8 @@ class BookService:
                 for chunk in page_chunks[1:]:
                     prompt = speech_text[chunk["start"]:chunk["end"]]
                     try:
-                        spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"])
+                        spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"],
+                                                 snap.get("tag_deletion_spans"))
                     except ValueError as exc:
                         raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
                     if len(prompt) + len(spoken) > remaining:
@@ -2189,7 +2203,9 @@ class BookService:
             raise BookServiceError("media_mismatch", "Decoded MP3 join offsets do not map every chunk to a nonempty timeline interval.")
         timeline_entries = [
             {"kind": "audio", "source_id": chunk_id, "start_frame": start, "end_frame": end}
-            for chunk_id, start, end in zip(pinned["chunk_ids"], offsets, offsets[1:], strict=True)
+            for chunk_id, (start, end) in zip(
+                pinned["chunk_ids"], zip(offsets[:-1], offsets[1:], strict=True), strict=True
+            )
         ]
         timeline = directory / "timeline.json"
         _write_immutable_json(timeline, {

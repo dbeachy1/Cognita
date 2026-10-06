@@ -49,6 +49,23 @@ def _docx(text: str) -> bytes:
     return output.getvalue()
 
 
+def _tagged_docx_with_audio_tag() -> bytes:
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{W}"><w:body><w:p>'
+        '<w:r><w:t>repeat </w:t></w:r>'
+        '<w:r><w:rPr><w:rStyle w:val="CognitaAudioTag"/></w:rPr><w:t>[tag]</w:t></w:r>'
+        '<w:r><w:t> repeat</w:t></w:r>'
+        '</w:p><w:sectPr/></w:body></w:document>'
+    ).encode()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        archive.writestr("word/document.xml", xml)
+        archive.writestr("word/styles.xml", f'<w:styles xmlns:w="{W}"><w:style w:type="character" w:styleId="CognitaAudioTag"/></w:styles>')
+    return output.getvalue()
+
+
 def _wav_pcm(samples: bytes, *, channels: int = 1, rate: int = 8000) -> bytes:
     """Small native WAVE fixture; the service must retain these bytes verbatim."""
     bits = 16
@@ -129,6 +146,55 @@ def _inspect(service: BookService) -> dict:
         "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
     })
     return service.inspect(request)
+
+
+def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
+    service, _, _ = _fixture(tmp_path)
+    prose = _docx("repeat  repeat")
+    tagged = _tagged_docx_with_audio_tag()
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(prose).hexdigest()
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    inspected = _inspect(service)
+    assert inspected["speech_text"] == "repeat [tag] repeat"
+    request = PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "prepare-exact-tags", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "repeated", "start": 0, "end": len(inspected["speech_text"]), "request_spec": None}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    })
+    prepared, replayed = service.prepare(request, owner_key="principal:fixture")
+    assert not replayed
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(prepared["snapshot_id"])
+    assert snapshot is not None
+    payload = snapshot["payload"]
+    assert payload["tag_deletion_spans"] == [[7, 12]]
+    chunk = payload["result"]["chunks"][0]
+    spoken = "repeat  repeat"
+    assert chunk["spoken_text_sha256"] == hashlib.sha256(spoken.encode()).hexdigest()
+    assert chunk["opening_phrase"] == spoken and chunk["closing_phrase"] == spoken
+
+    # Frozen read output remains tied to the prepared byte pair after Word
+    # changes the live tagged file, and the deleted occurrence is exact.
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(_docx("changed live copy"))
+    chapter = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "snapshot_id": prepared["snapshot_id"], "include_text": True,
+    }))
+    assert chapter["returned_texts"][0]["prompt"]["text"] == "repeat [tag] repeat"
+    assert chapter["returned_texts"][0]["spoken_text"]["text"] == spoken
 
 
 def test_bootstrap_inspect_is_read_only_and_prepare_receipt_survives_restart(tmp_path):
