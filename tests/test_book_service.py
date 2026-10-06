@@ -3125,6 +3125,34 @@ def test_pcm_build_budget_refuses_before_assembly(tmp_path, monkeypatch):
     assert not builds.exists() or list(builds.iterdir()) == []
 
 
+def test_pcm_build_budget_peak_counts_same_filesystem_rename_once(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared = _prepare_test_plan(service, "one-pcm-prepare", prose, tagged, None, [
+        {"chunk_id": "one-pcm", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    take = _import_native_take(service, prepared, "one-pcm", operation_prefix="one-pcm-take")
+    queued, _ = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "one-pcm-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": "one-pcm", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    # Four mono 16-bit frames plus the fixed immutable-facts allowance.  This
+    # fits one PCM master but would fail the former two-master estimate.
+    _, _, layout = service._enabled_layout()
+    monkeypatch.setattr(service, "_media_free_bytes", lambda _layout: layout.storage.reserve_bytes + 1_048_576 + 8)
+    service.run_build_job(queued["job_id"])
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "succeeded", completed
+    assert completed["result"]["outputs"][0]["size_bytes"] == 8
+
+
 def test_pcm_build_final_budget_recheck_cleans_unregistered_outputs(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
     spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
@@ -3163,6 +3191,36 @@ def test_pcm_build_final_budget_recheck_cleans_unregistered_outputs(tmp_path):
     builds = tmp_path / "Audiobook/Chapters/1/builds"
     assert not builds.exists() or list(builds.iterdir()) == []
     assert callbacks == ["acquired", "released"]
+
+
+def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_directory(tmp_path, caplog):
+    build_dir = tmp_path / "Audiobook/Chapters/1/builds/owned"
+    build_dir.mkdir(parents=True)
+    known = build_dir / "master.pcm"
+    unexpected = build_dir / "operator-note.txt"
+    known.write_bytes(b"known")
+    unexpected.write_bytes(b"preserve")
+    identity = service_module._owned_directory_identity(build_dir)
+    with caplog.at_level("ERROR", logger="cognita.books"):
+        service_module._cleanup_owned_build_files(
+            tmp_path, build_dir, identity, ("master.pcm",),
+        )
+    assert not known.exists()
+    assert unexpected.read_bytes() == b"preserve"
+    assert "Owned build cleanup incomplete" in caplog.text
+    assert str(unexpected) in caplog.text
+
+    unexpected.unlink()
+    build_dir.rmdir()
+    build_dir.mkdir()
+    replacement = build_dir / "master.pcm"
+    replacement.write_bytes(b"replacement")
+    with caplog.at_level("ERROR", logger="cognita.books"):
+        service_module._cleanup_owned_build_files(
+            tmp_path, build_dir, identity, ("master.pcm",),
+        )
+    assert replacement.read_bytes() == b"replacement"
+    assert "Owned build cleanup refused" in caplog.text
 
 
 def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):

@@ -2684,12 +2684,13 @@ class BookService:
             frame_count=frame_count, sample_rate_hz=target.sample_rate_hz,
             bitrate_kbps=target.mp3_bitrate_kbps,
         ) if emit_mp3 else 0)
-        # Master, listening output and compact immutable JSON facts remain
-        # together. The PCM stage overlaps its published master at peak.
+        # ``os.replace`` renames the same-filesystem PCM stage into place, so
+        # it does not allocate a second master. The peak is one master plus
+        # the bounded listening output and immutable fact files.
         facts_bytes = 1_048_576
         self._check_media_budget(
             layout, incoming_retained_bytes=pcm_bytes + mp3_bytes + facts_bytes,
-            additional_free_bytes=pcm_bytes * 2 + mp3_bytes + facts_bytes,
+            additional_free_bytes=pcm_bytes + mp3_bytes + facts_bytes,
         )
 
     def _check_mp3_build_preflight(self, layout, sources: list[Mp3Source]) -> None:
@@ -3577,6 +3578,7 @@ class BookService:
         relative = f"{chapter.audio_root}/builds/{build_id}"
         _mkdir_safe(self.root, relative)
         directory = _path(self.root, relative)
+        directory_identity = _owned_directory_identity(directory)
         manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
         write_ffconcat_manifest([source.filepath for source in sources], manifest)
         stream_copy_argv = build_test_mp3_stream_copy_argv(
@@ -3653,7 +3655,10 @@ class BookService:
             "request_plan_sha256": pinned["request_plan_sha256"], "input_take_ids": pinned["take_ids"],
             "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result},
             before_finalize=before_finalize, after_finalize=after_finalize,
-            cleanup=lambda: _cleanup_owned_build_directory(directory))
+            cleanup=lambda: _cleanup_owned_build_files(
+                self.root, directory, directory_identity,
+                ("inputs.ffconcat", "listening.mp3", "timeline.json", "build.json"),
+            ))
 
     def run_build_job(self, job_id: str, *, before_finalize: Callable[[], None] | None = None,
                       after_finalize: Callable[[], None] | None = None) -> None:
@@ -3699,6 +3704,7 @@ class BookService:
             build_relative = f"{chapter.audio_root}/builds/{build_id}"
             _mkdir_safe(self.root, build_relative)
             build_dir = _path(self.root, build_relative)
+            build_directory_identity = _owned_directory_identity(build_dir)
             pcm = build_dir / "master.pcm"
             pcm_stage = build_dir / "master.pcm.part"
             timeline = build_dir / "timeline.json"
@@ -3799,7 +3805,10 @@ class BookService:
                 "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "was_accepted": False, "result": result,
             }, before_finalize=before_finalize, after_finalize=after_finalize,
-            cleanup=lambda: _cleanup_owned_build_directory(build_dir))
+            cleanup=lambda: _cleanup_owned_build_files(
+                self.root, build_dir, build_directory_identity,
+                ("master.pcm.part", "timeline.json.part", "master.pcm", "timeline.json", "listening.mp3", "build.json"),
+            ))
         except (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, OSError, ProjectStateError) as exc:
             reason = exc.reason if isinstance(exc, BookServiceError) else (
                 exc.code if isinstance(exc, (MediaValidationError, AssemblyError, ProcessRunnerError)) else (
@@ -3863,6 +3872,7 @@ class BookService:
         self._check_pcm_build_preflight(layout, sources, gaps, target, emit_mp3=True)
         _mkdir_safe(self.root, root_relative)
         build_dir = _path(self.root, root_relative)
+        build_directory_identity = _owned_directory_identity(build_dir)
         pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
         timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
         with pcm_stage.open("xb") as output:
@@ -3945,7 +3955,10 @@ class BookService:
             "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
             "dependencies": dependencies, "result": result,
         }, before_finalize=before_finalize, after_finalize=after_finalize,
-        cleanup=lambda: _cleanup_owned_build_directory(build_dir))
+        cleanup=lambda: _cleanup_owned_build_files(
+            self.root, build_dir, build_directory_identity,
+            ("master.pcm.part", "timeline.json.part", "master.pcm", "timeline.json", "listening.mp3", "build.json"),
+        ))
 
     def commit_build(self, request: dto.CommitBuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         state, _, layout = self._enabled_layout()
@@ -4299,26 +4312,53 @@ def _mkdir_safe(root: Path, relative: str) -> None:
             raise BookServiceError("permission_denied", "Managed snapshot directories cannot contain links.")
 
 
-def _cleanup_owned_build_directory(directory: Path) -> None:
-    """Remove an unregistered UUID build directory after final admission fails."""
+def _owned_directory_identity(directory: Path) -> tuple[Path, int, int]:
+    """Capture the exact directory that this job created for later cleanup."""
+    facts = directory.lstat()
+    if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
+        raise BookServiceError("permission_denied", "The owned build directory is unsafe.")
+    return directory.resolve(strict=True), facts.st_dev, facts.st_ino
+
+
+def _cleanup_owned_build_files(project_root: Path, directory: Path, identity: tuple[Path, int, int],
+                               filenames: tuple[str, ...]) -> None:
+    """Remove only known artifacts after unregistered build publication fails."""
     try:
-        if not directory.exists() or directory.is_symlink():
-            return
-        for current, directories, filenames in os.walk(directory, topdown=False, followlinks=False):
-            current_path = Path(current)
-            for filename in filenames:
-                candidate = current_path / filename
-                if not candidate.is_symlink():
-                    candidate.unlink(missing_ok=True)
-            for name in directories:
-                candidate = current_path / name
-                if not candidate.is_symlink():
-                    candidate.rmdir()
-        directory.rmdir()
-    except OSError:
-        # The durable job failure remains authoritative. Do not broaden cleanup
-        # beyond the exact job-owned directory if another local fault occurs.
+        root = project_root.resolve(strict=True)
+        facts = directory.lstat()
+        resolved = directory.resolve(strict=True)
+        expected_path, expected_device, expected_inode = identity
+        if (stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode)
+                or resolved != expected_path
+                or (facts.st_dev, facts.st_ino) != (expected_device, expected_inode)):
+            raise OSError("owned build directory identity changed")
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        log.error("Owned build cleanup refused path=%s error=%s", directory, exc)
         return
+    remaining: list[str] = []
+    for filename in filenames:
+        candidate = directory / filename
+        try:
+            candidate.relative_to(directory)
+            facts = candidate.lstat()
+            if stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode):
+                raise OSError("owned artifact is not a regular file")
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            remaining.append(f"{candidate}:{exc}")
+    try:
+        directory.rmdir()
+    except OSError as exc:
+        remaining.append(f"{directory}:{exc}")
+        try:
+            remaining.extend(str(item) for item in directory.iterdir())
+        except OSError as listing_error:
+            remaining.append(f"{directory}:{listing_error}")
+    if remaining:
+        log.error("Owned build cleanup incomplete paths=%s", ";".join(remaining))
 
 
 async def _media_tool_version(executable: Path) -> str:
