@@ -489,12 +489,12 @@ def main() -> None:
             first_acceptances[chapter_id] = chapter_build(
                 service, chapter_id, prepared_by_chapter[chapter_id],
                 takes_by_chapter[chapter_id], f"build-{chapter_id}-v1", None,
-                gaps=[{"before_id": f"{chapter_id}-closing", "sample_frames": 73}],
+                gaps=[{"before_id": f"{chapter_id}-closing", "sample_frames": "73"}],
             )
 
         book_gaps = [
-            {"before_id": "chapter-one", "sample_frames": 220},
-            {"before_id": "chapter-two", "sample_frames": 441},
+            {"before_id": "chapter-one", "sample_frames": "220"},
+            {"before_id": "chapter-two", "sample_frames": "441"},
         ]
         initial_book = book_build(service, "build-whole-book-v1", None, gaps=book_gaps)
         initial_timeline_path = service.root / initial_book["build"]["timeline_filepath"]
