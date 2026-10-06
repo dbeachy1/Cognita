@@ -1521,6 +1521,9 @@ def test_durable_provider_facts_preserve_public_nonsecret_structures():
 @pytest.mark.parametrize("metadata", [
     {"nested": {"Authorization": "Bearer synthetic_secret"}},
     {"download_url": "https://media.example/audio?signature=synthetic_secret"},
+    {"download_url": "https://example.test/audio?api_key=synthetic_fixture"},
+    {"download_url": "https://example.test/audio?X-Amz-Credential=synthetic_fixture"},
+    {"signed_download_url": "https://example.test/audio?sig=synthetic_fixture"},
 ])
 def test_generation_update_rejects_credentials_before_sqlite_mutation(tmp_path, metadata):
     service, _prose, _tagged, _spec, _prepared, request = _generation_cas_fixture(tmp_path)
@@ -1617,7 +1620,7 @@ def test_prepare_keeps_nonsecret_context_fingerprinted_and_retained(tmp_path):
         "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
         "parameters": {"format": "pcm", "public_url": "https://example.org/reference"},
         "context_fields": {
-            "previous_text": "Prior prose with a literal https://example.org/?signature=not-transport",
+            "previous_text": "Prior prose with a literal https://example.test/audio?api_key=synthetic_fixture",
             "additional": {"provider_id": "provider-7", "attempt": 1},
         },
     }

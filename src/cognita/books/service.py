@@ -63,19 +63,32 @@ class BookServiceError(ValueError):
         self.outcome = outcome
 
 
-_SECRET_KEYS = frozenset({
+def _provider_fact_key(value: str) -> str:
+    """Normalize conventional JSON/query key separators without matching substrings."""
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+_SECRET_KEYS = frozenset(map(_provider_fact_key, {
     "authorization", "proxy_authorization", "cookie", "set_cookie", "x_api_key",
     "api_key", "apikey", "access_token", "refresh_token", "client_secret",
-})
-_URL_KEYS = frozenset({"url", "uri", "download_url", "signed_url", "endpoint"})
-_SIGNED_QUERY_KEYS = frozenset({
-    "signature", "sig", "token", "access_token", "x_amz_signature", "x_goog_signature",
-})
+}))
+_URL_KEYS = frozenset(map(_provider_fact_key, {
+    "url", "uri", "endpoint",
+    "download_url", "download_uri", "signed_url", "signed_uri",
+    "signed_download_url", "signed_download_uri",
+    "presigned_url", "presigned_uri",
+    "presigned_download_url", "presigned_download_uri",
+}))
+_SIGNED_QUERY_KEYS = _SECRET_KEYS | frozenset(map(_provider_fact_key, {
+    "signature", "sig", "token",
+    "x_amz_signature", "x_amz_credential", "x_amz_security_token",
+    "x_goog_signature", "x_goog_credential", "x_goog_security_token",
+}))
 
 
 def _validate_durable_provider_facts(value: Any, *, key: str | None = None) -> None:
     """Reject explicit transport credentials before provider facts become durable."""
-    normalized = (key or "").replace("-", "_").casefold()
+    normalized = _provider_fact_key(key or "")
     if normalized in _SECRET_KEYS:
         raise BookServiceError("validation_failed", "Provider evidence cannot contain transport credentials.")
     if isinstance(value, dict):
@@ -90,7 +103,7 @@ def _validate_durable_provider_facts(value: Any, *, key: str | None = None) -> N
         parsed = urlsplit(value)
         if parsed.username is not None or parsed.password is not None:
             raise BookServiceError("validation_failed", "Provider evidence cannot contain credential URLs.")
-        if any(name.replace("-", "_").casefold() in _SIGNED_QUERY_KEYS
+        if any(_provider_fact_key(name) in _SIGNED_QUERY_KEYS
                for name, _item in parse_qsl(parsed.query, keep_blank_values=True)):
             raise BookServiceError("validation_failed", "Provider evidence cannot contain signed transport URLs.")
 
