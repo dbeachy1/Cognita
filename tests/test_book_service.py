@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import io
 import json
+import math
 import struct
 import threading
 import zipfile
@@ -1162,6 +1163,95 @@ def test_book_timestamp_uses_pinned_child_identity_and_old_dependency_fallback(t
         assert match["chunk_ids"] == ["main"]
         assert match["matched_take_ids"] == [take["take_id"]]
         assert match["current_take_ids"] == [take["take_id"]]
+
+
+@pytest.mark.parametrize("sample_rate", [8_000, 16_000, 44_100, 48_000])
+def test_timestamp_frame_preserves_json_sample_boundaries_and_interior_values(sample_rate):
+    boundary = json.loads(json.dumps(15 / sample_rate))
+    assert service_module._timestamp_frame(boundary, sample_rate) == 15
+    assert service_module._timestamp_frame(math.nextafter(boundary, 0.0), sample_rate) == 14
+    assert service_module._timestamp_frame((14.75 / sample_rate), sample_rate) == 14
+
+
+def test_chapter_and_nested_book_timestamp_frame_boundaries_at_44100(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="timestamp-44100")
+    accepted = _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="timestamp-44100", expected_head=None,
+    )
+    chapter_build_id = accepted["accepted_build_id"]
+    nested_book = _persist_book_timeline_fixture(
+        service, state, chapter_build_id, build_id="timestamp-44100-book", nested=True,
+    )
+    chapter_build = state.build(chapter_build_id)
+    assert chapter_build is not None
+    chapter_timeline_path = tmp_path / chapter_build["result"]["timeline_filepath"]
+    chapter_timeline = {
+        "sample_rate_hz": 44_100, "frame_count": "16", "channels": 1,
+        "encoding": "signed_integer", "storage_bits": 16,
+        "entries": [
+            {"kind": "audio", "source_id": "main", "start_frame": "0", "end_frame": "15",
+             "take_id": take["take_id"]},
+            {"kind": "silence", "source_id": "gap", "start_frame": "15", "end_frame": "16"},
+        ],
+    }
+    chapter_timeline_path.write_text(json.dumps(chapter_timeline), encoding="utf-8")
+    exact_boundary = json.loads(json.dumps(15 / 44_100))
+    chapter_boundary = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "query": {"kind": "timestamp", "build_id": chapter_build_id,
+                                             "seconds": exact_boundary},
+    }))
+    assert chapter_boundary["matches"][0]["segment_kind"] == "silence"
+    with pytest.raises(BookServiceError) as chapter_end:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "timestamp", "build_id": chapter_build_id,
+                                                 "seconds": json.loads(json.dumps(16 / 44_100))},
+        }))
+    assert chapter_end.value.reason == "past_end"
+    chapter_timeline["frame_count"] = "15"
+    chapter_timeline_path.write_text(json.dumps(chapter_timeline), encoding="utf-8")
+    with pytest.raises(BookServiceError) as chapter_exact_end:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "timestamp", "build_id": chapter_build_id,
+                                                 "seconds": exact_boundary},
+        }))
+    assert chapter_exact_end.value.reason == "past_end"
+
+    book_timeline_path = tmp_path / nested_book["timeline_filepath"]
+    book_timeline = json.loads(book_timeline_path.read_text(encoding="utf-8"))
+    book_entry = book_timeline["entries"][0]
+    book_timeline.update({"sample_rate_hz": 44_100, "frame_count": "16"})
+    book_entry.update({
+        "start_frame": "0", "end_frame": "16",
+        "child_entries": [
+            {"kind": "audio", "source_id": "main", "start_frame": "0", "end_frame": "15",
+             "take_id": take["take_id"]},
+            {"kind": "silence", "source_id": "gap", "start_frame": "15", "end_frame": "16"},
+        ],
+    })
+    book_timeline_path.write_text(json.dumps(book_timeline), encoding="utf-8")
+    book_boundary = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "query": {"kind": "timestamp", "build_id": nested_book["build_id"],
+                                             "seconds": exact_boundary},
+    }))
+    assert book_boundary["matches"][0]["segment_kind"] == "silence"
+    with pytest.raises(BookServiceError) as book_end:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "timestamp", "build_id": nested_book["build_id"],
+                                                 "seconds": json.loads(json.dumps(16 / 44_100))},
+        }))
+    assert book_end.value.reason == "past_end"
+    book_timeline["frame_count"] = "15"
+    book_timeline_path.write_text(json.dumps(book_timeline), encoding="utf-8")
+    with pytest.raises(BookServiceError) as book_exact_end:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "timestamp", "build_id": nested_book["build_id"],
+                                                 "seconds": exact_boundary},
+        }))
+    assert book_exact_end.value.reason == "past_end"
 
 
 def test_whole_book_pins_serialized_chapter_frame_count_with_internal_silence(tmp_path, monkeypatch):
@@ -4093,7 +4183,7 @@ def test_pcm_build_budget_peak_counts_same_filesystem_rename_once(tmp_path, monk
     assert completed["result"]["outputs"][0]["size_bytes"] == 8
 
 
-def test_pcm_build_final_budget_recheck_cleans_unregistered_outputs(tmp_path):
+def test_pcm_build_final_budget_recheck_preserves_replaced_output(tmp_path, caplog):
     service, prose, tagged = _fixture(tmp_path)
     spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
             "voice_id": "voice", "parameters": {}, "context_fields": {}}
@@ -4113,24 +4203,65 @@ def test_pcm_build_final_budget_recheck_cleans_unregistered_outputs(tmp_path):
     }), owner_key="principal:fixture")
     layout_path = tmp_path / "Project Files/Book_Layout.json"
     callbacks: list[str] = []
+    replacement_bytes = b"external replacement"
+    replacement_paths: list[Path] = []
 
     def lower_quota_under_finalization():
         callbacks.append("acquired")
+        build_dirs = list((tmp_path / "Audiobook/Chapters/1/builds").iterdir())
+        assert len(build_dirs) == 1
+        master = build_dirs[0] / "master.pcm"
+        master.unlink()
+        master.write_bytes(replacement_bytes)
+        replacement_paths.append(master)
         layout = json.loads(layout_path.read_text(encoding="utf-8"))
         layout["storage"]["quota_bytes"] = 1
         layout["storage"]["reserve_bytes"] = 0
         layout_path.write_text(json.dumps(layout), encoding="utf-8")
 
-    service.run_build_job(
-        queued["job_id"], before_finalize=lower_quota_under_finalization,
-        after_finalize=lambda: callbacks.append("released"),
-    )
+    with caplog.at_level("ERROR", logger="cognita.books"):
+        service.run_build_job(
+            queued["job_id"], before_finalize=lower_quota_under_finalization,
+            after_finalize=lambda: callbacks.append("released"),
+        )
     result = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
     assert result["state"] == "failed"
     assert result["error"]["reason"] == "insufficient_storage"
-    builds = tmp_path / "Audiobook/Chapters/1/builds"
-    assert not builds.exists() or list(builds.iterdir()) == []
+    assert replacement_paths[0].read_bytes() == replacement_bytes
+    assert str(replacement_paths[0]) in caplog.text
+    assert list(replacement_paths[0].parent.iterdir()) == [replacement_paths[0]]
     assert callbacks == ["acquired", "released"]
+
+
+def test_pcm_build_missing_ffmpeg_cleans_unregistered_pcm_and_timeline(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="missing-ffmpeg-cleanup")
+    accepted = _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="missing-ffmpeg-baseline", expected_head=None,
+    )
+    builds = tmp_path / "Audiobook/Chapters/1/builds"
+    existing_builds = set(builds.iterdir())
+    queued, _ = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "missing-ffmpeg-cleanup-build",
+        "expected_head_revision": accepted["head_revision"],
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": "main", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [], "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    service.run_build_job(queued["job_id"])
+    failed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert failed["state"] == "failed"
+    assert failed["error"]["reason"] == "media_tool_unavailable"
+    assert set(builds.iterdir()) == existing_builds
+    head = state.chapter_head("ch1", '{"kind":"production"}')
+    assert head is not None and head["accepted_build_id"] == accepted["accepted_build_id"]
 
 
 def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_directory(tmp_path, caplog):
@@ -4141,6 +4272,7 @@ def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_dir
     known.write_bytes(b"known")
     unexpected.write_bytes(b"preserve")
     identity = service_module._owned_directory_identity(build_dir)
+    service_module._capture_owned_build_file(known, identity)
     try:
         with caplog.at_level("ERROR", logger="cognita.books"):
             service_module._cleanup_owned_build_files(
@@ -4151,7 +4283,18 @@ def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_dir
         assert "Owned build cleanup incomplete" in caplog.text
         assert str(unexpected) in caplog.text
 
+        replaced = build_dir / "replaced.pcm"
+        replaced.write_bytes(b"original")
+        service_module._capture_owned_build_file(replaced, identity)
+        replaced.unlink()
+        replaced.write_bytes(b"replacement")
+        with caplog.at_level("ERROR", logger="cognita.books"):
+            service_module._cleanup_owned_build_files(tmp_path, build_dir, identity, ("replaced.pcm",))
+        assert replaced.read_bytes() == b"replacement"
+        assert str(replaced) in caplog.text
+
         unexpected.unlink()
+        replaced.unlink()
         build_dir.rmdir()
         build_dir.mkdir()
         replacement = build_dir / "master.pcm"
@@ -4162,6 +4305,20 @@ def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_dir
             )
         assert replacement.read_bytes() == b"replacement"
         assert "Owned build cleanup refused" in caplog.text
+    finally:
+        identity.close()
+
+
+def test_owned_build_cleanup_removes_unchanged_created_output(tmp_path):
+    build_dir = tmp_path / "Audiobook/Chapters/1/builds/owned-success"
+    build_dir.mkdir(parents=True)
+    owned = build_dir / "build.json"
+    owned.write_bytes(b"task-owned")
+    identity = service_module._owned_directory_identity(build_dir)
+    service_module._capture_owned_build_file(owned, identity)
+    try:
+        service_module._cleanup_owned_build_files(tmp_path, build_dir, identity, ("build.json",))
+        assert not build_dir.exists()
     finally:
         identity.close()
 

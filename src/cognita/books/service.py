@@ -16,6 +16,7 @@ import os
 import shutil
 import stat
 import uuid
+from decimal import Decimal, ROUND_FLOOR
 from urllib.parse import parse_qsl, urlsplit
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,23 @@ class BookServiceError(ValueError):
 
 
 @dataclass(slots=True)
+class _OwnedBuildFileIdentity:
+    """Retain one created file object until its build cleanup decision is made."""
+
+    file_identity: tuple[int, int]
+    handle: int
+    windows_handle: bool
+
+    def close(self) -> None:
+        if self.handle != -1:
+            handle, self.handle = self.handle, -1
+            if self.windows_handle:
+                _close_windows_handle(handle)
+            else:
+                os.close(handle)
+
+
+@dataclass(slots=True)
 class _OwnedDirectoryIdentity:
     """Keep the directory object alive so its filesystem ID cannot be recycled."""
 
@@ -73,6 +91,67 @@ class _OwnedDirectoryIdentity:
     file_identity: tuple[int, int]
     handle: int
     windows_handle: bool
+    files: dict[str, _OwnedBuildFileIdentity]
+
+    def capture_file(self, path: Path, file_descriptor: int | None = None) -> None:
+        """Pin one created artifact object so its filesystem ID cannot be recycled."""
+        if os.name == "nt":
+            current = path.lstat()
+            if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
+                raise OSError("owned build artifact is not a regular file")
+            source_identity = None
+            if file_descriptor is not None:
+                import msvcrt
+
+                source_identity = _windows_directory_file_identity(
+                    int(msvcrt.get_osfhandle(file_descriptor)),
+                )
+            handle, file_identity = _open_windows_artifact_identity(path)
+            if source_identity is not None and source_identity != file_identity:
+                _close_windows_handle(handle)
+                raise OSError("owned build artifact changed while its identity was captured")
+            owned_file = _OwnedBuildFileIdentity(file_identity, handle, True)
+        else:
+            if file_descriptor is None:
+                flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                handle = os.open(path, flags)
+            else:
+                handle = os.dup(file_descriptor)
+            try:
+                facts = os.fstat(handle)
+                if not stat.S_ISREG(facts.st_mode):
+                    raise OSError("owned build artifact is not a regular file")
+                current = path.lstat()
+                if (not stat.S_ISREG(current.st_mode)
+                        or (current.st_dev, current.st_ino) != (facts.st_dev, facts.st_ino)):
+                    raise OSError("owned build artifact changed while its identity was captured")
+            except BaseException:
+                os.close(handle)
+                raise
+            owned_file = _OwnedBuildFileIdentity((facts.st_dev, facts.st_ino), handle, False)
+        previous = self.files.pop(path.name, None)
+        if previous is not None:
+            previous.close()
+        self.files[path.name] = owned_file
+
+    def matches_file(self, path: Path) -> bool:
+        """Prove a cleanup target is still the file object pinned at creation."""
+        expected = self.files.get(path.name)
+        if expected is None or expected.handle == -1:
+            raise OSError("owned build artifact is not a regular file")
+        if expected.windows_handle:
+            facts = path.lstat()
+            if stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode):
+                return False
+            handle, current = _open_windows_artifact_identity(path)
+            try:
+                pinned = _windows_directory_file_identity(expected.handle)
+                return current == pinned
+            finally:
+                _close_windows_handle(handle)
+        facts = path.lstat()
+        pinned = os.fstat(expected.handle)
+        return stat.S_ISREG(facts.st_mode) and (facts.st_dev, facts.st_ino) == (pinned.st_dev, pinned.st_ino)
 
     def matches(self, directory: Path) -> bool:
         if self.windows_handle:
@@ -91,6 +170,9 @@ class _OwnedDirectoryIdentity:
         return file_identity == self.file_identity
 
     def close(self) -> None:
+        for owned_file in self.files.values():
+            owned_file.close()
+        self.files.clear()
         if self.handle == -1:
             return
         handle, self.handle = self.handle, -1
@@ -98,6 +180,21 @@ class _OwnedDirectoryIdentity:
             _close_windows_handle(handle)
         else:
             os.close(handle)
+
+
+def _timestamp_frame(seconds: float, sample_rate_hz: int) -> int:
+    """Map public seconds to a half-open PCM frame without float-rounding loss.
+
+    JSON floats produced from an exact ``frame / rate`` timestamp sometimes
+    multiply to just below that frame. Snap only when the supplied float is
+    exactly the same representation as ``nearest_frame / rate``; adjacent
+    interior values remain in the preceding frame.
+    """
+    approximate = seconds * sample_rate_hz
+    nearest = round(approximate)
+    if seconds == nearest / sample_rate_hz:
+        return nearest
+    return int((Decimal(str(seconds)) * sample_rate_hz).to_integral_value(rounding=ROUND_FLOOR))
 
 
 def _provider_fact_key(value: str) -> str:
@@ -2653,7 +2750,7 @@ class BookService:
             try:
                 timeline = json.loads(_path(self.root, timeline_path).read_text(encoding="utf-8"))
                 rate = int(timeline["sample_rate_hz"])
-                frame = int(request.query.seconds * rate)
+                frame = _timestamp_frame(request.query.seconds, rate)
                 entries = timeline["entries"]
             except (BookServiceError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 raise BookServiceError("state_unavailable", "The immutable build timeline could not be read.") from exc
@@ -4107,6 +4204,7 @@ class BookService:
         owned_directories.append(directory_identity)
         manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
         write_ffconcat_manifest([source.filepath for source in sources], manifest)
+        _capture_owned_build_file(manifest, directory_identity)
         stream_copy_argv = build_test_mp3_stream_copy_argv(
             ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output,
             metadata=dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
@@ -4132,6 +4230,7 @@ class BookService:
             decoder.packet_order_checked and decoder.decoder_checked and decoder.boundaries_checked
         ):
             raise BookServiceError("validation_failed", "MP3 decoder and join-boundary verification did not complete.")
+        _capture_owned_build_file(output, directory_identity)
         decoder_facts = asdict(decoder)
         for fact, source in zip(decoder_facts["sources"], sources, strict=True):
             fact["filepath"] = str(source.filepath.relative_to(self.root))
@@ -4173,9 +4272,10 @@ class BookService:
             "packet_count": proof.packet_count, "ordered_packets_sha256": proof.ordered_packets_sha256,
             "delay_padding_verified": decoder.boundaries_checked,
             "seam_quality_assessed": False, "decoder_verification": decoder_facts,
-        })
+        }, owned_identity=directory_identity)
         result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256(recipe), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
-        _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
+        _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result, "recipe": recipe},
+                              owned_identity=directory_identity)
         self._finish_build_success(state, job_id, {"scope": "chapter", "build_id": build_id,
             "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"], "snapshot_id": pinned["snapshot_id"],
             "request_plan_sha256": pinned["request_plan_sha256"], "input_take_ids": pinned["take_ids"],
@@ -4196,6 +4296,7 @@ class BookService:
         self._active_build_jobs.add(job_id)
         staged: list[tuple[Path, _OwnedDirectoryIdentity]] = []
         owned_directories: list[_OwnedDirectoryIdentity] = []
+        build_succeeded = False
         try:
             pinned = claimed["payload"]
             if pinned.get("scope") == "book":
@@ -4203,12 +4304,14 @@ class BookService:
                     job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize,
                     owned_directories=owned_directories,
                 )
+                build_succeeded = True
                 return
             if pinned.get("mode") == "test_mp3_stream_copy":
                 self._run_test_mp3_build(
                     job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize,
                     owned_directories=owned_directories,
                 )
+                build_succeeded = True
                 return
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
@@ -4245,6 +4348,7 @@ class BookService:
             timeline_stage = build_dir / "timeline.json.part"
             staged.extend([(pcm_stage, build_directory_identity), (timeline_stage, build_directory_identity)])
             with pcm_stage.open("xb") as output:
+                build_directory_identity.capture_file(pcm_stage, output.fileno())
                 assembled = assemble_pcm_stream(sources, gaps, target, output)
                 output.flush()
                 os.fsync(output.fileno())
@@ -4262,11 +4366,14 @@ class BookService:
                 "frame_count": assembled.timeline.frame_count, "entries": _data(assembled.timeline.entries),
             }
             with timeline_stage.open("x", encoding="utf-8") as output:
+                build_directory_identity.capture_file(timeline_stage, output.fileno())
                 json.dump(timeline_value, output, ensure_ascii=False, separators=(",", ":"))
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(pcm_stage, pcm)
+            _move_owned_build_file_identity(pcm_stage, pcm, build_directory_identity)
             os.replace(timeline_stage, timeline)
+            _move_owned_build_file_identity(timeline_stage, timeline, build_directory_identity)
             staged.clear()
             output_data = {
                 "kind": "pcm_master", "filepath": f"{build_relative}/master.pcm",
@@ -4297,6 +4404,7 @@ class BookService:
                 encoded = inspect_media_file(mp3, ffprobe=probe)
                 if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
                     raise BookServiceError("media_mismatch", "The encoder output was not verified as MP3 audio.")
+                _capture_owned_build_file(mp3, build_directory_identity)
                 outputs.append({
                     "kind": "mp3_download", "filepath": f"{build_relative}/listening.mp3",
                     "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
@@ -4332,17 +4440,19 @@ class BookService:
                                "sample_or_packet_verification": True, "errors": []},
                 "needs_listening_review": True,
             }, strict=True).model_dump(mode="json", exclude_unset=True)
-            _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
+            _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe},
+                                  owned_identity=build_directory_identity)
             self._finish_build_success(state, job_id, {
                 "scope": "chapter", "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
                 "snapshot_id": pinned["snapshot_id"], "request_plan_sha256": pinned["request_plan_sha256"],
                 "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "was_accepted": False, "result": result,
             }, before_finalize=before_finalize, after_finalize=after_finalize,
-            cleanup=lambda: _cleanup_owned_build_files(
+                cleanup=lambda: _cleanup_owned_build_files(
                 self.root, build_dir, build_directory_identity,
-                ("master.pcm.part", "timeline.json.part", "master.pcm", "timeline.json", "listening.mp3", "build.json"),
-            ))
+                    ("master.pcm.part", "timeline.json.part", "master.pcm", "timeline.json", "listening.mp3", "build.json"),
+                ))
+            build_succeeded = True
         except (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, OSError, ProjectStateError) as exc:
             reason = exc.reason if isinstance(exc, BookServiceError) else (
                 exc.code if isinstance(exc, (MediaValidationError, AssemblyError, ProcessRunnerError)) else (
@@ -4353,6 +4463,12 @@ class BookService:
                                        message=str(exc) if isinstance(exc, (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, ProjectStateError)) else "The local build could not complete safely.",
                                        cancelled=reason == "cancelled")
         finally:
+            if not build_succeeded:
+                for identity in owned_directories:
+                    _cleanup_owned_build_files(
+                        getattr(self, "root", identity.resolved_path), identity.resolved_path,
+                        identity, tuple(identity.files),
+                    )
             for path, identity in staged:
                 _unlink_owned_build_stage(path, identity)
             _close_owned_directory_identities(owned_directories)
@@ -4419,6 +4535,7 @@ class BookService:
         pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
         timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
         with pcm_stage.open("xb") as output:
+            build_directory_identity.capture_file(pcm_stage, output.fileno())
             assembled = assemble_pcm_stream(
                 sources, gaps, target, output,
             )
@@ -4452,11 +4569,14 @@ class BookService:
                           "storage_bits": assembled.timeline.storage_bits, "frame_count": assembled.timeline.frame_count,
                           "entries": timeline_entries}
         with timeline_stage.open("x", encoding="utf-8") as output:
+            build_directory_identity.capture_file(timeline_stage, output.fileno())
             json.dump(timeline_value, output, ensure_ascii=False, separators=(",", ":"))
             output.flush()
             os.fsync(output.fileno())
         os.replace(pcm_stage, pcm)
+        _move_owned_build_file_identity(pcm_stage, pcm, build_directory_identity)
         os.replace(timeline_stage, timeline)
+        _move_owned_build_file_identity(timeline_stage, timeline, build_directory_identity)
         outputs = [{"kind": "pcm_master", "filepath": f"{root_relative}/master.pcm",
                     "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media}]
         ffmpeg, ffprobe = self._registered_media_executables()
@@ -4477,6 +4597,7 @@ class BookService:
         encoded = inspect_media_file(mp3, ffprobe=asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0)))
         if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
             raise BookServiceError("media_mismatch", "The book encoder output was not verified as MP3 audio.")
+        _capture_owned_build_file(mp3, build_directory_identity)
         outputs.append({"kind": "mp3_download", "filepath": f"{root_relative}/listening.mp3",
                         "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
                         "media": encoded.media.model_dump(mode="json")})
@@ -4507,7 +4628,8 @@ class BookService:
                            "sample_or_packet_verification": True, "errors": []},
             "needs_listening_review": True,
         }, strict=True).model_dump(mode="json", exclude_unset=True)
-        _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
+        _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe},
+                              owned_identity=build_directory_identity)
         self._finish_build_success(state, job_id, {
             "scope": "book", "build_id": build_id, "book_id": layout.book_id,
             "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
@@ -4912,6 +5034,29 @@ def _open_windows_directory_identity(directory: Path) -> tuple[int, tuple[int, i
         raise
 
 
+def _open_windows_artifact_identity(path: Path) -> tuple[int, tuple[int, int]]:
+    """Pin an artifact with delete sharing so cleanup can still unlink it."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(str(path), 0x80, 0x1 | 0x2 | 0x4, None, 3, 0x00200000, None)
+    raw_handle = handle if isinstance(handle, int) else ctypes.cast(handle, ctypes.c_void_p).value
+    if raw_handle is None or raw_handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "CreateFileW could not open the owned build artifact")
+    try:
+        return int(raw_handle), _windows_directory_file_identity(int(raw_handle))
+    except BaseException:
+        _close_windows_handle(int(raw_handle))
+        raise
+
+
 def _close_windows_handle(handle: int) -> None:
     """Close one native handle acquired for directory identity checks."""
     import ctypes
@@ -4942,14 +5087,43 @@ def _unlink_owned_build_stage(path: Path, identity: _OwnedDirectoryIdentity) -> 
                 or parent.resolve(strict=True) != identity.resolved_path
                 or not identity.matches(parent)):
             raise OSError("owned build directory identity changed")
-        item = path.lstat()
-        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
-            raise OSError("owned build stage is not a regular file")
+        if not identity.matches_file(path):
+            raise OSError("owned build stage identity changed or was not captured")
         path.unlink()
+        identity.files.pop(path.name, None)
     except FileNotFoundError:
         return
     except (OSError, ValueError) as exc:
         log.error("Owned build cleanup refused path=%s error=%s", path, exc)
+
+
+def _capture_owned_build_file(path: Path, identity: _OwnedDirectoryIdentity) -> None:
+    """Record the file object created at this build's fixed artifact name."""
+    identity.capture_file(path)
+
+
+def _move_owned_build_file_identity(source: Path, destination: Path,
+                                    identity: _OwnedDirectoryIdentity) -> None:
+    """Carry the captured object identity across an atomic stage publication."""
+    expected = identity.files.get(source.name)
+    matches = False
+    if expected is not None and expected.windows_handle:
+        try:
+            handle, destination_identity = _open_windows_artifact_identity(destination)
+            try:
+                matches = destination_identity == _windows_directory_file_identity(expected.handle)
+            finally:
+                _close_windows_handle(handle)
+        except OSError:
+            matches = False
+    elif expected is not None:
+        facts = destination.lstat()
+        pinned = os.fstat(expected.handle)
+        matches = stat.S_ISREG(facts.st_mode) and (facts.st_dev, facts.st_ino) == (pinned.st_dev, pinned.st_ino)
+    if not matches:
+        raise OSError("owned build stage identity changed before publication")
+    identity.files.pop(source.name)
+    identity.files[destination.name] = expected
 
 
 def _owned_directory_identity(directory: Path) -> _OwnedDirectoryIdentity:
@@ -4972,7 +5146,7 @@ def _owned_directory_identity(directory: Path) -> _OwnedDirectoryIdentity:
             os.close(handle)
             raise
         file_identity = opened.st_dev, opened.st_ino
-    identity = _OwnedDirectoryIdentity(resolved, file_identity, handle, windows_handle)
+    identity = _OwnedDirectoryIdentity(resolved, file_identity, handle, windows_handle, {})
     try:
         current = directory.lstat()
         current_path = directory.resolve(strict=True)
@@ -5014,10 +5188,10 @@ def _cleanup_owned_build_files(project_root: Path, directory: Path, identity: _O
         candidate = directory / filename
         try:
             candidate.relative_to(directory)
-            facts = candidate.lstat()
-            if stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode):
-                raise OSError("owned artifact is not a regular file")
+            if not identity.matches_file(candidate):
+                raise OSError("owned artifact identity changed or was not captured")
             candidate.unlink()
+            identity.files.pop(candidate.name, None)
         except FileNotFoundError:
             continue
         except OSError as exc:
@@ -5051,10 +5225,13 @@ def _immutable_json_bytes(value: dict[str, Any]) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _write_immutable_json(path: Path, value: dict[str, Any]) -> None:
+def _write_immutable_json(path: Path, value: dict[str, Any], *,
+                          owned_identity: _OwnedDirectoryIdentity | None = None) -> None:
     """Create one durable fact file without making it a second authority."""
     try:
         with path.open("xb") as stream:
+            if owned_identity is not None:
+                owned_identity.capture_file(path, stream.fileno())
             stream.write(_immutable_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
