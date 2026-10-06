@@ -157,6 +157,19 @@ def _data(value: Any) -> Any:
     return value
 
 
+def _request_matches_registered_settings(spec: dto.RequestSpec, registered: dto.RequestSpec) -> bool:
+    """Match registered common context while retaining exact per-chunk extras."""
+    if not registered.context_fields.keys() <= spec.context_fields.keys():
+        return False
+    requested = _data(spec)
+    requested["context_fields"] = {
+        key: spec.context_fields[key] for key in registered.context_fields
+    }
+    # Python equality treats True as 1, including inside nested JSON. Use the
+    # existing canonical JSON authority for all registered request values.
+    return canonical_json_sha256(requested) == canonical_json_sha256(_data(registered))
+
+
 class BookService:
     """Operations for one project. Create with its documents directory."""
 
@@ -480,14 +493,14 @@ class BookService:
                 allowed = profile in {"editing", "canon"}
             elif chapter_kind == "working":
                 allowed = profile == "editing" or (
-                    record.approval_source_raw_sha256 is not None
+                    profile == "canon" and record.approval_source_raw_sha256 is not None
                     and record.approval_prose_projection_sha256 is not None
                     and record.approval_projection_version is not None
                 )
             elif chapter_kind == "summary":
                 # index_provenance_for only returns summaries whose approved
                 # source/projection binding remains current.
-                allowed = True
+                allowed = profile in {"editing", "canon"}
             else:
                 allowed = profile in {"editing", "canon"}
             if allowed:
@@ -679,10 +692,7 @@ class BookService:
             except (KeyError, TypeError, ValueError):
                 return False
             if require_registered_match:
-                if any(getattr(request_spec, name) != getattr(registered, name)
-                       for name in ("provider", "route", "model_id", "voice_id", "parameters")):
-                    return False
-                if request_spec.context_fields != registered.context_fields:
+                if not _request_matches_registered_settings(request_spec, registered):
                     return False
         return bool(result.get("chunks"))
 
@@ -1137,9 +1147,7 @@ class BookService:
                 if spec is None:
                     raise BookServiceError("request_hash_mismatch", "Every production chunk needs its complete resolved request specification.")
                 registered = settings.request_spec
-                if (any(getattr(spec, name) != getattr(registered, name)
-                        for name in ("provider", "route", "model_id", "voice_id", "parameters"))
-                        or spec.context_fields != registered.context_fields):
+                if not _request_matches_registered_settings(spec, registered):
                     raise BookServiceError("settings_mismatch", "A production chunk request differs from the registered provider settings.")
             production_settings_sha256 = settings_sha
             prepared_production_target = _data(settings.production_target)

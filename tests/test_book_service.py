@@ -34,7 +34,7 @@ from cognita.books.media import inspect_media_file
 from cognita.books.docx import FileLockedError, parse_docx
 from cognita.books.projection import project_docx_pair
 from cognita.books.jobs import PacketFact
-from cognita.books.fingerprint import canonical_json_sha256
+from cognita.books.fingerprint import canonical_json_sha256, request_fingerprint
 import cognita.books.service as service_module
 
 
@@ -536,7 +536,7 @@ def test_production_eligibility_keeps_formatting_equivalence_and_rejects_changed
     changed_settings["request_spec"]["context_fields"] = {}
     settings_path.write_text(json.dumps(changed_settings), encoding="utf-8")
     eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
-    assert not eligible and reason == "plan_ineligible"
+    assert not eligible and reason == "settings_changed"
 
     settings_path.write_text(json.dumps(settings), encoding="utf-8")
     changed_settings = dict(settings)
@@ -578,6 +578,80 @@ def test_production_eligibility_rejects_changed_approved_prose(tmp_path):
             "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
         }), owner_key="principal:fixture")
     assert denied.value.reason == "stale_dependency"
+
+
+def _prepare_production_context(service, stored, settings_path, settings, context):
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    inspected = _inspect(service)
+    spec = {**settings["request_spec"], "context_fields": context}
+    return service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "context-prepare", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": inspected["prose_sha256"],
+        "expected_tagged_sha256": inspected["tagged_sha256"],
+        "expected_manifest_revision": stored["manifest_revision"],
+        "scope": {"kind": "production"}, "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": hashlib.sha256(settings_path.read_bytes()).hexdigest(),
+        "production_target": settings["production_target"],
+        "chunks": [{"chunk_id": "main", "start": 0, "end": 5, "request_spec": spec}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }), owner_key="principal:fixture")
+
+
+def test_production_context_extras_are_frozen_fingerprinted_and_later_eligible(tmp_path):
+    service, state, stored, settings_path, _layout_path, _chapter_path, _prose, _tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    settings["request_spec"]["context_fields"]["flag"] = True
+    context = {**settings["request_spec"]["context_fields"],
+               "previous_text": "Exact previous text\n[tag] café", "next_text": None}
+    prepared, replayed = _prepare_production_context(service, stored, settings_path, settings, context)
+    assert not replayed
+    chunk = prepared["chunks"][0]
+    assert chunk["request_spec"]["context_fields"] == context
+    assert chunk["request_sha256"] == request_fingerprint("hello", chunk["request_spec"])
+    assert chunk["request_sha256"] != request_fingerprint("hello", settings["request_spec"])
+    frozen = state.snapshot(prepared["snapshot_id"])
+    assert frozen["payload"]["result"]["chunks"][0]["request_spec"]["context_fields"] == context
+    layout = service._enabled_layout()[2]
+    chapter = service._chapter(layout, "ch1")
+    assert service._production_snapshot_eligible(state, layout, chapter, frozen) == (True, "eligible")
+    changed = json.loads(json.dumps(frozen))
+    changed["payload"]["result"]["chunks"][0]["request_spec"]["context_fields"]["previous_text"] = "changed"
+    assert service._production_snapshot_eligible(state, layout, chapter, changed) == (False, "plan_ineligible")
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("language", "fr"), ("flag", 1), ("nested", {"enabled": 1}),
+    ("sequence", [1]), ("flag", None), ("missing_flag", None),
+])
+def test_production_common_context_must_match_exact_json_values(tmp_path, field, value):
+    from cognita.books.config import validate_production_settings
+
+    service, state, stored, settings_path, _layout_path, _chapter_path, _prose, _tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    common = {"language": "en", "flag": True, "nested": {"enabled": True}, "sequence": [True]}
+    settings["request_spec"]["context_fields"] = common
+    context = {**common, "previous_text": "additional context"}
+    if field == "missing_flag":
+        context.pop("flag")
+    else:
+        context[field] = value
+    with pytest.raises(BookServiceError) as refused:
+        _prepare_production_context(service, stored, settings_path, settings, context)
+    assert refused.value.reason == "settings_mismatch"
+    assert state.namespace("ch1", stored["scope_key"])["manifest_revision"] == stored["manifest_revision"]
+    # Check the later plan guard independently of fingerprint integrity: this
+    # intentionally constructed plan has its own correct request fingerprint.
+    payload = json.loads(json.dumps(stored["payload"]))
+    chunk = payload["result"]["chunks"][0]
+    chunk["request_spec"]["context_fields"] = context
+    chunk["request_sha256"] = request_fingerprint("hello", chunk["request_spec"])
+    assert not service._plan_requests_match_settings(
+        payload, validate_production_settings(settings_path.read_bytes()),
+    )
 
 
 def _build_and_accept_production_chapter(service, prepared, take, *, operation_prefix, expected_head):
@@ -1118,7 +1192,8 @@ def test_registered_index_provenance_is_persisted_and_revalidated(tmp_path):
     assert service.index_admitted_doc_ids([candidate]) == {}
 
 
-def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_path):
+@pytest.mark.parametrize("editorial_status", ["draft", "approved"])
+def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_path, editorial_status):
     from cognita.parsing import parse_file
     from types import SimpleNamespace
     from docx import Document
@@ -1137,12 +1212,38 @@ def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_
     layout_path = tmp_path / "Project Files/Book_Layout.json"
     layout = json.loads(layout_path.read_text(encoding="utf-8"))
     layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(valid_prose).hexdigest()
+    summary_path = "Chapters/1/summary.md"
+    (tmp_path / summary_path).write_text("Approved summary", encoding="utf-8")
+    layout["chapters"][0]["summary_filepath"] = summary_path
     layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    chapter_state_path = tmp_path / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    source_sha = hashlib.sha256(valid_prose).hexdigest()
+    projected = project_docx_pair(valid_prose, valid_prose)
+    if editorial_status == "approved":
+        chapter_state.update({
+            "editorial_status": "approved", "approved_source_raw_sha256": source_sha,
+            "approved_prose_projection_sha256": projected.prose_projection_sha256,
+            "approval_projection_version": projected.projection_version,
+            "approval_provenance": {
+                "actor": "fixture", "approved_at": datetime.now(timezone.utc).isoformat(),
+                "source_raw_sha256": source_sha,
+                "prose_projection_sha256": projected.prose_projection_sha256,
+                "projection_version": projected.projection_version,
+            },
+        })
+    chapter_state["summary"] = {
+        "filepath": summary_path, "source_raw_sha256": source_sha,
+        "source_prose_projection_sha256": projected.prose_projection_sha256,
+        "summary_raw_sha256": hashlib.sha256((tmp_path / summary_path).read_bytes()).hexdigest(),
+        "approved": True, "actor": "fixture", "approved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
     ProjectState.initialize(tmp_path)
     candidates = []
     paths = [
         "Project Files/ref.md", "Project Files/guide.md",
-        "Project Files/workflow.md", "Chapters/1/chapter.docx",
+        "Project Files/workflow.md", "Chapters/1/chapter.docx", summary_path,
     ]
     for path in paths:
         source = tmp_path / path
@@ -1158,17 +1259,22 @@ def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_
 
     ids = {item.source: item.doc_id for item in candidates}
     assert set(service.index_admitted_doc_ids(candidates, "editing")) == {
-        ids["Project Files/ref.md"], ids["Chapters/1/chapter.docx"],
+        ids["Project Files/ref.md"], ids["Chapters/1/chapter.docx"], ids[summary_path],
     }
-    assert set(service.index_admitted_doc_ids(candidates, "canon")) == {
-        ids["Project Files/ref.md"],
-    }
+    canon_ids = {ids["Project Files/ref.md"], ids[summary_path]}
+    if editorial_status == "approved":
+        canon_ids.add(ids["Chapters/1/chapter.docx"])
+    assert set(service.index_admitted_doc_ids(candidates, "canon")) == canon_ids
     assert set(service.index_admitted_doc_ids(candidates, "instructions")) == {
         ids["Project Files/guide.md"],
     }
     assert set(service.index_admitted_doc_ids(candidates, "workflow")) == {
         ids["Project Files/workflow.md"],
     }
+    chapter_state["summary"]["source_raw_sha256"] = "0" * 64
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+    for profile in ("editing", "canon", "instructions", "workflow"):
+        assert ids[summary_path] not in service.index_admitted_doc_ids(candidates, profile)
 
 
 def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
