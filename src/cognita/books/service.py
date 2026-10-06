@@ -16,6 +16,7 @@ import os
 import shutil
 import stat
 import uuid
+from urllib.parse import parse_qsl, urlsplit
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -60,6 +61,44 @@ class BookServiceError(ValueError):
         super().__init__(message)
         self.reason = reason
         self.outcome = outcome
+
+
+_SECRET_KEYS = frozenset({
+    "authorization", "proxy_authorization", "cookie", "set_cookie", "x_api_key",
+    "api_key", "apikey", "access_token", "refresh_token", "client_secret",
+})
+_URL_KEYS = frozenset({"url", "uri", "download_url", "signed_url", "endpoint"})
+_SIGNED_QUERY_KEYS = frozenset({
+    "signature", "sig", "token", "access_token", "x_amz_signature", "x_goog_signature",
+})
+
+
+def _validate_durable_provider_facts(value: Any, *, key: str | None = None) -> None:
+    """Reject explicit transport credentials before provider facts become durable."""
+    normalized = (key or "").replace("-", "_").casefold()
+    if normalized in _SECRET_KEYS:
+        raise BookServiceError("validation_failed", "Provider evidence cannot contain transport credentials.")
+    if isinstance(value, dict):
+        for child_key, child in value.items():
+            _validate_durable_provider_facts(child, key=str(child_key))
+        return
+    if isinstance(value, list):
+        for child in value:
+            _validate_durable_provider_facts(child, key=key)
+        return
+    if isinstance(value, str) and normalized in _URL_KEYS:
+        parsed = urlsplit(value)
+        if parsed.username is not None or parsed.password is not None:
+            raise BookServiceError("validation_failed", "Provider evidence cannot contain credential URLs.")
+        if any(name.replace("-", "_").casefold() in _SIGNED_QUERY_KEYS
+               for name, _item in parse_qsl(parsed.query, keep_blank_values=True)):
+            raise BookServiceError("validation_failed", "Provider evidence cannot contain signed transport URLs.")
+
+
+def _validate_request_spec_durable_fields(spec: dto.RequestSpec) -> None:
+    """Check the JSON fields frozen with a generation request before persistence."""
+    _validate_durable_provider_facts(_data(spec.parameters), key="parameters")
+    _validate_durable_provider_facts(_data(spec.context_fields), key="context_fields")
 
 
 def _path(root: Path, relative: str, *, allow_missing: bool = False) -> Path:
@@ -1068,6 +1107,9 @@ class BookService:
     def prepare(self, request: dto.PrepareRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         # Mutation is the only path that creates state. The caller owns the
         # per-project write lock and permission check.
+        for item in request.chunks:
+            if item.request_spec is not None:
+                _validate_request_spec_durable_fields(item.request_spec)
         state = self.discover_state()
         args_sha = canonical_json_sha256(request.model_dump(mode="json", exclude_unset=True))
         if state is not None:
@@ -1926,6 +1968,7 @@ class BookService:
         })
         if isinstance(change, dto.UpdateGenerationChange):
             return self._update_generation(change, state, request, owner_key, args_sha256)
+        _validate_request_spec_durable_fields(change.request.spec)
         chapter = self._chapter(layout, change.chapter_id)
         stored = state.snapshot(change.snapshot_id)
         if stored is None or stored["chapter_id"] != chapter.chapter_id:
@@ -1987,6 +2030,12 @@ class BookService:
         return result, disposition == "replay"
 
     def _update_generation(self, change, state, request, owner_key: str, args_sha256: str) -> tuple[dict[str, Any], bool]:
+        if "provider_ids" in change.model_fields_set:
+            _validate_durable_provider_facts(_data(change.provider_ids), key="provider_ids")
+        if "provider_response_metadata" in change.model_fields_set:
+            _validate_durable_provider_facts(
+                _data(change.provider_response_metadata), key="provider_response_metadata",
+            )
         prior = state.receipt(
             owner_key=owner_key, project=self.project_name,
             tool="audiobook_record_generation", operation_id=request.operation_id,

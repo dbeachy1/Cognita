@@ -27,7 +27,7 @@ from cognita.books.models import (
     RecordGenerationRequest,
 )
 import cognita.books.service as service_module
-from cognita.books.service import BookService, BookServiceError
+from cognita.books.service import BookService, BookServiceError, _validate_durable_provider_facts
 from cognita.books.config import BookLayout
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
@@ -1495,6 +1495,172 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
         }))
     assert stale_cursor.value.reason == "invalid_cursor"
     assert second["generation"]["snapshot_id"] == prepared["snapshot_id"]
+
+
+@pytest.mark.parametrize("facts", [
+    {"headers": {"Authorization": "Bearer synthetic_secret"}},
+    {"download_url": "https://media.example/audio?signature=synthetic_secret"},
+    {"endpoint": "https://user:synthetic_secret@media.example/audio"},
+    {"nested": {"x-api-key": "synthetic_secret"}},
+])
+def test_durable_provider_facts_refuse_explicit_transport_credentials(facts):
+    with pytest.raises(BookServiceError) as rejected:
+        _validate_durable_provider_facts(facts)
+    assert rejected.value.reason == "validation_failed"
+    assert "synthetic_secret" not in str(rejected.value)
+
+
+def test_durable_provider_facts_preserve_public_nonsecret_structures():
+    facts = {
+        "provider_id": "provider-7", "public_url": "https://example.org/evidence",
+        "nested": {"enabled": True, "attempts": [1, 2, {"format": "pcm"}]},
+    }
+    _validate_durable_provider_facts(facts)
+
+
+@pytest.mark.parametrize("metadata", [
+    {"nested": {"Authorization": "Bearer synthetic_secret"}},
+    {"download_url": "https://media.example/audio?signature=synthetic_secret"},
+])
+def test_generation_update_rejects_credentials_before_sqlite_mutation(tmp_path, metadata):
+    service, _prose, _tagged, _spec, _prepared, request = _generation_cas_fixture(tmp_path)
+    reserved, replayed = service.record_generation(request, owner_key="principal:fixture")
+    assert not replayed
+    state = service._state_required()
+    generation = reserved["generation"]
+    before = state.generation(generation["generation_record_id"])
+    operation_id = "credential-update-" + str(len(metadata))
+
+    with pytest.raises(BookServiceError) as rejected:
+        service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": operation_id, "change": {
+                "kind": "update", "generation_record_id": generation["generation_record_id"],
+                "expected_generation_revision": generation["generation_revision"],
+                "state": "reserved", "provider_response_metadata": metadata,
+            },
+        }), owner_key="principal:fixture")
+
+    assert rejected.value.reason == "validation_failed"
+    assert "synthetic_secret" not in str(rejected.value)
+    assert state.generation(generation["generation_record_id"]) == before
+    assert state.receipt(
+        owner_key="principal:fixture", project="fixture",
+        tool="audiobook_record_generation", operation_id=operation_id,
+    ) is None
+
+
+def test_generation_allows_nonsecret_evidence_and_reopens_exact_json(tmp_path):
+    service, _prose, _tagged, _spec, _prepared, request = _generation_cas_fixture(tmp_path)
+    reserved, replayed = service.record_generation(request, owner_key="principal:fixture")
+    assert not replayed
+    generation = reserved["generation"]
+    provider_ids = {"flow_id": "flow-public", "generation_ids": ["provider-7"]}
+    metadata = {
+        "public_url": "https://example.org/evidence", "provider_id": "provider-7",
+        "nested": {"attempt": 1, "formats": ["pcm", "wav"]},
+    }
+    updated, replayed = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "public-evidence-update", "change": {
+            "kind": "update", "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": generation["generation_revision"],
+            "state": "submitted", "provider_ids": provider_ids,
+            "provider_response_metadata": metadata,
+        },
+    }), owner_key="principal:fixture")
+    assert not replayed
+    assert updated["generation"]["provider_ids"] == provider_ids
+    assert updated["generation"]["provider_response_metadata"] == metadata
+
+    reopened = BookService(tmp_path, "fixture")
+    persisted = reopened._state_required().generation(generation["generation_record_id"])
+    assert persisted is not None
+    assert persisted["provider_ids"] == provider_ids
+    assert persisted["provider_response_metadata"] == metadata
+
+
+@pytest.mark.parametrize("request_spec", [
+    {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {"nested": {"Authorization": "Bearer synthetic_secret"}}, "context_fields": {},
+    },
+    {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {},
+        "context_fields": {"download_url": "https://media.example/audio?signature=synthetic_secret"},
+    },
+])
+def test_prepare_rejects_credential_request_fields_before_snapshot_or_receipt(tmp_path, request_spec):
+    service, prose, tagged = _fixture(tmp_path)
+    inspected = _inspect(service)
+    with pytest.raises(BookServiceError) as rejected:
+        service.prepare(PrepareRequest.model_validate({
+            "project": "fixture", "operation_id": "credential-prepare", "chapter_id": "ch1",
+            "document_view_id": inspected["document_view_id"],
+            "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+            "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+            "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+            "speech_selection_confirmed": True,
+            "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+            "expected_settings_sha256": None, "production_target": None,
+            "chunks": [{"chunk_id": "guarded", "start": 0, "end": 5, "request_spec": request_spec}],
+            "publish_bookmarks_to_working_tagged_docx": False,
+        }), owner_key="principal:fixture")
+
+    assert rejected.value.reason == "validation_failed"
+    assert "synthetic_secret" not in str(rejected.value)
+    assert not (tmp_path / ".cognita-storage").exists()
+
+
+def test_prepare_keeps_nonsecret_context_fingerprinted_and_retained(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {"format": "pcm", "public_url": "https://example.org/reference"},
+        "context_fields": {
+            "previous_text": "Prior prose with a literal https://example.org/?signature=not-transport",
+            "additional": {"provider_id": "provider-7", "attempt": 1},
+        },
+    }
+    prepared = _prepare_test_plan(service, "safe-context-prepare", prose, tagged, None, [
+        {"chunk_id": "safe-context", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    chunk = prepared["chunks"][0]
+    assert chunk["request_spec"] == spec
+    assert chunk["request_sha256"] == request_fingerprint("hello", spec)
+    frozen = service._state_required().snapshot(prepared["snapshot_id"])
+    assert frozen["payload"]["result"]["chunks"][0]["request_spec"] == spec
+
+
+def test_generation_reservation_rejects_credential_request_before_sqlite_mutation(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {}, "context_fields": {},
+    }
+    prepared = _prepare_test_plan(service, "guard-reserve-prepare", prose, tagged, None, [
+        {"chunk_id": "guard-reserve", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    state = service._state_required()
+    chunk = prepared["chunks"][0]
+    with pytest.raises(BookServiceError) as rejected:
+        service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": "guard-reserve", "change": {
+                "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                "chunk_id": "guard-reserve", "expected_manifest_revision": prepared["manifest_revision"],
+                "request": {
+                    "prompt_sha256": chunk["prompt_sha256"],
+                    "spec": {**spec, "parameters": {"Authorization": "Bearer synthetic_secret"}},
+                },
+            },
+        }), owner_key="principal:fixture")
+
+    assert rejected.value.reason == "validation_failed"
+    assert "synthetic_secret" not in str(rejected.value)
+    assert state.generations(chapter_id="ch1") == []
+    assert state.receipt(
+        owner_key="principal:fixture", project="fixture",
+        tool="audiobook_record_generation", operation_id="guard-reserve",
+    ) is None
 
 
 def _generation_cas_fixture(tmp_path):
