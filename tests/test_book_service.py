@@ -15,6 +15,7 @@ from cognita.books.models import (
     GetGenerationsRequest,
     GetChapterRequest,
     GetBookRequest,
+    FindChunkRequest,
     GetJobRequest,
     ImportAudioRequest,
     IndexStatusRequest,
@@ -590,6 +591,11 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert chapter["accepted_build_id"] == candidate["build_id"]
     assert chapter["takes"][0]["take_id"] == take["take_id"]
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
+    located = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 0.0},
+    }))
+    assert located["matches"][0]["matched_take_ids"] == [take["take_id"]]
+    assert located["matches"][0]["coordinate_projection"] == "timeline"
 
 def test_index_status_reports_pending_and_blocked_registered_sources(tmp_path):
     service, _prose, _tagged = _fixture(tmp_path, bound=True)

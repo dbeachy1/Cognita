@@ -1077,9 +1077,47 @@ class BookService:
         searched_snapshots: list[str] = []
         query_value = request.query.model_dump(mode="json", exclude_unset=True)
         if isinstance(request.query, dto.TimestampQuery):
-            # No build timeline exists in M1; timestamp searches are valid and
-            # return an empty, explicit result until the build worker lands.
-            version = "book-state-v1"
+            build = state.build(request.query.build_id) if state is not None else None
+            if build is None:
+                raise BookServiceError("file_not_found", "The requested immutable build does not exist.")
+            result = build.get("result", {})
+            timeline_path = result.get("timeline_filepath")
+            if not isinstance(timeline_path, str):
+                raise BookServiceError("state_unavailable", "The build lacks a durable timeline reference.")
+            try:
+                timeline = json.loads(_path(self.root, timeline_path).read_text(encoding="utf-8"))
+                rate = int(timeline["sample_rate_hz"])
+                frame = int(request.query.seconds * rate)
+                entries = timeline["entries"]
+            except (BookServiceError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                raise BookServiceError("state_unavailable", "The immutable build timeline could not be read.") from exc
+            version = canonical_json_sha256({"build_id": request.query.build_id, "timeline": timeline})
+            for entry in entries:
+                start_frame, end_frame = int(entry["start_frame"]), int(entry["end_frame"])
+                if start_frame <= frame < end_frame:
+                    source_id = entry["source_id"]
+                    chapter_id = build.get("chapter_id") or source_id
+                    if "chapter_id" in request.model_fields_set and request.chapter_id != chapter_id:
+                        continue
+                    take_ids: list[str] = []
+                    if build.get("scope") == "chapter":
+                        for take_id in build.get("input_take_ids", []):
+                            take = state.take(take_id) if state else None
+                            if take is not None and take.get("chunk_id") == source_id:
+                                take_ids.append(take_id)
+                    matches.append({
+                        "chapter_id": chapter_id, "snapshot_id": (
+                            build.get("snapshot_id") if build.get("scope") == "chapter" else None
+                        ) or "book-build",
+                        "chunk_ids": [source_id] if entry["kind"] == "audio" and build.get("scope") == "chapter" else [],
+                        "occurrence_start": None, "occurrence_end": None,
+                        "coordinate_projection": "timeline", "excerpt": f"{entry['kind']}:{source_id}",
+                        "matched_build_id": request.query.build_id, "matched_take_ids": take_ids,
+                        "segment_kind": "silence" if entry["kind"] == "silence" else "speech",
+                        "current_chunk_ids": [source_id] if take_ids else [],
+                        "current_take_ids": take_ids, "lineage": [], "current_mapping_status": "not_checked",
+                        "match_mode": "timestamp",
+                    })
         else:
             version = "spoken-text-v1"
             chapter_ids = [request.chapter_id] if "chapter_id" in request.model_fields_set else []
