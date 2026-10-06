@@ -123,7 +123,7 @@ async def test_directory_rebase_preserves_catalog_identity_metadata_provenance_a
     operation = await repository.get_operation(
         "rebase-receipt", tool="put_asset", connector_id="connector-a",
     )
-    assert operation["result"] == receipt
+    assert json.loads(operation["result"]) == receipt
 
 
 @pytest.mark.asyncio
