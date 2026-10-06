@@ -274,7 +274,18 @@ class LocalEngineHost(
                 # by live chapter mutations before any caller can observe or
                 # race the protected source.
                 async with self.core.write_lock(project.name):
-                    book_service.recover_bookmark_publications()
+                    try:
+                        book_service.recover_bookmark_publications()
+                    except (BookServiceError, ProjectStateError, OSError) as exc:
+                        # A damaged or externally changed journal is scoped to
+                        # this project. Keep its bytes and journal fail-closed,
+                        # but do not take unrelated projects (or Workspace
+                        # service startup) down with it.
+                        reason = exc.reason if isinstance(exc, BookServiceError) else type(exc).__name__
+                        log.error(
+                            "Bookmark publication recovery remains blocked project=%s reason=%s",
+                            project.name, reason,
+                        )
         try:
             await self.store.connect()
         except SchemaVersionMismatch as exc:

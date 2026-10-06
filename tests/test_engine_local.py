@@ -23,6 +23,7 @@ from cognita.books.schemas import ALL_ADDITIVE_TOOL_NAMES
 from cognita.editing import content_sha256
 from cognita.manifest import file_facts
 from cognita.engine_local import ENGINE_TOOL_DEFS, LocalEngineHost, make_snippet
+from cognita.books.service import BookServiceError
 from cognita.parsing import ExtensionPolicy
 from cognita.registry import Project, Registry
 from cognita.retrieval import RetrievalCore
@@ -264,6 +265,42 @@ async def test_startup_recovers_bookmark_publications_under_project_lock(mismatc
     monkeypatch.setattr(mismatched_host.store, "connect", connect_after_recovery)
     await mismatched_host.startup()
     assert observed == ["imports", "bookmarks", "connect"]
+
+
+async def test_bookmark_recovery_conflict_is_isolated_to_its_project(mismatched_host, monkeypatch, caplog):
+    first = mismatched_host.registry.projects[0]
+    second_docs = first.documents_dir.parent / "healthy-docs"
+    second_docs.mkdir()
+    mismatched_host.registry.add(Project(
+        name="healthy-project", documents_dir=second_docs,
+        data_dir=first.data_dir.parent / "healthy-data",
+    ))
+    observed = []
+
+    class RecoveryProbe:
+        def __init__(self, project):
+            self.project = project
+
+        def recover_interrupted_import_jobs(self):
+            observed.append((self.project.name, "imports"))
+
+        def recover_bookmark_publications(self):
+            assert mismatched_host.core.write_lock(self.project.name).locked()
+            observed.append((self.project.name, "bookmarks"))
+            if self.project.name == first.name:
+                raise BookServiceError("publication_conflict", "details must not be logged")
+
+    monkeypatch.setattr(mismatched_host, "book_service_for", RecoveryProbe)
+    with caplog.at_level(logging.ERROR, logger="cognita.engine"):
+        await mismatched_host.startup()
+
+    assert observed == [
+        (first.name, "imports"), (first.name, "bookmarks"),
+        ("healthy-project", "imports"), ("healthy-project", "bookmarks"),
+    ]
+    assert "project=" + first.name in caplog.text
+    assert "publication_conflict" in caplog.text
+    assert "details must not be logged" not in caplog.text
 
 
 @pytest.mark.asyncio
