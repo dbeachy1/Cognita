@@ -336,6 +336,16 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
     unknown_result, replayed = service.record_generation(unknown, owner_key="principal:fixture")
     assert not replayed and unknown_result["generation"]["state"] == "outcome_unknown"
     assert unknown_result["generation"]["provider_ids"] == {}
+    replay, replayed = service.record_generation(unknown, owner_key="principal:fixture")
+    assert replayed and replay == unknown_result
+    with pytest.raises(BookServiceError) as altered:
+        service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": "unknown-generation", "change": {
+                "kind": "update", "generation_record_id": generation["generation_record_id"],
+                "expected_generation_revision": 2, "state": "failed",
+            },
+        }), owner_key="principal:fixture")
+    assert altered.value.reason == "operation_id_conflict"
     with pytest.raises(BookServiceError, match="Provider evidence"):
         service.record_generation(RecordGenerationRequest.model_validate({
             "project": "fixture", "operation_id": "bad-resolution", "change": {

@@ -1035,6 +1035,14 @@ class BookService:
         return result, disposition == "replay"
 
     def _update_generation(self, change, state, request, owner_key: str, args_sha256: str) -> tuple[dict[str, Any], bool]:
+        prior = state.receipt(
+            owner_key=owner_key, project=self.project_name,
+            tool="audiobook_record_generation", operation_id=request.operation_id,
+        )
+        if prior is not None:
+            if prior[0] != args_sha256:
+                raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.")
+            return prior[1], True
         existing = state.generation(change.generation_record_id)
         if existing is None:
             raise BookServiceError("file_not_found", "The generation record does not exist.")
