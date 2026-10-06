@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 
 import pytest
 
@@ -504,6 +505,39 @@ async def test_single_file_book_capture_precedes_legacy_docx_and_records_same_fa
     assert outcome is not None and outcome.indexed
     assert [item[0] for item in seen] == ["content", "capture", "record"]
     assert store.writes == [("chapter.docx", 1)]
+
+
+async def test_single_file_final_policy_change_refuses_captured_publication(tmp_path):
+    """A folder exclusion landing during embedding wins before store replacement."""
+    from cognita.books.config import FolderRule
+    from cognita.books.policy import EffectiveIndexPolicy
+
+    class BlockingEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.started, self.release = threading.Event(), threading.Event()
+
+        def embed(self, texts):
+            self.started.set()
+            assert self.release.wait(5)
+            return super().embed(texts)
+
+    path = tmp_path / "private" / "note.md"
+    path.parent.mkdir()
+    path.write_text("captured prose", encoding="utf-8")
+    store, embedder = FakeStore(), BlockingEmbedder()
+    core = core_for(store, embedder)
+    current = {"policy": EffectiveIndexPolicy([])}
+    core.set_effective_index_policy_provider(lambda _project: current["policy"])
+    task = asyncio.create_task(core.index_file("P", tmp_path, path))
+    await asyncio.to_thread(embedder.started.wait, 5)
+    current["policy"] = EffectiveIndexPolicy([FolderRule(path="private", indexed=False)])
+    embedder.release.set()
+    outcome = await task
+
+    assert outcome is not None and not outcome.indexed
+    assert outcome.exclusion_reason == "policy_excluded"
+    assert store.writes == []
 
 
 async def test_a_parse_failure_does_not_stop_the_walk(tmp_path):
