@@ -84,6 +84,11 @@ class EffectiveIndexPolicy:
         self._book_layout = book_layout
         self._book_roles, self._book_hard_roots = self._book_paths(book_layout)
 
+    @property
+    def layout(self) -> BookLayout | None:
+        """The validated book layout used to constrain role admission, if enabled."""
+        return self._book_layout
+
     @staticmethod
     def _book_paths(
         layout: BookLayout | None,

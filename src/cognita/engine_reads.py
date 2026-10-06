@@ -38,8 +38,28 @@ from .parsing import (
 from .registry import Project
 from .engine_contract import LITERAL_WALK_BUDGET_S, MAX_PLURAL_PATHS, MAX_RESULTS, PLURAL_BODY_MAX_BYTES, PLURAL_BODY_TOTAL_MAX_BYTES, _collection, _empty_selection_message, make_snippet, normalize_prefix
 
+RETRIEVAL_PROFILES = frozenset({"editing", "canon", "instructions", "workflow"})
+
 
 class EngineReadOperations:
+    async def _book_admitted_doc_pairs(
+        self, project: Project, retrieval_profile: str | None = None,
+    ) -> set[tuple[str, str]] | None:
+        policy = self.core.effective_index_policy_for(project.name)
+        if policy is None or getattr(policy, "layout", None) is None:
+            return None
+        sources, doc_ids, _metadata = await self.core._effective_indexed_sources(
+            project.name, retrieval_profile,
+        )
+        return set(zip(sources or (), doc_ids or ()))
+
+    @staticmethod
+    def _retrieval_profile_error(value: Any) -> dict | None:
+        if value is None or (isinstance(value, str) and value in RETRIEVAL_PROFILES):
+            return None
+        return {"status": "error", "reason": "invalid",
+                "message": "retrieval_profile must be editing, canon, instructions, or workflow."}
+
     def _indexed_source_predicate(self, project: Project):
         policy = self.core.effective_index_policy_for(project.name)
         if policy is None:
@@ -55,6 +75,9 @@ class EngineReadOperations:
         return is_indexed
 
     async def _search_knowledge(self, project: Project, args: dict) -> dict:
+        profile_error = self._retrieval_profile_error(args.get("retrieval_profile"))
+        if profile_error is not None:
+            return profile_error
         query = (args.get("query") or "").strip()
         if not query:
             return {"status": "error", "reason": "invalid", "message": "Query cannot be empty"}
@@ -75,6 +98,7 @@ class EngineReadOperations:
         results = await self.core.search(
             project.name, query, max_results=max_results,
             category=category, hybrid_alpha=hybrid_alpha,
+            retrieval_profile=args.get("retrieval_profile"),
         )
         for r in results:
             # 5.0 §5.1: keep BOTH. `source` stays the absolute host path 3.x
@@ -450,6 +474,10 @@ class EngineReadOperations:
                             "failed": failed, "skipped": 0}, "documents", alias=False)
 
     async def _search_similar(self, project: Project, args: dict) -> dict:
+        profile_error = self._retrieval_profile_error(args.get("retrieval_profile"))
+        if profile_error is not None:
+            return profile_error
+        retrieval_profile = args.get("retrieval_profile")
         filepath = args.get("filepath") or ""
         if not filepath:
             return {"status": "error", "reason": "invalid", "message": "Filepath required"}
@@ -474,6 +502,10 @@ class EngineReadOperations:
         # nor a reference. Say that specifically — "not found" would be actively
         # misleading when list_documents just showed the file (D4.4-6).
         stored = await self.store.get_document(project.name, rel)
+        admitted_pairs = await self._book_admitted_doc_pairs(project, retrieval_profile)
+        if (admitted_pairs is not None and
+                (rel, stored.doc_id if stored is not None else "") not in admitted_pairs):
+            return no_results
         if stored is not None and stored.is_registered:
             return {
                 "status": "error",
@@ -496,8 +528,8 @@ class EngineReadOperations:
         # and filter afterwards: the reference's own chunks sit at distance 0, so
         # a document with 25+ chunks filled the entire budget with rows that were
         # all discarded and the tool reported "No similar documents found".
-        admitted_sources, admitted_doc_ids = await self.core._effective_indexed_sources(
-            project.name
+        admitted_sources, admitted_doc_ids, admission_metadata = await self.core._effective_indexed_sources(
+            project.name, retrieval_profile,
         )
         admission_kwargs = (
             {"include_sources": admitted_sources, "include_doc_ids": admitted_doc_ids}
@@ -534,9 +566,37 @@ class EngineReadOperations:
                 # ranking.
                 "score": similarity,
                 "preview": hit.content[:200],
+                "_doc_id": hit.doc_id,
             })
+            admission = admission_metadata.get(hit.doc_id)
+            if admission is not None:
+                similar[-1].update({
+                    "book_role": admission["role"],
+                    "chapter_id": admission["chapter_id"],
+                    "editorial_status": admission["editorial_status"],
+                    "summary_freshness": admission["summary_freshness"],
+                })
             if len(similar) >= max_results:
                 break
+        current_pairs = await self._book_admitted_doc_pairs(project, retrieval_profile)
+        _sources, _doc_ids, current_metadata = await self.core._effective_indexed_sources(
+            project.name, retrieval_profile,
+        )
+        if current_pairs is not None:
+            similar = [
+                item for item in similar
+                if (item["filepath"], item.get("_doc_id", "")) in current_pairs
+            ]
+        for item in similar:
+            admission = current_metadata.get(item.get("_doc_id", ""))
+            if admission is not None:
+                item.update({
+                    "book_role": admission["role"],
+                    "chapter_id": admission["chapter_id"],
+                    "editorial_status": admission["editorial_status"],
+                    "summary_freshness": admission["summary_freshness"],
+                })
+            item.pop("_doc_id", None)
         if not similar:
             return no_results
         return _collection(
@@ -552,11 +612,13 @@ class EngineReadOperations:
         docs = await self.store.list_documents(project.name)
         counts = await self.store.chunk_counts(project.name)
         is_indexed = self._indexed_source_predicate(project)
+        admitted_pairs = await self._book_admitted_doc_pairs(project)
         selected = [
             d for d in docs
             if (not category or d.category == category)
             and (prefix is None or d.source.startswith(prefix))
             and is_indexed(d.source)
+            and (admitted_pairs is None or (d.source, d.doc_id) in admitted_pairs)
         ]
         entries = [
             {
@@ -640,6 +702,16 @@ class EngineReadOperations:
                     "file on disk, so reads are correct; search results may be stale "
                     "until reindex_documents(force=true) runs."
                 )
+        current_pairs = await self._book_admitted_doc_pairs(project)
+        if current_pairs is not None:
+            keep = {(d.source, d.doc_id) for d in selected if (d.source, d.doc_id) in current_pairs}
+            entries = [e for e in entries if any(
+                e["filepath"] == source and e["id"] == doc_id for source, doc_id in keep
+            )]
+            payload["documents"] = entries
+            payload["count"] = len(entries)
+            payload["embedded_count"] = sum(1 for e in entries if e["tier"] != TIER_REGISTERED)
+            payload["registered_count"] = len(entries) - payload["embedded_count"]
         registered = sum(1 for e in entries if e["tier"] == TIER_REGISTERED)
         payload["embedded_count"] = len(entries) - registered
         payload["registered_count"] = registered
@@ -820,6 +892,7 @@ class EngineReadOperations:
 
         docs = await self.store.list_documents(project.name)  # ORDER BY source
         is_indexed = self._indexed_source_predicate(project)
+        admitted_pairs = await self._book_admitted_doc_pairs(project)
         selected = [
             d for d in docs
             if (not category or d.category == category)
@@ -831,6 +904,7 @@ class EngineReadOperations:
             # useless, so it is not left to depend on indexing config.
             and not d.source.startswith(f"{BACKUPS_DIRNAME}/")
             and is_indexed(d.source)
+            and (admitted_pairs is None or (d.source, d.doc_id) in admitted_pairs)
         ]
         # Distinguish an empty filter selection from a scan that found no match;
         # both return zero matches, but only the latter proves absence.
@@ -855,6 +929,24 @@ class EngineReadOperations:
         found = await asyncio.to_thread(
             self._walk_literal, docs_dir, selected, matcher, context_lines, max_matches
         )
+        current_pairs = await self._book_admitted_doc_pairs(project)
+        if current_pairs is not None:
+            current_selected = [
+                d for d in selected if (d.source, d.doc_id) in current_pairs
+            ]
+            if len(current_selected) != len(selected):
+                found = await asyncio.to_thread(
+                    self._walk_literal, docs_dir, current_selected, matcher,
+                    context_lines, max_matches,
+                )
+                # A second external save during the rescan still cannot publish
+                # a stale role result; this last filter may shorten the page.
+                final_pairs = await self._book_admitted_doc_pairs(project)
+                if final_pairs is not None:
+                    found["matches"] = [
+                        item for item in found["matches"]
+                        if any(item["filepath"] == source for source, _doc in final_pairs)
+                    ]
 
         payload = {
             "status": "success",

@@ -113,6 +113,10 @@ ENGINE_TOOL_DEFS: list[dict] = [
             "min_score": {"type": "number", "default": 0.0,
                           "description": "Minimum score to include, relative to this query's normalized scores"},
             "snippet_mode": {"type": "boolean", "default": True, "description": "Truncate content to ~500 chars"},
+            "retrieval_profile": {
+                "type": "string", "enum": ["editing", "canon", "instructions", "workflow"],
+                "description": "Book search scope: editing includes labeled drafts and current references; canon includes approved current prose, fresh approved summaries, and canonical references; instructions and workflow search their registered documents. Omit for legacy non-book search behavior; enabled books default to canon.",
+            },
         },
         ["query"],
     ),
@@ -145,6 +149,10 @@ ENGINE_TOOL_DEFS: list[dict] = [
         {
             "filepath": {"type": "string", "description": "Path to the indexed reference document"},
             "max_results": {"type": "integer", "default": 5, "description": "Similar documents to return (max 20)"},
+            "retrieval_profile": {
+                "type": "string", "enum": ["editing", "canon", "instructions", "workflow"],
+                "description": "Book search scope: editing includes labeled drafts and current references; canon includes approved current prose, fresh approved summaries, and canonical references; instructions and workflow search their registered documents. Omit for legacy non-book behavior; enabled books default to canon.",
+            },
         },
         ["filepath"],
     ),

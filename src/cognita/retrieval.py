@@ -28,6 +28,7 @@ import re
 import stat as stat_module
 import time
 from collections import OrderedDict
+from dataclasses import replace
 from collections.abc import Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -134,6 +135,7 @@ class IndexFileOutcome:
     indexed: bool
     exclusion_reason: str | None = None
     extracted_sha256: str | None = None
+    provenance_current: bool | None = None
 
     def __iter__(self):
         yield self.doc_id
@@ -345,6 +347,7 @@ class RetrievalCore:
         self._deindexed: dict[str, DeindexedPaths] = {}
         self._effective_index_policy_provider: Callable[[str], EffectiveIndexPolicy] | None = None
         self._book_index_admission_provider: Callable[..., Any] | None = None
+        self._book_index_provenance_recorder: Callable[..., Any] | None = None
         self._write_locks: dict[str, _ProjectWriteLock] = {}
         self._caches: dict[str, QueryCache] = {}
         # Set by the watcher when a project is attached.  A first targeted
@@ -935,6 +938,10 @@ class RetrievalCore:
         """Install the host's current-source/doc-id approval admission check."""
         self._book_index_admission_provider = provider
 
+    def set_book_index_provenance_recorder(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned writer for source-bound role provenance."""
+        self._book_index_provenance_recorder = provider
+
     @staticmethod
     def _policy_allows_source(
         policy: EffectiveIndexPolicy | None, source: str, *, globally_eligible: bool = True,
@@ -955,8 +962,8 @@ class RetrievalCore:
         )
 
     async def _effective_indexed_sources(
-        self, project: str,
-    ) -> tuple[list[str] | None, list[str] | None]:
+        self, project: str, retrieval_profile: str | None = None,
+    ) -> tuple[list[str] | None, list[str] | None, dict[str, dict[str, Any]]]:
         """Return policy-admitted indexed sources for SQL candidate filtering.
 
         Every SQL search leg must apply exclusions before LIMIT, otherwise
@@ -966,7 +973,7 @@ class RetrievalCore:
         """
         effective = self.effective_index_policy_for(project)
         if effective is None:
-            return None, None
+            return None, None, {}
         extension_policy = self.policy_for(project)
         source_info = await self.store.list_sources(project)
         admitted = {
@@ -977,21 +984,65 @@ class RetrievalCore:
             )
         }
         if getattr(effective, "layout", None) is not None:
+            profile = retrieval_profile or "canon"
             provider = self._book_index_admission_provider
             if provider is None:
                 # An enabled layout without provenance verification is not a
                 # path-only allow decision. Fail closed until the host wires it.
-                return [], []
-            book_ids = provider(project, tuple(admitted.values()))
+                return [], [], {}
+            book_sources = tuple(
+                replace(info, source=source)
+                if getattr(info, "source", None) != source else info
+                for source, info in admitted.items()
+            )
+            book_ids = provider(project, book_sources, profile)
             if inspect.isawaitable(book_ids):
                 book_ids = await book_ids
-            allowed_ids = set(book_ids)
+            allowed_ids: set[str] = set()
+            labels: dict[str, dict[str, Any]] = {}
+            infos_by_id = {info.doc_id: (source, info) for source, info in admitted.items()}
+            if isinstance(book_ids, dict):
+                for key, value in book_ids.items():
+                    if not isinstance(key, str) or not isinstance(value, dict):
+                        continue
+                    if set(value) != {
+                        "source_path", "role", "chapter_id", "editorial_status",
+                        "summary_freshness", "provenance",
+                    }:
+                        continue
+                    source_info = infos_by_id.get(key)
+                    provenance = value["provenance"]
+                    if source_info is None or not all(hasattr(provenance, name) for name in (
+                        "source_path", "doc_id", "extracted_sha256", "raw_sha256",
+                        "extraction_version", "layout_sha256",
+                    )):
+                        continue
+                    source, info = source_info
+                    if (
+                        value["source_path"] != source
+                        or provenance.source_path != source
+                        or provenance.doc_id != key
+                        or provenance.extracted_sha256 != info.content_hash
+                        or value["role"] != provenance.role
+                        or value["chapter_id"] != provenance.chapter_id
+                        or value["editorial_status"] not in (None, "draft", "approved")
+                        or value["summary_freshness"] not in (
+                            "fresh", "stale", "unapproved", "not_applicable",
+                        )
+                    ):
+                        continue
+                    allowed_ids.add(key)
+                    labels[key] = value
+            else:
+                # A set of IDs is insufficient to label an editing result or
+                # prove which provenance record admitted it. Fail closed.
+                return [], [], {}
             admitted = {
                 source: info for source, info in admitted.items()
                 if info.doc_id in allowed_ids
             }
-            return list(admitted), [info.doc_id for info in admitted.values()]
-        return list(admitted), None
+            return list(admitted), [info.doc_id for info in admitted.values()], labels
+        return list(admitted), None, {}
 
     def deindexed_for(self, project: str) -> DeindexedPaths | None:
         return self._deindexed.get(project)
@@ -1896,11 +1947,34 @@ class RetrievalCore:
                     return IndexFileOutcome(
                         None, 0, False, decision.reason,
                     )
+            provenance_recorder = self._book_index_provenance_recorder
+            provenance_enabled = (
+                provenance_recorder is not None
+                and effective_policy is not None
+                and getattr(effective_policy, "layout", None) is not None
+            )
+            raw_sha256 = None
+            if provenance_enabled:
+                raw_sha256 = await asyncio.to_thread(
+                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
+                )
             doc = await asyncio.to_thread(
                 self._parse, filepath, documents_dir, extension_policy
             )
             if doc is None:
                 return None
+            if provenance_enabled:
+                parsed_source_sha = await asyncio.to_thread(
+                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
+                )
+                if parsed_source_sha != raw_sha256:
+                    # A Word save raced the parser. Do not attach approval
+                    # provenance to content whose exact source bytes are
+                    # unknown; a later reconcile can index the stable version.
+                    return IndexFileOutcome(
+                        None, 0, False, "source_changed_during_indexing",
+                        doc.content_hash, False,
+                    )
             if category_override:
                 doc.category = category_override
             else:
@@ -1914,8 +1988,28 @@ class RetrievalCore:
             # reported success and then silently lost its document.
             self.readmit(project, doc.source)
             self.query_cache(project).invalidate()
+            provenance_current = None
+            if provenance_enabled:
+                current_raw_sha = await asyncio.to_thread(
+                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
+                )
+                if current_raw_sha == raw_sha256:
+                    from .books.docx import PROJECTION_VERSION
+
+                    record = provenance_recorder(
+                        project, doc.source, doc.doc_id, doc.content_hash,
+                        raw_sha256, PROJECTION_VERSION,
+                    )
+                    if inspect.isawaitable(record):
+                        record = await record
+                    provenance_current = record is not None
+                else:
+                    provenance_current = False
             return IndexFileOutcome(
-                doc.doc_id, chunks, True, extracted_sha256=doc.content_hash,
+                doc.doc_id, chunks, provenance_current is not False,
+                None if provenance_current is not False else "provenance_unavailable",
+                extracted_sha256=doc.content_hash,
+                provenance_current=provenance_current,
             )
 
     async def remove_file(self, project: str, source: str) -> bool:
@@ -2298,6 +2392,7 @@ class RetrievalCore:
         category: str | None = None,
         hybrid_alpha: float = 0.3,
         include_registered: bool = True,
+        retrieval_profile: str | None = None,
     ) -> list[dict[str, Any]]:
         """Hybrid search; returns 3.x-shaped result dicts (full content — the
         tool layer owns snippeting and min_score filtering).
@@ -2317,22 +2412,38 @@ class RetrievalCore:
         max_results = max(1, min(max_results, MAX_RESULTS))
         hybrid_alpha = max(0.0, min(hybrid_alpha, 1.0))
         cache = self.query_cache(project)
-        admitted_sources, admitted_doc_ids = await self._effective_indexed_sources(project)
+        admitted_sources, admitted_doc_ids, admission_metadata = await self._effective_indexed_sources(
+            project, retrieval_profile,
+        )
         admission_fingerprint = (
             hashlib.sha256(
                 "\0".join(sorted(admitted_sources)).encode("utf-8")
                 + b"\1"
                 + "\0".join(sorted(admitted_doc_ids or ())).encode("utf-8")
+                + b"\2"
+                + repr([
+                    (key, admission_metadata[key]["role"],
+                     admission_metadata[key]["editorial_status"],
+                     admission_metadata[key]["summary_freshness"])
+                    for key in sorted(admission_metadata)
+                ]).encode("utf-8")
             ).hexdigest()
             if admitted_sources is not None else None
         )
         cache_key = (
             query, max_results, category, hybrid_alpha, include_registered,
+            retrieval_profile,
             admission_fingerprint,
         )
         cached = cache.get(cache_key)
         if cached is not None:
-            return self._filter_search_results(project, cached)
+            cached = await self._filter_current_book_admission(
+                project, cached, retrieval_profile,
+            )
+            cached = self._filter_search_results(project, cached)
+            for result in cached:
+                result.pop("_doc_id", None)
+            return cached
         n_candidates = min(max_results * 3, MAX_RESULTS)
 
         routed_category = self._route_by_keywords(query) if not category else None
@@ -2467,8 +2578,6 @@ class RetrievalCore:
             )
 
         results = await self._expand_with_adjacent_chunks(project, results)
-        for r in results:
-            del r["_doc_id"]
         # MMR deliberately chooses a diverse sequence, so its selection order
         # is not necessarily the normalized relevance order. Context expansion
         # is also complete by this point; publish the final page in descending
@@ -2477,6 +2586,9 @@ class RetrievalCore:
         # Policy may change while embedding, retrieving, or reranking. Re-read
         # the host-owned snapshot immediately before publishing/cacheing the
         # response so a result that became excluded mid-query cannot escape.
+        results = await self._filter_current_book_admission(
+            project, results, retrieval_profile,
+        )
         results = self._filter_search_results(project, results)
         # 14.0 §2.4: a result the reranker was configured for but could not
         # score while it may still become ready (loading, or a one-off scoring
@@ -2490,7 +2602,36 @@ class RetrievalCore:
             )
         else:
             cache.put(cache_key, results)
+        for result in results:
+            result.pop("_doc_id", None)
         return results
+
+    async def _filter_current_book_admission(
+        self, project: str, results: list[dict[str, Any]],
+        retrieval_profile: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Recheck raw-source/doc-ID provenance after work that can race a save."""
+        policy = self.effective_index_policy_for(project)
+        if policy is None or getattr(policy, "layout", None) is None:
+            return results
+        sources, doc_ids, metadata = await self._effective_indexed_sources(
+            project, retrieval_profile,
+        )
+        admitted = set(zip(sources or (), doc_ids or ()))
+        filtered = []
+        for result in results:
+            source = str(result.get("source", ""))
+            doc_id = str(result.get("_doc_id", ""))
+            if (source, doc_id) not in admitted:
+                continue
+            admission = metadata.get(doc_id)
+            if admission is not None:
+                result["book_role"] = admission["role"]
+                result["chapter_id"] = admission["chapter_id"]
+                result["editorial_status"] = admission["editorial_status"]
+                result["summary_freshness"] = admission["summary_freshness"]
+            filtered.append(result)
+        return filtered
 
     def _filter_search_results(
         self, project: str, results: list[dict[str, Any]],

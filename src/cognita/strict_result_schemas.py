@@ -126,6 +126,18 @@ FACTS_DOCUMENT = obj(
      "tier", "on_disk"),
 )
 
+BOOK_RETRIEVAL_HIT_PROPERTIES = {
+    # Book-aware search adds these only after the current durable provenance
+    # join succeeds.  They deliberately remain optional so legacy projects
+    # retain their established result shape.
+    "book_role": S,
+    "chapter_id": NULL_S,
+    "editorial_status": {"type": ["string", "null"], "enum": ["draft", "approved", None]},
+    "summary_freshness": {
+        "type": "string", "enum": ["fresh", "stale", "unapproved", "not_applicable"],
+    },
+}
+
 SEARCH_HIT_PROPERTIES = {
     "content": S, "source": S, "filepath": S, "filename": S, "category": S,
     "chunk_index": NNI, "tier": TIER, "semantic_searchable": B, "score": N,
@@ -134,6 +146,7 @@ SEARCH_HIT_PROPERTIES = {
     "search_method": {"type": "string", "enum": ["hybrid", "semantic", "keyword"]},
     "keywords": STRINGS, "routed_by": S, "context_expanded": B,
     "content_length": NNI,
+    **BOOK_RETRIEVAL_HIT_PROPERTIES,
 }
 SEARCH_HIT = obj(
     SEARCH_HIT_PROPERTIES,
@@ -144,7 +157,7 @@ SEARCH_HIT = obj(
 
 SIMILAR_HIT = obj(
     {"source": S, "filepath": S, "filename": S, "category": S, "preview": S,
-     "similarity": N, "score": N},
+     "similarity": N, "score": N, **BOOK_RETRIEVAL_HIT_PROPERTIES},
     ("source", "filepath", "filename", "category", "preview", "similarity", "score"),
 )
 

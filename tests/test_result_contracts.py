@@ -104,6 +104,42 @@ def test_helper_keeps_text_and_structured_content_deeply_equal():
     assert result["isError"] is False
 
 
+def test_book_search_labels_are_optional_but_validate_when_admitted():
+    """Book provenance labels survive the closed public search contracts."""
+    search_hit = {
+        "content": "current approved prose", "source": "C:/P/Chapters/1/chapter.docx",
+        "filepath": "Chapters/1/chapter.docx", "filename": "chapter.docx",
+        "category": "general", "chunk_index": 0, "tier": "embedded",
+        "semantic_searchable": True, "score": 1.0, "raw_rrf_score": 0.1,
+        "reranker_score": None, "semantic_rank": 1, "bm25_rank": 1,
+        "search_method": "hybrid", "keywords": [], "routed_by": "none",
+        "book_role": "chapter_working", "chapter_id": "ch1",
+        "editorial_status": "approved", "summary_freshness": "not_applicable",
+    }
+    validate_structured_payload("search_knowledge", {
+        "status": "success", "query": "prose", "hybrid_alpha": 0.3,
+        "result_count": 1, "filtered_by_score": 0, "cache_hit_rate": 0.0,
+        "result_key": "results", "results": [search_hit],
+    })
+    validate_structured_payload("search_similar", {
+        "status": "success", "reference": "Chapters/1/chapter.docx", "count": 1,
+        "result_key": "similar_documents", "results": [{
+            "source": "C:/P/Project Files/ref.docx", "filepath": "Project Files/ref.docx",
+            "filename": "ref.docx", "category": "general", "preview": "approved reference",
+            "similarity": 0.9, "score": 0.9, "book_role": "reference",
+            "chapter_id": None, "editorial_status": None,
+            "summary_freshness": "not_applicable",
+        }],
+        "similar_documents": [{
+            "source": "C:/P/Project Files/ref.docx", "filepath": "Project Files/ref.docx",
+            "filename": "ref.docx", "category": "general", "preview": "approved reference",
+            "similarity": 0.9, "score": 0.9, "book_role": "reference",
+            "chapter_id": None, "editorial_status": None,
+            "summary_freshness": "not_applicable",
+        }],
+    })
+
+
 def test_image_extra_content_is_appended_without_entering_structured_content():
     payload = {"status": "success", "project": "p", "filepath": "a.png", "size": 3,
                "final_sha256": "a" * 64, "width": 1, "height": 1,

@@ -350,6 +350,53 @@ async def test_registered_document_never_appears_in_dense_search(store, project)
     assert all(h.source != "build.py" for h in hits)
 
 
+async def test_policy_allowlists_filter_every_sql_leg_before_limit(store, project):
+    """Excluded top-ranked rows must not consume the candidate limit.
+
+    This exercises the actual PostgreSQL predicates, including the
+    registered-only leg; a Python post-filter would return no result at limit 1.
+    """
+    query_vector = [1.0] + [0.0] * (DIMS - 1)
+    private, private_chunks = doc_with_chunks("private.md", version=71, n_chunks=1)
+    public, public_chunks = doc_with_chunks("public.md", version=72, n_chunks=1)
+    private_chunks[0].embedding = query_vector
+    public_chunks[0].embedding = [0.0, 1.0] + [0.0] * (DIMS - 2)
+    private_chunks[0].content = "cognita " * 30
+    public_chunks[0].content = "cognita eligible"
+    await store.replace_document(project, private, private_chunks)
+    await store.replace_document(project, public, public_chunks)
+
+    assert (await store.dense_search(project, query_vector, 1))[0].source == "private.md"
+    assert (await store.lexical_search(project, "cognita", 1))[0].source == "private.md"
+    assert (await store.dense_search(
+        project, query_vector, 1, include_sources=["public.md"],
+        include_doc_ids=[public.doc_id],
+    ))[0].source == "public.md"
+    assert (await store.lexical_search(
+        project, "cognita", 1, include_sources=["public.md"],
+        include_doc_ids=[public.doc_id],
+    ))[0].source == "public.md"
+    assert await store.dense_search(
+        project, query_vector, 1, include_sources=[], include_doc_ids=[],
+    ) == []
+    assert await store.lexical_search(
+        project, "cognita", 1, include_sources=[], include_doc_ids=[],
+    ) == []
+
+    private_registered = registered_doc("private/hidden.py", "cognita " * 30)
+    public_registered = registered_doc("public/allowed.py", "cognita eligible")
+    await store.replace_document(project, private_registered, [])
+    await store.replace_document(project, public_registered, [])
+    assert (await store.registered_lexical_search(project, "cognita", 1))[0].source == "private/hidden.py"
+    assert (await store.registered_lexical_search(
+        project, "cognita", 1, include_sources=["public/allowed.py"],
+        include_doc_ids=[public_registered.doc_id],
+    ))[0].source == "public/allowed.py"
+    assert await store.registered_lexical_search(
+        project, "cognita", 1, include_sources=[], include_doc_ids=[],
+    ) == []
+
+
 async def test_registered_lexical_search_honors_category_filter(store, project):
     doc = registered_doc()
     doc.category = "scripts"

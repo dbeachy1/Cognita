@@ -86,6 +86,9 @@ class _Core:
     def write_lock(self, project_name: str) -> _Lock:
         return self._locks.setdefault(project_name, _Lock())
 
+    def effective_index_policy_for(self, _project_name: str):
+        return None
+
     async def index_project(self, project_name, documents_dir, *, force, progress):
         self.index_calls.append((project_name, documents_dir))
         progress({"total_files": 0, "processed": 0, "indexed": 0, "skipped": 0, "errors": []})

@@ -330,6 +330,9 @@ class SourceInfo:
     # from the path on every write reset every explicitly-chosen category to
     # "general" (detect_category's fallback when no mapping matches).
     category: str = "general"
+    # Filled from the documents table's primary source key. Keeping it on the
+    # record lets host admission callbacks bind provenance to the exact row.
+    source: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +961,7 @@ class Store:
                 file_size=r["file_size"],
                 tier=r["tier"] or TIER_EMBEDDED,
                 category=r["category"] or "general",
+                source=r["source"],
             )
             for r in rows
         }
