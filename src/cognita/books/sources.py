@@ -90,3 +90,145 @@ def discard_staged_audio(source: StagedAudioSource, staging_root: Path) -> None:
         path.unlink()
     except OSError as exc:
         raise SourceStageError("stage_unavailable", "The source stage cannot be removed.") from exc
+
+_MAX_REDIRECTS = 5
+
+
+def _public_addresses(host: str, port: int, resolver=None) -> tuple[str, ...]:
+    import ipaddress
+    import socket
+
+    try:
+        rows = (resolver or socket.getaddrinfo)(host, port, 0, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise SourceStageError("source_unavailable", "The authorized source host could not be resolved.") from exc
+    addresses = tuple(dict.fromkeys(str(row[4][0]) for row in rows))
+    if not addresses:
+        raise SourceStageError("source_unavailable", "The authorized source host could not be resolved.")
+    for address in addresses:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise SourceStageError("source_unavailable", "The authorized source host has an invalid address.") from exc
+        if not parsed.is_global or parsed.is_multicast:
+            raise SourceStageError("source_forbidden", "The source host resolves to a private or internal address.")
+    return addresses
+
+
+def _validate_https_url(url: str, allowed_hosts: set[str], resolver=None) -> tuple[str, tuple[str, ...]]:
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        raise SourceStageError("source_forbidden", "The source must be an authorized HTTPS URL.")
+    if host not in allowed_hosts:
+        raise SourceStageError("source_forbidden", "The source host is not authorized for audio import.")
+    return host, _public_addresses(host, parsed.port or 443, resolver)
+
+
+async def stage_https_audio_source(
+    url: str,
+    staging_root: Path,
+    *,
+    allowed_hosts: tuple[str, ...] | list[str],
+    max_bytes: int,
+    reserve_bytes: int = 0,
+    expected_sha256: str | None = None,
+    timeout_seconds: float = 60.0,
+    resolver=None,
+) -> StagedAudioSource:
+    """Download one allowlisted HTTPS source through a public-address pin.
+
+    Redirects are followed manually.  Each request is connected to one of the
+    exact public addresses resolved for that hop, avoiding a DNS rebind between
+    validation and connection.  The URL never enters durable state or errors.
+    """
+    import asyncio
+    import httpcore
+    import shutil
+    from urllib.parse import urljoin
+
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 1:
+        raise SourceStageError("validation_failed", "A positive source byte quota is required.")
+    if not isinstance(reserve_bytes, int) or isinstance(reserve_bytes, bool) or reserve_bytes < 0:
+        raise SourceStageError("validation_failed", "A nonnegative storage reserve is required.")
+    if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+        raise SourceStageError("validation_failed", "A positive source timeout is required.")
+    expected = None if expected_sha256 is None else expected_sha256.lower()
+    if expected is not None and (len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected)):
+        raise SourceStageError("validation_failed", "The optional source SHA-256 is invalid.")
+    hosts = {str(host).casefold().rstrip(".") for host in allowed_hosts}
+    if not hosts or "" in hosts:
+        raise SourceStageError("source_forbidden", "No authorized HTTPS import host is configured.")
+    root = Path(staging_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(root).free - reserve_bytes < max_bytes:
+        raise SourceStageError("storage_unavailable", "Insufficient free storage for the configured source quota.")
+
+    class _PinnedBackend:
+        def __init__(self):
+            self._backend = httpcore.AnyIOBackend()
+
+        async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+            name = host.decode() if isinstance(host, bytes) else str(host)
+            addresses = await asyncio.to_thread(_public_addresses, name, int(port), resolver)
+            # Passing the vetted numeric target to httpcore is the actual
+            # connection decision; TLS still receives the request hostname.
+            return await self._backend.connect_tcp(addresses[0], port, timeout, local_address, socket_options)
+
+        async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+            raise RuntimeError("Unix sockets are not available for HTTPS import")
+
+        async def sleep(self, seconds):
+            await self._backend.sleep(seconds)
+
+    current = url
+    stage_path = root / f"{_STAGE_PREFIX}{uuid.uuid4().hex}"
+    try:
+        for _hop in range(_MAX_REDIRECTS + 1):
+            _validate_https_url(current, hosts, resolver)
+            pool = httpcore.AsyncConnectionPool(network_backend=_PinnedBackend(), max_connections=1)
+            try:
+                async with pool.stream(
+                    "GET", current,
+                    headers=[(b"user-agent", b"Cognita audiobook importer")],
+                    extensions={"timeout": {"connect": timeout_seconds, "read": timeout_seconds,
+                                             "write": timeout_seconds, "pool": timeout_seconds}},
+                ) as response:
+                    headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in response.headers}
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = headers.get("location")
+                        if not location:
+                            raise SourceStageError("source_unavailable", "The audio source redirect is invalid.")
+                        current = urljoin(current, location)
+                        continue
+                    if response.status < 200 or response.status >= 300:
+                        raise SourceStageError("source_unavailable", "The audio source could not be retrieved.")
+                    content_length = headers.get("content-length")
+                    if content_length is not None and (not content_length.isdecimal() or int(content_length) > max_bytes):
+                        raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
+                    digest, total = hashlib.sha256(), 0
+                    fd = os.open(stage_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+                    with os.fdopen(fd, "wb") as outgoing:
+                        async for chunk in response.aiter_stream():
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
+                            digest.update(chunk)
+                            outgoing.write(chunk)
+                    actual = digest.hexdigest()
+                    if expected is not None and actual != expected:
+                        raise SourceStageError("source_changed", "The audio source did not match its expected hash.")
+                    return StagedAudioSource(stage_path, actual, total, "https")
+            finally:
+                await pool.aclose()
+        raise SourceStageError("source_unavailable", "The audio source redirected too many times.")
+    except SourceStageError:
+        try: stage_path.unlink(missing_ok=True)
+        except OSError: pass
+        raise
+    except Exception as exc:
+        try: stage_path.unlink(missing_ok=True)
+        except OSError: pass
+        raise SourceStageError("source_unavailable", "The authorized audio source could not be retrieved.") from exc

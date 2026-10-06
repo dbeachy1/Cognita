@@ -19,3 +19,26 @@ def test_stage_file_hash_checks_and_owned_cleanup(tmp_path):
     with pytest.raises(SourceStageError) as invalid:
         stage_verified_file(source, root, expected_sha256="0" * 64, source_kind="workspace")
     assert invalid.value.reason == "source_changed"
+
+
+def test_https_validation_requires_allowlisted_public_host():
+    from cognita.books.sources import _validate_https_url
+
+    def resolver(host, port, *_args):
+        assert host == "media.example"
+        return [(None, None, None, None, ("8.8.8.8", port))]
+
+    host, addresses = _validate_https_url(
+        "https://media.example/audio?signature=transient", {"media.example"}, resolver,
+    )
+    assert host == "media.example" and addresses == ("8.8.8.8",)
+    with pytest.raises(SourceStageError) as forbidden:
+        _validate_https_url("https://other.example/audio", {"media.example"}, resolver)
+    assert forbidden.value.reason == "source_forbidden"
+
+    def private_resolver(host, port, *_args):
+        return [(None, None, None, None, ("127.0.0.1", port))]
+
+    with pytest.raises(SourceStageError) as private:
+        _validate_https_url("https://media.example/audio", {"media.example"}, private_resolver)
+    assert private.value.reason == "source_forbidden"
