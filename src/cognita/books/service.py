@@ -1119,29 +1119,36 @@ class BookService:
             except (BookServiceError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 raise BookServiceError("state_unavailable", "The immutable build timeline could not be read.") from exc
             version = canonical_json_sha256({"build_id": request.query.build_id, "timeline": timeline})
-            for entry in entries:
+            if frame >= int(timeline["frame_count"]):
+                raise BookServiceError("past_end", "The timestamp is at or after the immutable timeline end.")
+            for position, entry in enumerate(entries):
                 start_frame, end_frame = int(entry["start_frame"]), int(entry["end_frame"])
                 if start_frame <= frame < end_frame:
                     source_id = entry["source_id"]
                     chapter_id = build.get("chapter_id") or source_id
                     if "chapter_id" in request.model_fields_set and request.chapter_id != chapter_id:
                         continue
+                    source_ids = [source_id]
+                    if entry["kind"] == "silence":
+                        source_ids = [candidate["source_id"] for candidate in (
+                            entries[max(0, position - 1):position] + entries[position + 1:position + 2]
+                        ) if candidate.get("kind") == "audio"]
                     take_ids: list[str] = []
                     if build.get("scope") == "chapter":
                         for take_id in build.get("input_take_ids", []):
                             take = state.take(take_id) if state else None
-                            if take is not None and take.get("chunk_id") == source_id:
+                            if take is not None and take.get("chunk_id") in source_ids:
                                 take_ids.append(take_id)
                     matches.append({
                         "chapter_id": chapter_id, "snapshot_id": (
                             build.get("snapshot_id") if build.get("scope") == "chapter" else None
                         ) or "book-build",
-                        "chunk_ids": [source_id] if entry["kind"] == "audio" and build.get("scope") == "chapter" else [],
+                        "chunk_ids": source_ids if build.get("scope") == "chapter" else [],
                         "occurrence_start": None, "occurrence_end": None,
                         "coordinate_projection": "timeline", "excerpt": f"{entry['kind']}:{source_id}",
                         "matched_build_id": request.query.build_id, "matched_take_ids": take_ids,
                         "segment_kind": "silence" if entry["kind"] == "silence" else "speech",
-                        "current_chunk_ids": [source_id] if take_ids else [],
+                        "current_chunk_ids": source_ids if take_ids else [],
                         "current_take_ids": take_ids, "lineage": [], "current_mapping_status": "not_checked",
                         "match_mode": "timestamp",
                     })

@@ -790,6 +790,11 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
         "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 0.0},
     }))
     assert located["matches"][0]["matched_take_ids"] == [take["take_id"]]
+    with pytest.raises(BookServiceError) as past_end:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 1.0},
+        }))
+    assert past_end.value.reason == "past_end"
     quote = service.find_chunk(FindChunkRequest.model_validate({
         "project": "fixture", "chapter_id": "ch1",
         "query": {"kind": "quote", "text": "hello", "snapshot_id": snapshot_id},
