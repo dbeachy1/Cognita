@@ -1305,6 +1305,25 @@ class AssetService:
             return int(await self.repository.deindex_searchable_paths(normalized))
         return 0
 
+    async def deindex_searchable_prefix(self, prefix: str) -> int:
+        """Retire only derived projections beneath one policy prefix.
+
+        Asset rows, IDs, metadata, receipts, and the exact OCR result remain
+        catalog authority.  This is deliberately narrower than deleting an
+        asset source, which would make a storage exclusion erase the user's
+        exact-path catalog access.
+        """
+        normalized = prefix.strip("/")
+        if self.repository is not None and hasattr(self.repository, "searchable_source_paths"):
+            sources = await self.repository.searchable_source_paths()
+        else:
+            sources = list(self._memory)
+        selected = [
+            source for source in sources
+            if not normalized or source == normalized or source.startswith(normalized + "/")
+        ]
+        return await self.deindex_searchable_paths(selected)
+
     async def reconcile_all(
         self, *, source_is_safe: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:

@@ -78,6 +78,46 @@ def test_service_round_trip(tmp_path: Path):
     asyncio.run(run())
 
 
+def test_policy_prefix_deindexes_only_search_projections_not_catalog_facts(tmp_path: Path):
+    """Folder exclusion retires derived search rows without deleting asset IDs."""
+    class Project:
+        name = "test"
+        documents_dir = tmp_path
+        data_dir = tmp_path / "data"
+
+    class Repository:
+        def __init__(self):
+            self.sources = ["excluded/a.png", "other/b.png", "excluded/ocr.png"]
+            self.deindexed: list[str] = []
+
+        async def searchable_source_paths(self):
+            return list(self.sources)
+
+        async def deindex_searchable_paths(self, paths):
+            self.deindexed.extend(paths)
+            return len(paths)
+
+    async def run():
+        for relative in ("excluded/a.png", "other/b.png", "excluded/ocr.png"):
+            target = tmp_path / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(PNG)
+        repository = Repository()
+        service = AssetService(Project(), repository)
+        # Simulate catalog facts already present.  The cleanup must not remove
+        # either the backing file or the catalog row/identity held in memory.
+        service._memory["excluded/a.png"] = SimpleNamespace(indexed=True, asset_id="asset-a")
+        removed = await service.deindex_searchable_prefix("excluded")
+        assert removed == 2
+        assert repository.deindexed == ["excluded/a.png", "excluded/ocr.png"]
+        assert service._memory["excluded/a.png"].asset_id == "asset-a"
+        assert service._memory["excluded/a.png"].indexed is False
+        assert (tmp_path / "excluded/a.png").is_file()
+        assert "other/b.png" not in repository.deindexed
+
+    asyncio.run(run())
+
+
 class _Embedder:
     def embed(self, texts):
         return [[1.0] for _ in texts]

@@ -388,14 +388,32 @@ class LocalEngineHost(
         """
         try:
             service.update_folder_policy_job(job_id, "running", {})
+            assets = self._asset_service_for(project, None)
+            asset_removed = 0
+            if not indexed:
+                # Folder exclusion is a derived-search change, not a request
+                # to remove an original asset, its ID, metadata, OCR result, or
+                # operation receipts.  The asset service retires only chunks
+                # and OCR search mappings under this exact policy prefix.
+                cleanup = getattr(assets, "deindex_searchable_prefix", None)
+                if cleanup is not None:
+                    asset_removed = await cleanup(path)
             summary = await self.core.reconcile_paths(
                 project.name, project.documents_dir, [path or "."],
             )
             if summary.get("failed", 0):
                 raise RuntimeError("derived policy reconciliation failed")
+            if indexed:
+                # Rebuild only after the source rule permits publication again;
+                # the asset service's effective-policy callback keeps hard and
+                # per-file exclusions in force during this targeted scan.
+                reconcile = getattr(assets, "reconcile_paths", None)
+                if reconcile is not None:
+                    await reconcile((), (path,))
             service.update_folder_policy_job(
                 job_id, "indexed" if indexed else "excluded",
-                {"indexed": summary.get("indexed", 0), "removed": summary.get("removed", 0)},
+                {"indexed": summary.get("indexed", 0), "removed": summary.get("removed", 0),
+                 "asset_search_projections_removed": asset_removed},
             )
             return None
         except Exception as exc:
