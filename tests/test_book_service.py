@@ -170,6 +170,15 @@ def test_get_book_reports_registered_order_and_unready_production_heads(tmp_path
     assert value["head_revision"] is None
     assert value["chapter_order"] == ["ch1"]
     assert value["chapters_not_ready"] == [{"chapter_id": "ch1", "reason": "no_accepted_production_head"}]
+    first = service.get_book(GetBookRequest.model_validate({
+        "project": "fixture", "book_id": "fixture-book", "limit": 1,
+    }))
+    assert first["chapter_order"] == ["ch1"] and first["chapters_not_ready"] == [] and first["has_more"]
+    second = service.get_book(GetBookRequest.model_validate({
+        "project": "fixture", "book_id": "fixture-book", "limit": 1, "cursor": first["next_cursor"],
+    }))
+    assert second["chapter_order"] == []
+    assert second["chapters_not_ready"] == [{"chapter_id": "ch1", "reason": "no_accepted_production_head"}]
 
 
 def test_invalid_binding_fails_closed_instead_of_reentering_bootstrap(tmp_path):
@@ -781,6 +790,17 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
         "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 0.0},
     }))
     assert located["matches"][0]["matched_take_ids"] == [take["take_id"]]
+    quote = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "query": {"kind": "quote", "text": "hello", "snapshot_id": snapshot_id},
+    }))
+    assert quote["searched_version"] == snapshot_id
+    assert quote["matches"][0]["occurrence_start"] == 0
+    with pytest.raises(BookServiceError) as missing_chapter:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "query": {"kind": "quote", "text": "hello"},
+        }))
+    assert missing_chapter.value.reason == "validation_failed"
     assert located["matches"][0]["coordinate_projection"] == "timeline"
 
 def test_index_status_reports_pending_and_blocked_registered_sources(tmp_path):

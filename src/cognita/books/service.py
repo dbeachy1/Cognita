@@ -1146,11 +1146,9 @@ class BookService:
                         "match_mode": "timestamp",
                     })
         else:
-            version = "spoken-text-v1"
-            chapter_ids = [request.chapter_id] if "chapter_id" in request.model_fields_set else []
-            if not chapter_ids and state is not None:
-                cfg = self.config()
-                chapter_ids = [chapter.chapter_id for chapter in cfg.layout.chapters] if cfg.layout else []
+            if "chapter_id" not in request.model_fields_set:
+                raise BookServiceError("validation_failed", "Quote lookup requires an explicit chapter ID.")
+            chapter_ids = [request.chapter_id]
             query = request.query.text
             before = request.query.before_text if "before_text" in request.query.model_fields_set else None
             after = request.query.after_text if "after_text" in request.query.model_fields_set else None
@@ -1161,10 +1159,10 @@ class BookService:
                     namespace.get("current_snapshot_id") if namespace else None
                 )
                 if not snapshot_id or state is None:
-                    continue
+                    raise BookServiceError("not_prepared", "The chapter has no prepared snapshot to search.")
                 stored = state.snapshot(snapshot_id)
                 if not stored or stored["chapter_id"] != chapter_id:
-                    continue
+                    raise BookServiceError("snapshot_not_found", "The requested snapshot is unavailable for this chapter.")
                 searched_snapshots.append(snapshot_id)
                 snapshot = stored["payload"]
                 text = snapshot.get("spoken_projection", "")
@@ -1192,13 +1190,15 @@ class BookService:
                         })
                     start = at + max(1, len(query))
         if not isinstance(request.query, dto.TimestampQuery):
-            version = canonical_json_sha256({"projection": "spoken-text-v1", "snapshots": searched_snapshots})
+            # Quote cursors are pinned to one immutable projection.  Returning
+            # its actual ID lets callers distinguish history from current Word.
+            version = searched_snapshots[0]
         cursor_view = canonical_json_sha256({
             "version": version, "query": query_value,
             "chapter_ids": chapter_ids if not isinstance(request.query, dto.TimestampQuery) else [],
             "snapshot_ids": searched_snapshots,
         })
-        limit = request.limit if "limit" in request.model_fields_set else 100
+        limit = request.limit if "limit" in request.model_fields_set else 50
         offset = _cursor_offset(request.cursor, cursor_view) if "cursor" in request.model_fields_set else 0
         page = matches[offset:offset+limit]
         next_offset = offset + len(page)
@@ -2287,6 +2287,11 @@ class BookService:
             if head is None:
                 not_ready.append({"chapter_id": chapter_id, "reason": "no_accepted_production_head"})
                 continue
+            accepted_chapter = state.build(head["accepted_build_id"])
+            outputs = (accepted_chapter or {}).get("result", {}).get("outputs", [])
+            if not outputs or any(item.get("media", {}).get("encoding") == "compressed" for item in outputs):
+                not_ready.append({"chapter_id": chapter_id, "reason": "ineligible_accepted_production_head"})
+                continue
             dependencies.append({"chapter_id": chapter_id, "chapter_build_id": head["accepted_build_id"],
                                  "chapter_head_revision": int(head["head_revision"]),
                                  "snapshot_id": head["accepted_snapshot_id"],
@@ -2295,25 +2300,37 @@ class BookService:
         accepted = state.build(head["accepted_build_id"]) if head else None
         candidates = state.book_builds(layout.book_id)
         accepted_dependencies = accepted.get("dependencies", []) if accepted else []
+        metadata: list[tuple[str, Any]] = [
+            *(("chapter_order", chapter_id) for chapter_id in layout.chapter_order),
+            *(("current_dependency", dependency) for dependency in dependencies),
+            *(("accepted_dependency", dependency) for dependency in accepted_dependencies),
+            *(("not_ready", value) for value in not_ready),
+            *(("candidate", value["build_id"]) for value in candidates),
+        ]
         limit = request.limit if "limit" in request.model_fields_set else 100
         view = canonical_json_sha256({"book": layout.book_id, "layout_revision": layout.layout_revision,
-                                      "head": head["head_revision"] if head else None, "dependencies": dependencies})
+                                      "head": head["head_revision"] if head else None,
+                                      "metadata": [(kind, value if isinstance(value, str) else value.get("chapter_id", value.get("build_id")))
+                                                   for kind, value in metadata]})
         offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
-        page = dependencies[offset:offset + limit]
+        if offset > len(metadata):
+            raise BookServiceError("invalid_cursor", "The book cursor is invalid or stale.")
+        page = metadata[offset:offset + limit]
         next_offset = offset + len(page)
         return {
             "book_id": layout.book_id, "layout_revision": layout.layout_revision,
             "head_revision": int(head["head_revision"]) if head else None,
             "accepted_build_id": head["accepted_build_id"] if head else None,
-            "candidate_build_ids": [item["build_id"] for item in candidates],
+            "candidate_build_ids": [value for kind, value in page if kind == "candidate"],
             "current_outputs_stale": bool(head and accepted_dependencies != dependencies),
             "accepted_plan_matches_prepared": bool(head["accepted_plan_matches_prepared"]) if head else None,
-            "chapter_order": layout.chapter_order, "current_chapter_dependencies": page,
-            "accepted_book_dependencies": accepted_dependencies,
-            "chapters_not_ready": not_ready,
+            "chapter_order": [value for kind, value in page if kind == "chapter_order"],
+            "current_chapter_dependencies": [value for kind, value in page if kind == "current_dependency"],
+            "accepted_book_dependencies": [value for kind, value in page if kind == "accepted_dependency"],
+            "chapters_not_ready": [value for kind, value in page if kind == "not_ready"],
             "exports": accepted["result"]["outputs"] if accepted else [],
-            "has_more": next_offset < len(dependencies),
-            "next_cursor": _cursor(view, next_offset) if next_offset < len(dependencies) else None,
+            "has_more": next_offset < len(metadata),
+            "next_cursor": _cursor(view, next_offset) if next_offset < len(metadata) else None,
         }
 
     def get_job(self, request: dto.GetJobRequest) -> dict[str, Any]:
