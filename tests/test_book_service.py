@@ -331,6 +331,205 @@ def test_chunk_lineage_split_merge_keeps_later_ids_and_permanently_retires_ids(t
     assert recycled.value.reason == "duplicate_or_recycled_chunk_id"
 
 
+def _accept_lookup_plan(service, prepared, *, prefix, expected_head):
+    takes = [_import_native_take(service, prepared, chunk["chunk_id"], operation_prefix=f"{prefix}-{index}")
+             for index, chunk in enumerate(prepared["chunks"])]
+    queued, _ = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": f"{prefix}-build", "expected_head_revision": expected_head,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": take["chunk_id"], "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]} for take in takes]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    service.run_build_job(queued["job_id"])
+    job = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert job["state"] == "succeeded", job
+    head = _commit_book(service, f"{prefix}-accept", job["result"]["build_id"], expected_head, "accept_candidate")
+    return head, takes
+
+
+def _prepare_lookup_step(service, root, prose, operation, revision, chunks, *, spec=None, authorization_id="test-auth"):
+    return _prepare_test_plan(
+        service, operation, prose, (root / "Chapters/1/chapter_audio-tags.docx").read_bytes(), revision,
+        [{**chunk, "request_spec": spec} for chunk in chunks], publish=True, authorization_id=authorization_id,
+    )
+
+
+def _quote_lookup(service, snapshot_id, text="hello", **arguments):
+    return service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1", "query": {
+            "kind": "quote", "text": text, "snapshot_id": snapshot_id,
+        }, **arguments,
+    }))
+
+
+def test_lookup_traverses_real_split_merge_split_history_and_deduplicates_in_target_order(tmp_path):
+    service, prose, _ = _fixture(tmp_path)
+    first = _prepare_lookup_step(service, tmp_path, prose, "lookup-first", None,
+                                 [{"chunk_id": "b", "start": 0, "end": 5}])
+    split = _prepare_lookup_step(service, tmp_path, prose, "lookup-split", first["manifest_revision"], [
+        {"chunk_id": "z-left", "start": 0, "end": 2, "replaces_chunk_ids": ["b"]},
+        {"chunk_id": "a-right", "start": 2, "end": 5, "replaces_chunk_ids": ["b"]},
+    ])
+    merge = _prepare_lookup_step(service, tmp_path, prose, "lookup-merge", split["manifest_revision"], [
+        {"chunk_id": "joined", "start": 0, "end": 5, "replaces_chunk_ids": ["z-left", "a-right"]},
+    ])
+    for historical in (first, split):
+        match = _quote_lookup(service, historical["snapshot_id"])["matches"][0]
+        assert match["current_chunk_ids"] == ["joined"] and match["current_mapping_status"] == "present"
+    final = _prepare_lookup_step(service, tmp_path, prose, "lookup-final", merge["manifest_revision"], [
+        {"chunk_id": "z-final", "start": 0, "end": 2, "replaces_chunk_ids": ["joined"]},
+        {"chunk_id": "a-final", "start": 2, "end": 5, "replaces_chunk_ids": ["joined"]},
+    ])
+    for historical in (first, split, merge):
+        match = _quote_lookup(service, historical["snapshot_id"])["matches"][0]
+        assert match["snapshot_id"] == historical["snapshot_id"]
+        assert match["current_chunk_ids"] == ["z-final", "a-final"]
+        assert match["current_mapping_status"] == "ambiguous"
+        assert all(item["current_chunk_ids"] == ["z-final", "a-final"] for item in match["lineage"])
+    direct = _quote_lookup(service, final["snapshot_id"])["matches"][0]
+    assert direct["current_chunk_ids"] == ["z-final", "a-final"]
+    assert direct["lineage"] == [] and direct["current_mapping_status"] == "present"
+
+
+def test_lookup_current_accepted_ancestor_and_timestamp_are_independent_of_prepared_navigation(tmp_path):
+    service, prose, _ = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+            "parameters": {}, "context_fields": {}}
+    first = _prepare_lookup_step(service, tmp_path, prose, "ancestor-first", None,
+                                 [{"chunk_id": "b", "start": 0, "end": 5}], spec=spec)
+    old_head, old_takes = _accept_lookup_plan(service, first, prefix="ancestor-old", expected_head=None)
+    split = _prepare_lookup_step(service, tmp_path, prose, "ancestor-split", first["manifest_revision"], [
+        {"chunk_id": "z-left", "start": 0, "end": 2, "replaces_chunk_ids": ["b"]},
+        {"chunk_id": "a-right", "start": 2, "end": 5, "replaces_chunk_ids": ["b"]},
+    ], spec=spec)
+    split_head, split_takes = _accept_lookup_plan(service, split, prefix="ancestor-split", expected_head=1)
+    state = service._state_required()
+    old_timeline = tmp_path / state.build(old_head["accepted_build_id"])["result"]["timeline_filepath"]
+    old_bytes = old_timeline.read_bytes()
+    merge = _prepare_lookup_step(service, tmp_path, prose, "ancestor-merge", split["manifest_revision"], [
+        {"chunk_id": "joined", "start": 0, "end": 5, "replaces_chunk_ids": ["z-left", "a-right"]},
+    ], spec=spec)
+    final = _prepare_lookup_step(service, tmp_path, prose, "ancestor-final", merge["manifest_revision"], [
+        {"chunk_id": "z-final", "start": 0, "end": 2, "replaces_chunk_ids": ["joined"]},
+        {"chunk_id": "a-final", "start": 2, "end": 5, "replaces_chunk_ids": ["joined"]},
+    ], spec=spec)
+    timestamp = {"project": "fixture", "query": {"kind": "timestamp", "build_id": old_head["accepted_build_id"], "seconds": 0.0}}
+    for match in (_quote_lookup(service, first["snapshot_id"])["matches"][0],
+                  service.find_chunk(FindChunkRequest.model_validate(timestamp))["matches"][0]):
+        assert match["matched_build_id"] == old_head["accepted_build_id"]
+        assert match["matched_take_ids"] == [old_takes[0]["take_id"]]
+        assert match["current_take_ids"] == [take["take_id"] for take in split_takes]
+        assert match["current_chunk_ids"] == ["z-final", "a-final"]
+        assert match["current_mapping_status"] == "ambiguous"
+    rollback = _commit_book(service, "ancestor-rollback", old_head["accepted_build_id"], 2, "rollback")
+    assert rollback["head_revision"] == 3
+    assert state.namespace("ch1", '{"kind":"test","authorization_id":"test-auth"}')["current_snapshot_id"] == final["snapshot_id"]
+    current = _quote_lookup(service, final["snapshot_id"], "he")["matches"][0]
+    assert current["current_chunk_ids"] == ["z-final"] and current["current_mapping_status"] == "present"
+    assert current["current_take_ids"] == [old_takes[0]["take_id"]]
+    old_split_timestamp = service.find_chunk(FindChunkRequest.model_validate({"project": "fixture", "query": {
+        "kind": "timestamp", "build_id": split_head["accepted_build_id"], "seconds": 0.0,
+    }}))["matches"][0]
+    assert old_split_timestamp["matched_take_ids"] == [split_takes[0]["take_id"]]
+    assert old_split_timestamp["current_take_ids"] == [old_takes[0]["take_id"]]
+    assert old_timeline.read_bytes() == old_bytes
+
+
+def test_lookup_deleted_terminal_does_not_guess_unrelated_current_text(tmp_path):
+    service, prose, _ = _fixture(tmp_path)
+    first = _prepare_lookup_step(service, tmp_path, prose, "deleted-first", None,
+                                 [{"chunk_id": "old", "start": 0, "end": 5}])
+    _prepare_lookup_step(service, tmp_path, prose, "deleted-later", first["manifest_revision"],
+                         [{"chunk_id": "unrelated", "start": 0, "end": 5}])
+    match = _quote_lookup(service, first["snapshot_id"])["matches"][0]
+    assert match["chunk_ids"] == ["old"] and match["current_chunk_ids"] == []
+    assert match["current_mapping_status"] == "missing"
+    assert match["lineage"] == [{"old_chunk_id": "old", "current_chunk_ids": []}]
+
+
+def test_lookup_accepted_ancestor_does_not_include_its_selected_sibling(tmp_path):
+    service, prose, _ = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+            "parameters": {}, "context_fields": {}}
+    first = _prepare_lookup_step(service, tmp_path, prose, "sibling-first", None,
+                                 [{"chunk_id": "root", "start": 0, "end": 5}], spec=spec)
+    split = _prepare_lookup_step(service, tmp_path, prose, "sibling-split", first["manifest_revision"], [
+        {"chunk_id": "left", "start": 0, "end": 2, "replaces_chunk_ids": ["root"]},
+        {"chunk_id": "right", "start": 2, "end": 5, "replaces_chunk_ids": ["root"]},
+    ], spec=spec)
+    head, takes = _accept_lookup_plan(service, split, prefix="sibling-head", expected_head=None)
+    final = _prepare_lookup_step(service, tmp_path, prose, "sibling-final", split["manifest_revision"], [
+        {"chunk_id": "left-child", "start": 0, "end": 1, "replaces_chunk_ids": ["left"]},
+        {"chunk_id": "left-next", "start": 1, "end": 2, "replaces_chunk_ids": ["left"]},
+        {"chunk_id": "right", "start": 2, "end": 5},
+    ], spec=spec)
+    child = _quote_lookup(service, final["snapshot_id"], "h")["matches"][0]
+    assert child["current_chunk_ids"] == ["left-child"] and child["current_mapping_status"] == "present"
+    assert child["current_take_ids"] == [takes[0]["take_id"]]
+    assert takes[1]["take_id"] not in child["current_take_ids"]
+    historical = service.find_chunk(FindChunkRequest.model_validate({"project": "fixture", "query": {
+        "kind": "timestamp", "build_id": head["accepted_build_id"], "seconds": 0.0,
+    }}))["matches"][0]
+    assert historical["matched_take_ids"] == historical["current_take_ids"] == [takes[0]["take_id"]]
+    assert historical["current_chunk_ids"] == ["left-child", "left-next"]
+    assert historical["current_mapping_status"] == "ambiguous"
+
+
+def test_directional_lineage_mapping_never_hops_to_siblings_and_is_finite():
+    from cognita.books.service import _lineage_targets
+
+    records = [
+        {"chunk_id": "root", "replaces_chunk_ids": [], "replaced_by_chunk_ids": ["left", "right"]},
+        {"chunk_id": "left", "replaces_chunk_ids": ["root"], "replaced_by_chunk_ids": ["new-left"]},
+        {"chunk_id": "right", "replaces_chunk_ids": ["root"], "replaced_by_chunk_ids": []},
+        {"chunk_id": "new-left", "replaces_chunk_ids": ["left"], "replaced_by_chunk_ids": []},
+    ]
+    assert _lineage_targets(["new-left"], ["right"], records, allow_ancestors=True) == {"new-left": []}
+    assert _lineage_targets(["new-left"], ["root"], records) == {"new-left": []}
+    assert _lineage_targets(["new-left"], ["root"], records, allow_ancestors=True) == {"new-left": ["root"]}
+    assert _lineage_targets(["left"], ["new-left", "left", "root"], records, allow_ancestors=True) == {"left": ["left"]}
+    assert _lineage_targets(["root", "root"], ["right", "new-left", "right"], records) == {"root": ["right", "new-left"]}
+    records.append({"chunk_id": "cycle", "replaces_chunk_ids": ["cycle"], "replaced_by_chunk_ids": ["cycle"]})
+    assert _lineage_targets(["cycle"], ["missing"], records, allow_ancestors=True) == {"cycle": []}
+
+
+def test_lookup_lineage_namespace_isolation_and_cursor_binds_retained_facts(tmp_path):
+    service, prose, _ = _fixture(tmp_path)
+    first = _prepare_lookup_step(service, tmp_path, prose, "isolated-first", None,
+                                 [{"chunk_id": "same", "start": 0, "end": 5}])
+    page = _quote_lookup(service, first["snapshot_id"], "l", limit=1)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"].append({**layout["test_authorizations"][0], "authorization_id": "other"})
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    other = _prepare_lookup_step(service, tmp_path, prose, "isolated-other", None,
+                                 [{"chunk_id": "same", "start": 0, "end": 5}], authorization_id="other")
+    _prepare_lookup_step(service, tmp_path, prose, "isolated-other-change", other["manifest_revision"],
+                         [{"chunk_id": "other-child", "start": 0, "end": 5, "replaces_chunk_ids": ["same"]}], authorization_id="other")
+    # The other namespace changed actual working bytes, so the original cursor
+    # expires even though its source names and logical targets remain isolated.
+    with pytest.raises(BookServiceError) as working_changed:
+        _quote_lookup(service, first["snapshot_id"], "l", limit=1, cursor=page["next_cursor"])
+    assert working_changed.value.reason == "invalid_cursor"
+    page = _quote_lookup(service, first["snapshot_id"], "l", limit=1)
+    continuation = _quote_lookup(service, first["snapshot_id"], "l", limit=1, cursor=page["next_cursor"])
+    assert continuation["matches"][0]["current_chunk_ids"] == ["same"]
+    assert continuation["matches"][0]["current_mapping_status"] == "present"
+    # Change only a retained record, preserving heads, prepared snapshot, text,
+    # working bytes and the target result. The opaque cursor must still bind it.
+    state = service._state_required()
+    with state.transaction() as connection:
+        connection.execute("UPDATE book_chunk_lineage SET retired=1 WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                           ("ch1", '{"kind":"test","authorization_id":"test-auth"}', "same"))
+    with pytest.raises(BookServiceError) as stale:
+        _quote_lookup(service, first["snapshot_id"], "l", limit=1, cursor=page["next_cursor"])
+    assert stale.value.reason == "invalid_cursor"
+
+
 def test_one_chunk_retakes_while_exact_unchanged_chunk_reuses_take_after_tagged_refresh(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
     voice_a = {"provider": "synthetic", "route": "fixture", "model_id": "model",

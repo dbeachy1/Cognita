@@ -217,6 +217,41 @@ def _cursor_offset(cursor: str, view_id: str) -> int:
     return offset
 
 
+def _lineage_targets(
+    seeds: list[str], targets: list[str], records: list[dict[str, Any]], *, allow_ancestors: bool = False,
+) -> dict[str, list[str]]:
+    """Follow each direction independently; an ancestor never grants a sibling."""
+    ordered_targets = list(dict.fromkeys(targets))
+    target_set = set(ordered_targets)
+    by_id = {record["chunk_id"]: record for record in records}
+
+    def reached(seed: str, edge: str) -> set[str]:
+        pending = [seed]
+        visited: set[str] = set()
+        found: set[str] = set()
+        while pending:
+            chunk_id = pending.pop()
+            if chunk_id in visited:
+                continue
+            visited.add(chunk_id)
+            if chunk_id in target_set:
+                found.add(chunk_id)
+            else:
+                pending.extend(by_id.get(chunk_id, {}).get(edge, []))
+        return found
+
+    mapped = {}
+    for seed in dict.fromkeys(seeds):
+        if seed in target_set:
+            mapped[seed] = [seed]
+            continue
+        found = reached(seed, "replaced_by_chunk_ids")
+        if allow_ancestors:
+            found.update(reached(seed, "replaces_chunk_ids"))
+        mapped[seed] = [target for target in ordered_targets if target in found]
+    return mapped
+
+
 def _bound_document_view_id(
     intrinsic_view_id: str, *, chapter_id: str, prose_filepath: str,
     tagged_filepath: str, layout_revision: int,
@@ -2145,6 +2180,48 @@ class BookService:
         searched_snapshots: list[str] = []
         current_heads: list[tuple[str, str, dict[str, Any] | None]] = []
         working_checks: list[dict[str, Any]] = []
+        navigation_views: list[dict[str, Any]] = []
+        navigation_contexts: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def current_mapping(seeds: list[str], chapter_id: str, scope_key: str, accepted_takes: dict[str, str]):
+            key = (chapter_id, scope_key)
+            if key not in navigation_contexts:
+                namespace = state.namespace(chapter_id, scope_key)
+                snapshot_id = namespace.get("current_snapshot_id") if namespace else None
+                stored = state.snapshot(snapshot_id) if snapshot_id else None
+                if stored is not None and (stored["chapter_id"] != chapter_id or stored["scope_key"] != scope_key):
+                    raise BookServiceError("state_unavailable", "The prepared navigation namespace is inconsistent.")
+                chunks = stored["payload"].get("result", {}).get("chunks", []) if stored else []
+                records = state.chunk_lineage(chapter_id=chapter_id, scope_key=scope_key)
+                navigation_contexts[key] = {"stored": stored, "chunks": chunks, "records": records}
+                navigation_views.append({"chapter_id": chapter_id, "scope_key": scope_key,
+                                         "namespace": namespace, "lineage": records})
+            context = navigation_contexts[key]
+            target_order = list(dict.fromkeys(chunk["chunk_id"] for chunk in context["chunks"]))
+            mapped = _lineage_targets(seeds, target_order, context["records"])
+            reached = {target for targets in mapped.values() for target in targets}
+            current_ids = [target for target in target_order if target in reached]
+            lineage = [{"old_chunk_id": seed, "current_chunk_ids": targets}
+                       for seed, targets in mapped.items() if targets != [seed]]
+            accepted = _lineage_targets(seeds, list(accepted_takes), context["records"], allow_ancestors=True)
+            accepted_ids = {target for targets in accepted.values() for target in targets}
+            take_ids = [take_id for chunk_id, take_id in accepted_takes.items() if chunk_id in accepted_ids]
+            status = "present" if current_ids and all(len(targets) == 1 for targets in mapped.values()) else "missing"
+            if any(len(targets) > 1 for targets in mapped.values()):
+                status = "ambiguous"
+            if status == "present":
+                if "bookmarks" not in context:
+                    context["bookmarks"], checked_source = self._working_chunk_bookmark_proof(
+                        context["stored"], chapter_id=chapter_id, scope_key=scope_key,
+                    )
+                    working_checks.append(checked_source)
+                statuses = [context["bookmarks"].get(chunk_id, "missing") for chunk_id in current_ids]
+                if "missing" in statuses:
+                    status = "missing"
+                elif "not_checked" in statuses:
+                    status = "not_checked"
+            return current_ids, take_ids, lineage, status
+
         query_value = request.query.model_dump(mode="json", exclude_unset=True)
         if isinstance(request.query, dto.TimestampQuery):
             build = state.build(request.query.build_id) if state is not None else None
@@ -2190,6 +2267,11 @@ class BookService:
                         ) if candidate.get("kind") == "audio"]
                     take_ids = [take_id for chunk_id, take_id in matched_takes.items() if chunk_id in source_ids]
                     current_take_ids = [take_id for chunk_id, take_id in current_takes.items() if chunk_id in source_ids]
+                    current_ids, lineage, mapping_status = (source_ids if take_ids else []), [], "not_checked"
+                    if build.get("scope") == "chapter":
+                        current_ids, current_take_ids, lineage, mapping_status = current_mapping(
+                            source_ids, chapter_id, build["scope_key"], current_takes,
+                        )
                     matches.append({
                         "chapter_id": chapter_id, "snapshot_id": (
                             build.get("snapshot_id") if build.get("scope") == "chapter" else None
@@ -2199,8 +2281,8 @@ class BookService:
                         "coordinate_projection": "timeline", "excerpt": f"{entry['kind']}:{source_id}",
                         "matched_build_id": request.query.build_id, "matched_take_ids": take_ids,
                         "segment_kind": "silence" if entry["kind"] == "silence" else "speech",
-                        "current_chunk_ids": source_ids if take_ids else [],
-                        "current_take_ids": current_take_ids, "lineage": [], "current_mapping_status": "not_checked",
+                        "current_chunk_ids": current_ids,
+                        "current_take_ids": current_take_ids, "lineage": lineage, "current_mapping_status": mapping_status,
                         "match_mode": "timestamp",
                     })
         else:
@@ -2241,11 +2323,6 @@ class BookService:
                 text = snapshot.get("spoken_projection", "")
                 speech_text = snapshot.get("speech_text", "")
                 start = 0
-                current_namespace = state.namespace(chapter_id, search_scope_key)
-                current_snapshot = current_namespace.get("current_snapshot_id") if current_namespace else None
-                current_stored = state.snapshot(current_snapshot) if current_snapshot else None
-                current_chunks = current_stored["payload"].get("result", {}).get("chunks", []) if current_stored else []
-                bookmark_statuses: dict[str, str] | None = None
                 while query and (at := text.find(query, start)) >= 0:
                     end = at + len(query)
                     if ((before is None or text[max(0, at-len(before)):at] == before)
@@ -2265,33 +2342,10 @@ class BookService:
                                 "state_unavailable",
                                 "The frozen spoken projection could not be mapped to its prepared chunks.",
                             ) from exc
-                        lineage = []
-                        current_ids: list[str] = []
-                        for old_id in overlapping:
-                            mapped = [item["chunk_id"] for item in current_chunks if (
-                                item.get("chunk_id") == old_id or old_id in item.get("replaces_chunk_ids", [])
-                            )]
-                            if mapped != [old_id]:
-                                lineage.append({"old_chunk_id": old_id, "current_chunk_ids": mapped})
-                            current_ids.extend(mapped)
-                        current_ids = list(dict.fromkeys(current_ids))
                         matching_takes = [take_id for chunk_id, take_id in matched_takes.items() if chunk_id in overlapping]
-                        current_take_ids = [take_id for chunk_id, take_id in accepted_takes.items() if chunk_id in overlapping]
-                        mapping_status = ("present" if all(len(item["current_chunk_ids"]) == 1 for item in lineage)
-                                          and current_ids else "missing")
-                        if any(len(item["current_chunk_ids"]) > 1 for item in lineage):
-                            mapping_status = "ambiguous"
-                        if mapping_status == "present":
-                            if bookmark_statuses is None:
-                                bookmark_statuses, checked_source = self._working_chunk_bookmark_proof(
-                                    current_stored, chapter_id=chapter_id, scope_key=search_scope_key,
-                                )
-                                working_checks.append(checked_source)
-                            statuses = [bookmark_statuses.get(chunk_id, "missing") for chunk_id in current_ids]
-                            if "missing" in statuses:
-                                mapping_status = "missing"
-                            elif "not_checked" in statuses:
-                                mapping_status = "not_checked"
+                        current_ids, current_take_ids, lineage, mapping_status = current_mapping(
+                            overlapping, chapter_id, search_scope_key, accepted_takes,
+                        )
                         matches.append({
                             "chapter_id": chapter_id, "snapshot_id": snapshot_id,
                             "chunk_ids": overlapping, "occurrence_start": at,
@@ -2313,6 +2367,7 @@ class BookService:
             "snapshot_ids": searched_snapshots,
             "current_heads": current_heads,
             "working_checks": working_checks,
+            "navigation_views": navigation_views,
             "mapping": [
                 (match["snapshot_id"], match["chunk_ids"], match["current_chunk_ids"],
                  match["current_take_ids"], match["current_mapping_status"])
