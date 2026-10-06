@@ -183,16 +183,39 @@ def _cursor(view_id: str, offset: int) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
-def _cursor_offset(cursor: str, view_id: str) -> int:
+def _cursor_view_and_offset(cursor: str) -> tuple[str, int]:
     try:
         raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
         value = json.loads(raw)
-        offset = value["offset"]
-        if value != {"v": 1, "view": view_id, "offset": offset} or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        view_id, offset = value["view"], value["offset"]
+        if (value != {"v": 1, "view": view_id, "offset": offset}
+                or not isinstance(view_id, str) or not view_id
+                or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
             raise ValueError
-        return offset
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         raise BookServiceError("invalid_cursor", "The text cursor is invalid or belongs to another view.") from exc
+    return view_id, offset
+
+
+def _cursor_offset(cursor: str, view_id: str) -> int:
+    cursor_view_id, offset = _cursor_view_and_offset(cursor)
+    if cursor_view_id != view_id:
+        raise BookServiceError("invalid_cursor", "The text cursor is invalid or belongs to another view.")
+    return offset
+
+
+def _bound_document_view_id(
+    intrinsic_view_id: str, *, chapter_id: str, prose_filepath: str,
+    tagged_filepath: str, layout_revision: int,
+) -> str:
+    """Bind one projection identity to the registered source context that owns it."""
+    return canonical_json_sha256({
+        "intrinsic_view_id": intrinsic_view_id,
+        "chapter_id": chapter_id,
+        "prose_filepath": prose_filepath,
+        "tagged_filepath": tagged_filepath,
+        "layout_revision": layout_revision,
+    })
 
 
 def _data(value: Any) -> Any:
@@ -1012,60 +1035,57 @@ class BookService:
             )
         return {"filepath": relative, "bytes_sha256": digest}
 
-    def inspect(self, request: dto.InspectRequest) -> dict[str, Any]:
-        state = self.discover_state()
-        config = load_book_config(self.root, state)
-        # A valid unbound layout is inspectable so the first explicit prepare
-        # can complete the create-only binding bootstrap. Conflicting or
-        # malformed documents remain fail-closed.
-        if config.config_state not in {"enabled", "bootstrap_pending"} or config.layout is None:
-            raise BookServiceError("configuration_conflict", "Book configuration is not valid for inspection.")
-        chapter = self._chapter(config.layout, request.chapter_id)
-        if (request.prose_filepath, request.tagged_filepath) != (chapter.working_filepath, chapter.tagged_filepath):
-            raise BookServiceError("permission_denied", "Inspection paths must match the registered chapter sources.")
-        prose_bytes = _read_bytes(self.root, chapter.working_filepath)
-        tagged_bytes = _read_bytes(self.root, chapter.tagged_filepath)
-        projected = project_docx_pair(
-            prose_bytes, tagged_bytes,
-            speech_paragraph_ids=(list(request.speech_paragraph_ids) if "speech_paragraph_ids" in request.model_fields_set else None),
-            excluded_paragraphs=(list(request.excluded_paragraphs) if "excluded_paragraphs" in request.model_fields_set else ()),
-            explicit_tag_spans=(list(request.explicit_tag_spans) if "explicit_tag_spans" in request.model_fields_set else ()),
-        )
-        view_id = projected.document_view_id
-        page_size = request.max_characters if "max_characters" in request.model_fields_set else 40000
-        offset = _cursor_offset(request.cursor, view_id) if "cursor" in request.model_fields_set else 0
+    def _inspect_view_row(self, state: ProjectState | None, view_id: str) -> dict[str, Any] | None:
+        return (state.load_view(view_id) if state is not None else None) or self._pending_views.get(view_id)
+
+    @staticmethod
+    def _pinned_view_bytes(payload: dict[str, Any]) -> tuple[bytes, bytes]:
+        """Return the exact DOCX pair captured by an inspect view, never live files."""
+        try:
+            prose = base64.b64decode(payload["pinned_prose_base64"], validate=True)
+            tagged = base64.b64decode(payload["pinned_tagged_base64"], validate=True)
+            if (hashlib.sha256(prose).hexdigest() != payload["projection"]["prose_sha256"]
+                    or hashlib.sha256(tagged).hexdigest() != payload["projection"]["tagged_sha256"]):
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as exc:
+            # Pre-capture views cannot truthfully become byte-pinned after the
+            # fact. A caller must create a fresh view from current sources.
+            raise BookServiceError("view_not_found", "The document view must be recreated before it can be read.") from exc
+        return prose, tagged
+
+    def _project_pinned_view(self, payload: dict[str, Any]):
+        prose, tagged = self._pinned_view_bytes(payload)
+        try:
+            return project_docx_pair(
+                prose, tagged,
+                speech_paragraph_ids=payload["speech_paragraph_ids"],
+                excluded_paragraphs=payload["excluded_paragraphs"],
+                explicit_tag_spans=payload["explicit_tag_spans"],
+            )
+        except (KeyError, ProjectionError, ValueError) as exc:
+            raise BookServiceError("state_unavailable", "The pinned document view is malformed.") from exc
+
+    @staticmethod
+    def _cursor_arguments_match(request: dto.InspectRequest, payload: dict[str, Any]) -> bool:
+        """Bind optional refinement arguments when a caller repeats them on a cursor read."""
+        binding = payload.get("cursor_binding")
+        if not isinstance(binding, dict):
+            return False
+        if (request.chapter_id != payload.get("chapter_id")
+                or request.prose_filepath != payload.get("prose_filepath")
+                or request.tagged_filepath != payload.get("tagged_filepath")):
+            return False
+        for field in ("base_document_view_id", "speech_paragraph_ids", "excluded_paragraphs", "explicit_tag_spans"):
+            if field in request.model_fields_set and _data(getattr(request, field)) != binding.get(field):
+                return False
+        return True
+
+    @staticmethod
+    def _inspect_page(projected, *, view_id: str, offset: int, page_size: int) -> dict[str, Any]:
         if offset > len(projected.speech_text):
             raise BookServiceError("invalid_cursor", "The text cursor is outside the pinned view.")
         end = min(len(projected.speech_text), offset + page_size)
         from .projection import PROJECTION_VERSION
-        view_payload = {
-            "projection": _data(projected),
-            "prose_filepath": chapter.working_filepath,
-            "tagged_filepath": chapter.tagged_filepath,
-            "chapter_id": chapter.chapter_id,
-            "layout_revision": config.layout.layout_revision,
-            "speech_paragraph_ids": list(projected.paragraph_ids) if "speech_paragraph_ids" not in request.model_fields_set else list(request.speech_paragraph_ids),
-            "explicit_tag_spans": _data(request.explicit_tag_spans) if "explicit_tag_spans" in request.model_fields_set else [],
-            "excluded_paragraphs": _data(request.excluded_paragraphs) if "excluded_paragraphs" in request.model_fields_set else [],
-        }
-        if state is not None:
-            try:
-                state.save_view(
-                    view_id=view_id, chapter_id=request.chapter_id,
-                    scope_json="{}", payload=view_payload,
-                    expires_at=(datetime.now(timezone.utc) + VIEW_TTL).isoformat(),
-                )
-            except ProjectStateError as exc:
-                raise BookServiceError("state_unavailable", "Pinned project state is unavailable.") from exc
-        else:
-            # Read-only inspection of a pristine bootstrap-pending layout must
-            # not create the persistent state tree. Keep its short-lived view
-            # only in this service process; callers can re-inspect after restart.
-            self._pending_views[view_id] = {
-                "chapter_id": request.chapter_id,
-                "scope_json": "{}", "payload": view_payload,
-                "expires_at": (datetime.now(timezone.utc) + VIEW_TTL).isoformat(),
-            }
         paragraph_results = []
         for paragraph in projected.paragraphs:
             local_start = local_end = 0
@@ -1117,6 +1137,134 @@ class BookService:
             "next_cursor": _cursor(view_id, end) if end < len(projected.speech_text) else None,
         }
 
+    def inspect(self, request: dto.InspectRequest) -> dict[str, Any]:
+        state = self.discover_state()
+        page_size = request.max_characters if "max_characters" in request.model_fields_set else 40000
+        if "cursor" in request.model_fields_set:
+            view_id, offset = _cursor_view_and_offset(request.cursor)
+            view_row = self._inspect_view_row(state, view_id)
+            if view_row is None:
+                raise BookServiceError("invalid_cursor", "The text cursor is invalid or stale.")
+            if datetime.fromisoformat(view_row["expires_at"]) <= datetime.now(timezone.utc):
+                raise BookServiceError("view_expired", "The pinned document view has expired.")
+            payload = view_row["payload"]
+            if not self._cursor_arguments_match(request, payload):
+                raise BookServiceError("invalid_cursor", "The text cursor arguments do not match its pinned view.")
+            projected = self._project_pinned_view(payload)
+            if (payload.get("document_view_id") != view_id
+                    or payload.get("projection", {}).get("document_view_id") != projected.document_view_id):
+                raise BookServiceError("invalid_cursor", "The text cursor is invalid or stale.")
+            return self._inspect_page(projected, view_id=view_id, offset=offset, page_size=page_size)
+
+        config = load_book_config(self.root, state)
+        # A valid unbound layout is inspectable so the first explicit prepare
+        # can complete the create-only binding bootstrap. Conflicting or
+        # malformed documents remain fail-closed.
+        if config.config_state not in {"enabled", "bootstrap_pending"} or config.layout is None:
+            raise BookServiceError("configuration_conflict", "Book configuration is not valid for inspection.")
+        chapter = self._chapter(config.layout, request.chapter_id)
+        if (request.prose_filepath, request.tagged_filepath) != (chapter.working_filepath, chapter.tagged_filepath):
+            raise BookServiceError("permission_denied", "Inspection paths must match the registered chapter sources.")
+        refinement_fields = {"speech_paragraph_ids", "excluded_paragraphs", "explicit_tag_spans"}
+        refining = bool(refinement_fields & request.model_fields_set)
+        if refining and "base_document_view_id" not in request.model_fields_set:
+            raise BookServiceError("validation_failed", "Selection and tag refinements require base_document_view_id.")
+        base_payload: dict[str, Any] | None = None
+        if "base_document_view_id" in request.model_fields_set:
+            base_row = self._inspect_view_row(state, request.base_document_view_id)
+            if base_row is None:
+                raise BookServiceError("view_not_found", "The base document view is unavailable.")
+            if datetime.fromisoformat(base_row["expires_at"]) <= datetime.now(timezone.utc):
+                raise BookServiceError("view_expired", "The base document view has expired.")
+            base_payload = base_row["payload"]
+            if (base_row["chapter_id"] != chapter.chapter_id
+                    or base_payload.get("layout_revision") != config.layout.layout_revision
+                    or base_payload.get("prose_filepath") != request.prose_filepath
+                    or base_payload.get("tagged_filepath") != request.tagged_filepath):
+                raise BookServiceError("view_not_found", "The base document view does not match this chapter and source pair.")
+            prose_bytes, tagged_bytes = self._pinned_view_bytes(base_payload)
+            current_prose = _read_bytes(self.root, chapter.working_filepath)
+            current_tagged = _read_bytes(self.root, chapter.tagged_filepath)
+            if (hashlib.sha256(current_prose).hexdigest() != base_payload["projection"]["prose_sha256"]
+                    or hashlib.sha256(current_tagged).hexdigest() != base_payload["projection"]["tagged_sha256"]):
+                raise BookServiceError("stale_file", "The registered source changed after the base view was captured.")
+        else:
+            prose_bytes = _read_bytes(self.root, chapter.working_filepath)
+            tagged_bytes = _read_bytes(self.root, chapter.tagged_filepath)
+
+        speech_ids = (
+            list(request.speech_paragraph_ids) if "speech_paragraph_ids" in request.model_fields_set
+            else (list(base_payload["speech_paragraph_ids"]) if base_payload is not None else None)
+        )
+        exclusions = (
+            _data(request.excluded_paragraphs) if "excluded_paragraphs" in request.model_fields_set
+            else (base_payload["excluded_paragraphs"] if base_payload is not None else [])
+        )
+        explicit_spans = (
+            _data(request.explicit_tag_spans) if "explicit_tag_spans" in request.model_fields_set
+            else (base_payload["explicit_tag_spans"] if base_payload is not None else [])
+        )
+        try:
+            projected = project_docx_pair(
+                prose_bytes, tagged_bytes,
+                speech_paragraph_ids=speech_ids,
+                excluded_paragraphs=exclusions,
+                explicit_tag_spans=explicit_spans,
+            )
+        except ProjectionError as exc:
+            raise BookServiceError(exc.code, str(exc)) from exc
+        view_id = _bound_document_view_id(
+            projected.document_view_id, chapter_id=chapter.chapter_id,
+            prose_filepath=chapter.working_filepath, tagged_filepath=chapter.tagged_filepath,
+            layout_revision=config.layout.layout_revision,
+        )
+        view_payload = {
+            "document_view_id": view_id,
+            "projection": _data(projected),
+            "prose_filepath": chapter.working_filepath,
+            "tagged_filepath": chapter.tagged_filepath,
+            "chapter_id": chapter.chapter_id,
+            "layout_revision": config.layout.layout_revision,
+            "speech_paragraph_ids": list(projected.paragraph_ids) if speech_ids is None else speech_ids,
+            "explicit_tag_spans": explicit_spans,
+            "excluded_paragraphs": exclusions,
+            "pinned_prose_base64": base64.b64encode(prose_bytes).decode("ascii"),
+            "pinned_tagged_base64": base64.b64encode(tagged_bytes).decode("ascii"),
+            "cursor_binding": {
+                # An idempotent refinement has the base projection's exact
+                # identity and must retain its payload so save_view can renew
+                # expiry without treating pagination/refinement transport as
+                # distinct content.
+                "base_document_view_id": (
+                    request.base_document_view_id
+                    if base_payload is not None and view_id != request.base_document_view_id
+                    else None
+                ),
+                "speech_paragraph_ids": list(projected.paragraph_ids) if speech_ids is None else speech_ids,
+                "excluded_paragraphs": exclusions,
+                "explicit_tag_spans": explicit_spans,
+            },
+        }
+        if state is not None:
+            try:
+                state.save_view(
+                    view_id=view_id, chapter_id=request.chapter_id,
+                    scope_json="{}", payload=view_payload,
+                    expires_at=(datetime.now(timezone.utc) + VIEW_TTL).isoformat(),
+                )
+            except ProjectStateError as exc:
+                raise BookServiceError("state_unavailable", "Pinned project state is unavailable.") from exc
+        else:
+            # Read-only inspection of a pristine bootstrap-pending layout must
+            # not create the persistent state tree. Keep its short-lived view
+            # only in this service process; callers can re-inspect after restart.
+            self._pending_views[view_id] = {
+                "chapter_id": request.chapter_id,
+                "scope_json": "{}", "payload": view_payload,
+                "expires_at": (datetime.now(timezone.utc) + VIEW_TTL).isoformat(),
+            }
+        return self._inspect_page(projected, view_id=view_id, offset=0, page_size=page_size)
+
     def prepare(self, request: dto.PrepareRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         # Mutation is the only path that creates state. The caller owns the
         # per-project write lock and permission check.
@@ -1162,7 +1310,14 @@ class BookService:
             excluded_paragraphs=payload["excluded_paragraphs"],
             explicit_tag_spans=payload["explicit_tag_spans"],
         )
-        if projected.document_view_id != request.document_view_id:
+        expected_view_id = _bound_document_view_id(
+            projected.document_view_id, chapter_id=chapter.chapter_id,
+            prose_filepath=chapter.working_filepath, tagged_filepath=chapter.tagged_filepath,
+            layout_revision=layout.layout_revision,
+        )
+        if (request.document_view_id != expected_view_id
+                or payload.get("document_view_id") != expected_view_id
+                or projected_data.get("document_view_id") != projected.document_view_id):
             raise BookServiceError("stale_view", "The current sources no longer match the inspected view.")
         if not projected.source_text_matches_without_tags:
             raise BookServiceError("tagged_source_mismatch", "Tagged speech text does not match the registered prose source.")

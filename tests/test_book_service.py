@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -46,6 +47,19 @@ def _docx(text: str) -> bytes:
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>{text}</w:t></w:r>'
         '</w:p><w:sectPr/></w:body></w:document>'
+    ).encode()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        archive.writestr("word/document.xml", xml)
+    return output.getvalue()
+
+
+def _docx_paragraphs(*texts: str) -> bytes:
+    body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in texts)
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<w:document xmlns:w="{W}"><w:body>{body}<w:sectPr/></w:body></w:document>'
     ).encode()
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -1299,6 +1313,215 @@ def test_bootstrap_inspect_is_read_only_and_prepare_receipt_survives_restart(tmp
     # A project-scoped service needs no Postgres connection to inspect, prepare,
     # and replay its immutable snapshot.
     assert not hasattr(reopened, "store")
+
+
+def test_inspect_refinement_uses_a_pinned_base_and_detects_each_source_drift(tmp_path):
+    service, prose, tagged = _fixture(tmp_path, bound=True)
+    prose = _docx_paragraphs("first", "second")
+    tagged = _docx_paragraphs("first", "second")
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    ProjectState.initialize(tmp_path)
+    initial = _inspect(service)
+    paragraph_ids = [item["paragraph_id"] for item in initial["paragraphs"]]
+    state = service._state_required()
+    payload = state.load_view(initial["document_view_id"])["payload"]
+    assert base64.b64decode(payload["pinned_prose_base64"]) == prose
+    assert base64.b64decode(payload["pinned_tagged_base64"]) == tagged
+
+    with pytest.raises(BookServiceError) as no_base:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "speech_paragraph_ids": paragraph_ids, "excluded_paragraphs": [],
+        }))
+    assert no_base.value.reason == "validation_failed"
+
+    refined = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/chapter.docx",
+        "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        "base_document_view_id": initial["document_view_id"],
+        "speech_paragraph_ids": [paragraph_ids[0]],
+        "excluded_paragraphs": [{"paragraph_id": paragraph_ids[1], "reason": "editorial_direction"}],
+    }))
+    assert refined["document_view_id"] != initial["document_view_id"]
+    assert refined["speech_text"] == "first"
+    assert [item["paragraph_id"] for item in refined["paragraphs"]] == paragraph_ids
+
+    prose_path = tmp_path / "Chapters/1/chapter.docx"
+    tagged_path = tmp_path / "Chapters/1/chapter_audio-tags.docx"
+    prose_path.write_bytes(_docx("changed prose"))
+    with pytest.raises(BookServiceError) as prose_drift:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "base_document_view_id": initial["document_view_id"],
+            "speech_paragraph_ids": [paragraph_ids[0]],
+            "excluded_paragraphs": [{"paragraph_id": paragraph_ids[1], "reason": "editorial_direction"}],
+        }))
+    assert prose_drift.value.reason == "stale_file"
+    prose_path.write_bytes(prose)
+    tagged_path.write_bytes(_docx("changed tagged"))
+    with pytest.raises(BookServiceError) as tagged_drift:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "base_document_view_id": initial["document_view_id"],
+            "speech_paragraph_ids": [paragraph_ids[0]],
+            "excluded_paragraphs": [{"paragraph_id": paragraph_ids[1], "reason": "editorial_direction"}],
+        }))
+    assert tagged_drift.value.reason == "stale_file"
+
+
+def test_initial_inspect_recreates_a_legacy_unpinned_view(tmp_path):
+    service, prose, tagged = _fixture(tmp_path, bound=True)
+    state = ProjectState.initialize(tmp_path)
+    legacy = project_docx_pair(prose, tagged)
+    state.save_view(
+        view_id=legacy.document_view_id, chapter_id="ch1", scope_json="{}",
+        payload={"projection": {"legacy": True}},
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    )
+    recreated = _inspect(service)
+    assert recreated["document_view_id"] != legacy.document_view_id
+    payload = state.load_view(recreated["document_view_id"])["payload"]
+    assert base64.b64decode(payload["pinned_prose_base64"]) == prose
+    assert base64.b64decode(payload["pinned_tagged_base64"]) == tagged
+
+
+def test_inspect_view_identity_binds_identical_pairs_to_chapter_paths_and_layout(tmp_path):
+    service, prose, tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    chapter_two = tmp_path / "Chapters/2"
+    chapter_two.mkdir()
+    (chapter_two / "chapter.docx").write_bytes(prose)
+    (chapter_two / "chapter_audio-tags.docx").write_bytes(tagged)
+    state = json.loads((tmp_path / "Chapters/1/chapter.json").read_text(encoding="utf-8"))
+    state["chapter_id"] = "ch2"
+    (chapter_two / "chapter.json").write_text(json.dumps(state), encoding="utf-8")
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    chapter = dict(layout["chapters"][0])
+    chapter.update({
+        "chapter_id": "ch2", "title": "Chapter 2", "chapter_state_filepath": "Chapters/2/chapter.json",
+        "working_filepath": "Chapters/2/chapter.docx", "tagged_filepath": "Chapters/2/chapter_audio-tags.docx",
+        "originals_root": "Chapters/2/Originals", "audio_root": "Audiobook/Chapters/2",
+    })
+    layout["chapters"].append(chapter)
+    layout["chapter_order"].append("ch2")
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    first = _inspect(service)
+    second = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch2",
+        "prose_filepath": "Chapters/2/chapter.docx",
+        "tagged_filepath": "Chapters/2/chapter_audio-tags.docx",
+    }))
+    assert first["document_view_id"] != second["document_view_id"]
+    layout["layout_revision"] = 2
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    revised = _inspect(service)
+    assert revised["document_view_id"] != first["document_view_id"]
+    assert service._state_required().load_view(first["document_view_id"]) is not None
+    assert service._state_required().load_view(second["document_view_id"]) is not None
+    assert service._state_required().load_view(revised["document_view_id"]) is not None
+
+
+def test_inspect_cursor_uses_frozen_view_and_rejects_changed_arguments(tmp_path):
+    service, prose, tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    first = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/chapter.docx",
+        "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        "max_characters": 2,
+    }))
+    assert first["speech_text"] == "he" and first["has_more"]
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(_docx("changed prose"))
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(_docx("changed tagged"))
+    second = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/chapter.docx",
+        "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        "cursor": first["next_cursor"], "max_characters": 2,
+    }))
+    assert second["speech_text"] == "ll"
+    with pytest.raises(BookServiceError) as changed_path:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/other.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": first["next_cursor"],
+        }))
+    assert changed_path.value.reason == "invalid_cursor"
+    with pytest.raises(BookServiceError) as changed_selection:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": first["next_cursor"], "speech_paragraph_ids": [],
+        }))
+    assert changed_selection.value.reason == "invalid_cursor"
+    with pytest.raises(BookServiceError) as changed_tags:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": first["next_cursor"],
+            "explicit_tag_spans": [{
+                "paragraph_id": first["paragraphs"][0]["paragraph_id"], "start": 0, "end": 1,
+                "expected_text_sha256": hashlib.sha256(b"h").hexdigest(),
+            }],
+        }))
+    assert changed_tags.value.reason == "invalid_cursor"
+    with pytest.raises(BookServiceError) as changed_base:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": first["next_cursor"], "base_document_view_id": "0" * 64,
+        }))
+    assert changed_base.value.reason == "invalid_cursor"
+
+
+def test_inspect_view_expiry_and_prepare_current_source_guard(tmp_path):
+    service, prose, tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    inspected = _inspect(service)
+    state = service._state_required()
+    row = state.load_view(inspected["document_view_id"])
+    state.save_view(
+        view_id=inspected["document_view_id"], chapter_id="ch1", scope_json="{}",
+        payload=row["payload"], expires_at=(datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+    )
+    with pytest.raises(BookServiceError) as expired:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "base_document_view_id": inspected["document_view_id"],
+        }))
+    assert expired.value.reason == "view_expired"
+
+    current = _inspect(service)
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(_docx("changed prose"))
+    with pytest.raises(BookServiceError) as stale_prepare:
+        service.prepare(PrepareRequest.model_validate({
+            "project": "fixture", "operation_id": "pinned-stale-prepare", "chapter_id": "ch1",
+            "document_view_id": current["document_view_id"],
+            "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+            "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+            "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+            "speech_selection_confirmed": True,
+            "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+            "expected_settings_sha256": None, "production_target": None,
+            "chunks": [{"chunk_id": "pinned", "start": 0, "end": 5, "request_spec": None}],
+            "publish_bookmarks_to_working_tagged_docx": False,
+        }), owner_key="principal:fixture")
+    assert stale_prepare.value.reason == "stale_source"
 
 
 def test_get_book_reports_registered_order_and_unready_production_heads(tmp_path):

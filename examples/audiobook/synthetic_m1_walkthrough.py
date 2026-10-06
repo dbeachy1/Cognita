@@ -149,6 +149,7 @@ def main() -> None:
             "project": "synthetic-book", "chapter_id": "ch1",
             "prose_filepath": "Chapters/1/chapter.docx",
             "tagged_filepath": "Chapters/1/tagged.docx",
+            "base_document_view_id": preliminary["document_view_id"],
             "explicit_tag_spans": [{
                 "paragraph_id": paragraph_id, "start": tag_start,
                 "end": tag_start + len(tag_text),
