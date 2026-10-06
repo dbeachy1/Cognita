@@ -326,8 +326,9 @@ async def test_shutdown_keeps_build_worker_owned_until_media_thread_exits(tmp_pa
                 "poll_after_seconds": 1, "pinned_inputs_sha256": "2" * 64,
             }, False
 
-        def run_build_job(self, job_id):
+        def run_build_job(self, job_id, *, before_finalize=None, after_finalize=None):
             assert job_id == expected_job_id
+            assert callable(before_finalize) and callable(after_finalize)
             entered.set()
             if not release.wait(timeout=5):
                 raise AssertionError("test did not release the controlled media worker")

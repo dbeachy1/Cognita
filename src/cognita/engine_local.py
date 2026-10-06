@@ -1100,8 +1100,36 @@ class LocalEngineHost(
                             # stop its native media worker. Keep this task (and
                             # its registry/active-job ownership) alive until
                             # that worker exits during shutdown.
+                            loop = asyncio.get_running_loop()
+                            lock = self.core.write_lock(project.name)
+
+                            async def acquire_finalization() -> None:
+                                if not await lock.acquire_within(WRITE_LOCK_WAIT_S):
+                                    raise BookServiceError("busy", "Another project write is in progress.")
+                                try:
+                                    if book_caller is not None:
+                                        if denial := book_caller.check_write_admission():
+                                            raise BookServiceError(denial[0], denial[1])
+                                    current = self.registry.get(project.name)
+                                    if (current is None or current.name != project.name
+                                            or Path(current.documents_dir).resolve(strict=True)
+                                            != Path(project.documents_dir).resolve(strict=True)):
+                                        raise BookServiceError(
+                                            "project_unavailable", "The authorized project source changed."
+                                        )
+                                except BaseException:
+                                    await lock.release()
+                                    raise
+
+                            def before_finalize() -> None:
+                                asyncio.run_coroutine_threadsafe(acquire_finalization(), loop).result()
+
+                            def after_finalize() -> None:
+                                asyncio.run_coroutine_threadsafe(lock.release(), loop).result()
+
                             worker = asyncio.create_task(asyncio.to_thread(
                                 service.run_build_job, job_id,
+                                before_finalize=before_finalize, after_finalize=after_finalize,
                             ))
                             try:
                                 await asyncio.shield(worker)

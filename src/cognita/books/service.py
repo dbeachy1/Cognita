@@ -35,7 +35,7 @@ from .media import MediaValidationError, inspect_media_file
 from .sources import StagedAudioSource
 from .assembly import (AssemblyError, Mp3Source, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave,
                        production_mp3_argv, build_test_mp3_stream_copy_argv, verify_mp3_packet_copy,
-                       write_ffconcat_manifest)
+                       write_ffconcat_manifest, plan_pcm_timeline)
 from .jobs import ProcessRunnerError, ffprobe_json, ffprobe_packet_facts, run_process
 from .mp3_validation import verify_chapter_mp3_decoder
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
@@ -2645,10 +2645,9 @@ class BookService:
         target = _path(self.root, relative, allow_missing=True)
         return staging, target, relative
 
-    def _available_import_space(self, layout, chapter, source_size: int) -> None:
-        canonical = self._registered_audio_roots(layout)
-        retained_bytes = self._retained_audio_bytes(canonical)
-        locations = [self.root / STATE_ROOT / "audiobook-staging", *canonical]
+    def _media_free_bytes(self, layout) -> int:
+        """Return the minimum available space across media and staging devices."""
+        locations = [self.root / STATE_ROOT / "audiobook-staging", *self._registered_audio_roots(layout)]
         free_by_device: dict[int, int] = {}
         for location in locations:
             probe = location
@@ -2656,17 +2655,79 @@ class BookService:
                 probe = probe.parent
             try:
                 usage = shutil.disk_usage(probe)
+                free_by_device[os.stat(probe).st_dev] = usage.free
             except OSError as exc:
                 raise BookServiceError("insufficient_storage", "Audiobook staging storage is unavailable.") from exc
-            free_by_device[os.stat(probe).st_dev] = usage.free
-        # Native media and a possible exact WAVE wrapper are retained. During
-        # publication the source stage, job copy, canonical PCM and wrapper can
-        # coexist briefly; count that peak plus the configured free-space reserve.
-        required = source_size * 4 + layout.storage.reserve_bytes
-        if min(free_by_device.values(), default=0) < required:
+        return min(free_by_device.values(), default=0)
+
+    def _check_media_budget(self, layout, *, incoming_retained_bytes: int = 0,
+                            additional_free_bytes: int = 0) -> None:
+        """Check current union-root quota and device reserve without double-counting staged files."""
+        retained_bytes = self._retained_audio_bytes(self._registered_audio_roots(layout))
+        if retained_bytes + incoming_retained_bytes > layout.storage.quota_bytes:
+            raise BookServiceError("insufficient_storage", "The operation would exceed the configured audiobook media quota.")
+        if self._media_free_bytes(layout) - layout.storage.reserve_bytes < additional_free_bytes:
             raise BookServiceError("insufficient_storage", "The configured media reserve leaves insufficient free space.")
-        if retained_bytes + source_size * 2 > layout.storage.quota_bytes:
-            raise BookServiceError("insufficient_storage", "The import would exceed the configured audiobook media quota.")
+
+    @staticmethod
+    def _bounded_mp3_bytes(*, frame_count: int, sample_rate_hz: int, bitrate_kbps: int) -> int:
+        """Bound a CBR listening file plus container/metadata headroom before encoding."""
+        audio = (frame_count * bitrate_kbps * 1000 + (sample_rate_hz * 8 - 1)) // (sample_rate_hz * 8)
+        return audio + 1_048_576
+
+    def _check_pcm_build_preflight(self, layout, sources: list[PcmSource], gaps: list[dto.SilenceGap],
+                                   target: dto.ProductionTarget, *, emit_mp3: bool) -> None:
+        timeline = plan_pcm_timeline(sources, gaps, target)
+        frame_count = int(timeline.frame_count)
+        pcm_bytes = frame_count * target.channels * (target.storage_bits // 8)
+        mp3_bytes = (self._bounded_mp3_bytes(
+            frame_count=frame_count, sample_rate_hz=target.sample_rate_hz,
+            bitrate_kbps=target.mp3_bitrate_kbps,
+        ) if emit_mp3 else 0)
+        # Master, listening output and compact immutable JSON facts remain
+        # together. The PCM stage overlaps its published master at peak.
+        facts_bytes = 1_048_576
+        self._check_media_budget(
+            layout, incoming_retained_bytes=pcm_bytes + mp3_bytes + facts_bytes,
+            additional_free_bytes=pcm_bytes * 2 + mp3_bytes + facts_bytes,
+        )
+
+    def _check_mp3_build_preflight(self, layout, sources: list[Mp3Source]) -> None:
+        output_bytes = sum(source.inspection.size_bytes for source in sources)
+        facts_bytes = 1_048_576
+        self._check_media_budget(
+            layout, incoming_retained_bytes=output_bytes + facts_bytes,
+            additional_free_bytes=output_bytes + facts_bytes,
+        )
+
+    def _finish_build_success(self, state: ProjectState, job_id: str, build: dict,
+                              *, before_finalize: Callable[[], None] | None,
+                              after_finalize: Callable[[], None] | None,
+                              cleanup: Callable[[], None] | None = None) -> None:
+        acquired = False
+        try:
+            if before_finalize is not None:
+                before_finalize()
+                acquired = True
+            _, _, current_layout = self._enabled_layout()
+            # Build files already lie under registered roots, so inventory is
+            # the exact final retained footprint and must not be added again.
+            self._check_media_budget(current_layout)
+            state.finish_build_success(job_id=job_id, build=build)
+        except BaseException:
+            if cleanup is not None:
+                cleanup()
+            raise
+        finally:
+            if acquired and after_finalize is not None:
+                after_finalize()
+
+    def _available_import_space(self, layout, chapter, source_size: int) -> None:
+        """Admit source staging before detected media facts are available."""
+        del chapter
+        self._check_media_budget(
+            layout, incoming_retained_bytes=source_size, additional_free_bytes=source_size * 3,
+        )
 
     def _registered_audio_roots(self, layout) -> list[Path]:
         roots = [
@@ -2708,21 +2769,12 @@ class BookService:
         _, _, layout = self._enabled_layout()
         chapter = self._chapter(layout, job["payload"]["chapter_id"])
         self._available_import_space(layout, chapter, 1)
-        canonical = self._registered_audio_roots(layout)
-        # Use the quota left after retained media and allow up to the proven
-        # four-copy peak to coexist while the source is staged.
-        retained = self._retained_audio_bytes(canonical)
-        locations = [self.root / STATE_ROOT / "audiobook-staging", *canonical]
-        free_by_device: dict[int, int] = {}
-        for location in locations:
-            probe = location
-            while not probe.exists() and probe != probe.parent:
-                probe = probe.parent
-            usage = shutil.disk_usage(probe)
-            free_by_device[os.stat(probe).st_dev] = usage.free
-        free_bytes = max(0, min(free_by_device.values(), default=0) - layout.storage.reserve_bytes)
-        quota_bytes = max(0, (layout.storage.quota_bytes - retained) // 2)
+        retained = self._retained_audio_bytes(self._registered_audio_roots(layout))
+        free_bytes = max(0, self._media_free_bytes(layout) - layout.storage.reserve_bytes)
+        quota_bytes = max(0, layout.storage.quota_bytes - retained)
         from ..bridge import MAX_TRANSFER_BYTES
+        # Source, canonical raw normalization and lossless wrapper can overlap;
+        # final detected facts replace this upper bound before publication.
         max_bytes = min(MAX_TRANSFER_BYTES, free_bytes // 4, quota_bytes)
         if max_bytes < 1:
             raise BookServiceError("insufficient_storage", "No safe source-import storage budget is available.")
@@ -3151,6 +3203,10 @@ class BookService:
             if before_finalize is not None:
                 before_finalize()
                 finalization_started = True
+            # The finalization lock serializes media publication with other
+            # project writes. Reload current storage policy only; the frozen
+            # generation remains historically admissible after plan changes.
+            _, _, current_layout = self._enabled_layout()
             current_generation = state.generation(pinned["generation_record_id"])
             if (current_generation is None
                     or current_generation.get("import_job_id") != job_id
@@ -3163,15 +3219,6 @@ class BookService:
             if authorized_snapshot is None:
                 raise BookServiceError("snapshot_not_found", "The generation snapshot is unavailable.")
             self._authorize_snapshot_read(authorized_snapshot, pinned["chapter_id"])
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if target.exists() or (wrapper_target is not None and wrapper_target.exists()):
-                raise BookServiceError("job_failed", "The immutable take path already exists.")
-            os.replace(staging, target)
-            staging = None
-            published_paths.append(target)
-            if wrapper_staging is not None and wrapper_target is not None:
-                os.replace(wrapper_staging, wrapper_target)
-                published_paths.append(wrapper_target)
             now = datetime.now(timezone.utc).isoformat()
             take = dto.TakeRecord.model_validate({
                 "take_id": pinned["take_id"], "namespace": generation["scope"],
@@ -3185,8 +3232,24 @@ class BookService:
                     "media": wrapped.media.model_dump(mode="json"),
                 },
             }, strict=True).model_dump(mode="json", exclude_unset=True)
+            take_fact_value = {"schema_version": 1, "take": take}
+            wrapper_bytes = 0 if wrapper_staging is None else wrapper_staging.stat().st_size
+            self._check_media_budget(
+                current_layout,
+                incoming_retained_bytes=inspection.size_bytes + wrapper_bytes + len(_immutable_json_bytes(take_fact_value)),
+                additional_free_bytes=len(_immutable_json_bytes(take_fact_value)),
+            )
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if target.exists() or (wrapper_target is not None and wrapper_target.exists()):
+                raise BookServiceError("job_failed", "The immutable take path already exists.")
+            os.replace(staging, target)
+            staging = None
+            published_paths.append(target)
+            if wrapper_staging is not None and wrapper_target is not None:
+                os.replace(wrapper_staging, wrapper_target)
+                published_paths.append(wrapper_target)
             take_fact = target.parent / "take.json"
-            _write_immutable_json(take_fact, {"schema_version": 1, "take": take})
+            _write_immutable_json(take_fact, take_fact_value)
             published_paths.append(take_fact)
             completed = dict(generation)
             completed["updated_at"] = now
@@ -3487,7 +3550,9 @@ class BookService:
             raise BookServiceError("state_unavailable", "The book-build reservation could not be persisted.") from exc
         return result, disposition == "replay"
 
-    def _run_test_mp3_build(self, job_id: str, pinned: dict[str, Any]) -> None:
+    def _run_test_mp3_build(self, job_id: str, pinned: dict[str, Any], *,
+                            before_finalize: Callable[[], None] | None = None,
+                            after_finalize: Callable[[], None] | None = None) -> None:
         """Copy verified MP3 packets in frozen chunk order; never decode to a master."""
         state = self._state_required()
         _, _, layout = self._enabled_layout()
@@ -3507,6 +3572,7 @@ class BookService:
                 raise BookServiceError("stale_media", "A pinned MP3 take no longer matches verified media facts.")
             sources.append(Mp3Source(chunk_id, source, inspected))
             packet_inputs.append(asyncio.run(ffprobe_packet_facts(ffprobe, source, timeout_seconds=60.0)))
+        self._check_mp3_build_preflight(layout, sources)
         build_id = str(uuid.uuid4())
         relative = f"{chapter.audio_root}/builds/{build_id}"
         _mkdir_safe(self.root, relative)
@@ -3582,12 +3648,15 @@ class BookService:
         })
         result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256(recipe), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
         _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
-        state.finish_build_success(job_id=job_id, build={"scope": "chapter", "build_id": build_id,
+        self._finish_build_success(state, job_id, {"scope": "chapter", "build_id": build_id,
             "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"], "snapshot_id": pinned["snapshot_id"],
             "request_plan_sha256": pinned["request_plan_sha256"], "input_take_ids": pinned["take_ids"],
-            "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result})
+            "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result},
+            before_finalize=before_finalize, after_finalize=after_finalize,
+            cleanup=lambda: _cleanup_owned_build_directory(directory))
 
-    def run_build_job(self, job_id: str) -> None:
+    def run_build_job(self, job_id: str, *, before_finalize: Callable[[], None] | None = None,
+                      after_finalize: Callable[[], None] | None = None) -> None:
         """Assemble a single immutable PCM candidate from a durable pinned job."""
         state = self._state_required()
         claimed = state.claim_build_job(job_id)
@@ -3598,10 +3667,10 @@ class BookService:
         try:
             pinned = claimed["payload"]
             if pinned.get("scope") == "book":
-                self._run_book_build(job_id, pinned)
+                self._run_book_build(job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize)
                 return
             if pinned.get("mode") == "test_mp3_stream_copy":
-                self._run_test_mp3_build(job_id, pinned)
+                self._run_test_mp3_build(job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize)
                 return
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
@@ -3625,6 +3694,8 @@ class BookService:
                     raise BookServiceError("stale_media", "A pinned take changed before assembly.")
                 sources.append(PcmSource(chunk_id, source, inspection))
             build_id = str(uuid.uuid4())
+            gaps = [dto.SilenceGap.model_validate(g, strict=True) for g in pinned["gaps"]]
+            self._check_pcm_build_preflight(layout, sources, gaps, target, emit_mp3=bool(pinned.get("emit_mp3")))
             build_relative = f"{chapter.audio_root}/builds/{build_id}"
             _mkdir_safe(self.root, build_relative)
             build_dir = _path(self.root, build_relative)
@@ -3634,7 +3705,7 @@ class BookService:
             timeline_stage = build_dir / "timeline.json.part"
             staged.extend([pcm_stage, timeline_stage])
             with pcm_stage.open("xb") as output:
-                assembled = assemble_pcm_stream(sources, [dto.SilenceGap.model_validate(g, strict=True) for g in pinned["gaps"]], target, output)
+                assembled = assemble_pcm_stream(sources, gaps, target, output)
                 output.flush()
                 os.fsync(output.fileno())
             media = dto.MediaProperties.model_validate({
@@ -3722,12 +3793,13 @@ class BookService:
                 "needs_listening_review": True,
             }, strict=True).model_dump(mode="json", exclude_unset=True)
             _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
-            state.finish_build_success(job_id=job_id, build={
+            self._finish_build_success(state, job_id, {
                 "scope": "chapter", "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
                 "snapshot_id": pinned["snapshot_id"], "request_plan_sha256": pinned["request_plan_sha256"],
                 "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "was_accepted": False, "result": result,
-            })
+            }, before_finalize=before_finalize, after_finalize=after_finalize,
+            cleanup=lambda: _cleanup_owned_build_directory(build_dir))
         except (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, OSError, ProjectStateError) as exc:
             reason = exc.reason if isinstance(exc, BookServiceError) else (
                 exc.code if isinstance(exc, (MediaValidationError, AssemblyError, ProcessRunnerError)) else (
@@ -3756,16 +3828,14 @@ class BookService:
                 raise BookServiceError("media_tool_unavailable", "Configured media executables must be regular absolute files.")
         return ffmpeg, ffprobe
 
-    def _run_book_build(self, job_id: str, pinned: dict[str, Any]) -> None:
+    def _run_book_build(self, job_id: str, pinned: dict[str, Any], *,
+                        before_finalize: Callable[[], None] | None = None,
+                        after_finalize: Callable[[], None] | None = None) -> None:
         """Assemble one continuous book candidate from pinned chapter heads."""
         state, _, layout = self._enabled_layout()
         target = dto.ProductionTarget.model_validate(pinned["target"], strict=True)
         build_id = str(uuid.uuid4())
         root_relative = f"{layout.shared_paths.book_audio_root}/builds/{build_id}"
-        _mkdir_safe(self.root, root_relative)
-        build_dir = _path(self.root, root_relative)
-        pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
-        timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
         sources: list[PcmSource] = []
         source_snapshots: list[str] = []
         input_take_ids: list[str] = []
@@ -3789,9 +3859,15 @@ class BookService:
             chapter_build = state.build(dependency["chapter_build_id"])
             if chapter_build is not None:
                 input_take_ids.extend(chapter_build.get("input_take_ids", []))
+        gaps = [dto.SilenceGap.model_validate(item, strict=True) for item in pinned["gaps"]]
+        self._check_pcm_build_preflight(layout, sources, gaps, target, emit_mp3=True)
+        _mkdir_safe(self.root, root_relative)
+        build_dir = _path(self.root, root_relative)
+        pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
+        timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
         with pcm_stage.open("xb") as output:
             assembled = assemble_pcm_stream(
-                sources, [dto.SilenceGap.model_validate(item, strict=True) for item in pinned["gaps"]], target, output,
+                sources, gaps, target, output,
             )
             output.flush()
             os.fsync(output.fileno())
@@ -3864,11 +3940,12 @@ class BookService:
             "needs_listening_review": True,
         }, strict=True).model_dump(mode="json", exclude_unset=True)
         _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
-        state.finish_build_success(job_id=job_id, build={
+        self._finish_build_success(state, job_id, {
             "scope": "book", "build_id": build_id, "book_id": layout.book_id,
             "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
             "dependencies": dependencies, "result": result,
-        })
+        }, before_finalize=before_finalize, after_finalize=after_finalize,
+        cleanup=lambda: _cleanup_owned_build_directory(build_dir))
 
     def commit_build(self, request: dto.CommitBuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         state, _, layout = self._enabled_layout()
@@ -4222,6 +4299,28 @@ def _mkdir_safe(root: Path, relative: str) -> None:
             raise BookServiceError("permission_denied", "Managed snapshot directories cannot contain links.")
 
 
+def _cleanup_owned_build_directory(directory: Path) -> None:
+    """Remove an unregistered UUID build directory after final admission fails."""
+    try:
+        if not directory.exists() or directory.is_symlink():
+            return
+        for current, directories, filenames in os.walk(directory, topdown=False, followlinks=False):
+            current_path = Path(current)
+            for filename in filenames:
+                candidate = current_path / filename
+                if not candidate.is_symlink():
+                    candidate.unlink(missing_ok=True)
+            for name in directories:
+                candidate = current_path / name
+                if not candidate.is_symlink():
+                    candidate.rmdir()
+        directory.rmdir()
+    except OSError:
+        # The durable job failure remains authoritative. Do not broaden cleanup
+        # beyond the exact job-owned directory if another local fault occurs.
+        return
+
+
 async def _media_tool_version(executable: Path) -> str:
     """Capture the registered media tool's actual version banner for build provenance."""
     result = await run_process(
@@ -4235,11 +4334,15 @@ async def _media_tool_version(executable: Path) -> str:
     return banner[0].strip()
 
 
+def _immutable_json_bytes(value: dict[str, Any]) -> bytes:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _write_immutable_json(path: Path, value: dict[str, Any]) -> None:
     """Create one durable fact file without making it a second authority."""
     try:
-        with path.open("x", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with path.open("xb") as stream:
+            stream.write(_immutable_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
     except FileExistsError as exc:

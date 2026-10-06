@@ -3030,6 +3030,8 @@ def test_import_quota_counts_registered_audio_union_once(tmp_path):
     assert len(service._registered_audio_roots(current_layout)) == 1
     service._available_import_space(current_layout, service._chapter(current_layout, "ch1"), 500_000)
 
+    # Staging and retained publication are distinct. The source is retained
+    # once; conservative double-counting would reject this valid admission.
     layout["storage"]["quota_bytes"] = 1_000_015
     layout_path.write_text(json.dumps(layout), encoding="utf-8")
     sibling_audio = tmp_path / "Audiobook/Other"
@@ -3038,9 +3040,129 @@ def test_import_quota_counts_registered_audio_union_once(tmp_path):
     current_layout = BookLayout.model_validate(layout, strict=True)
     assert len(service._registered_audio_roots(current_layout)) == 1
     assert service._retained_audio_bytes(service._registered_audio_roots(current_layout)) == 20
+    service._available_import_space(current_layout, service._chapter(current_layout, "ch1"), 500_000)
+    layout["storage"]["quota_bytes"] = 500_019
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    current_layout = BookLayout.model_validate(layout, strict=True)
     with pytest.raises(BookServiceError) as quota:
         service._available_import_space(current_layout, service._chapter(current_layout, "ch1"), 500_000)
     assert quota.value.reason == "insufficient_storage"
+
+
+def test_import_final_budget_counts_native_wrapper_and_fact_after_policy_change(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    samples = struct.pack("<hhhh", 1, -2, 3, -4)
+    source = tmp_path / "Audiobook/Chapters/1/final-budget.pcm"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(samples)
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "final-budget-import",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/final-budget.pcm",
+                   "expected_sha256": hashlib.sha256(samples).hexdigest()},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+    queued, _ = service.import_audio(request, owner_key="principal:fixture")
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+
+    def lower_quota_under_finalization():
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        # The initial source stage is admitted at the normal fixture quota;
+        # this concurrent policy revision must count raw + WAV + take.json.
+        layout["storage"]["quota_bytes"] = len(samples) * 2
+        layout["storage"]["reserve_bytes"] = 0
+        layout_path.write_text(json.dumps(layout), encoding="utf-8")
+
+    service.run_import_job(queued["job_id"], before_finalize=lower_quota_under_finalization)
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "failed"
+    assert completed["error"]["reason"] == "insufficient_storage"
+    state = service.discover_state()
+    assert state.generation(generation["generation_record_id"])["take_id"] is None
+    take_id = state.import_job(queued["job_id"])["payload"]["take_id"]
+    take_dir = tmp_path / "Audiobook/Chapters/1/takes" / take_id
+    assert not (take_dir / "native.pcm").exists()
+    assert not (take_dir / "native.wav").exists()
+    assert not (take_dir / "take.json").exists()
+
+
+def test_pcm_build_budget_refuses_before_assembly(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared = _prepare_test_plan(service, "budget-build-prepare", prose, tagged, None, [
+        {"chunk_id": "budget", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    take = _import_native_take(service, prepared, "budget", operation_prefix="budget-build-take")
+    build_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "budget-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": "budget", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, _ = service.build(build_request, owner_key="principal:fixture")
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["storage"]["quota_bytes"] = 1
+    layout["storage"]["reserve_bytes"] = 0
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+
+    def assembly_must_not_run(*_args, **_kwargs):
+        raise AssertionError("assembly ran despite preflight quota refusal")
+
+    monkeypatch.setattr(service_module, "assemble_pcm_stream", assembly_must_not_run)
+    service.run_build_job(queued["job_id"])
+    result = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert result["state"] == "failed"
+    assert result["error"]["reason"] == "insufficient_storage"
+    builds = tmp_path / "Audiobook/Chapters/1/builds"
+    assert not builds.exists() or list(builds.iterdir()) == []
+
+
+def test_pcm_build_final_budget_recheck_cleans_unregistered_outputs(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared = _prepare_test_plan(service, "final-build-prepare", prose, tagged, None, [
+        {"chunk_id": "final", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    take = _import_native_take(service, prepared, "final", operation_prefix="final-build-take")
+    queued, _ = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "final-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": "final", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    callbacks: list[str] = []
+
+    def lower_quota_under_finalization():
+        callbacks.append("acquired")
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        layout["storage"]["quota_bytes"] = 1
+        layout["storage"]["reserve_bytes"] = 0
+        layout_path.write_text(json.dumps(layout), encoding="utf-8")
+
+    service.run_build_job(
+        queued["job_id"], before_finalize=lower_quota_under_finalization,
+        after_finalize=lambda: callbacks.append("released"),
+    )
+    result = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert result["state"] == "failed"
+    assert result["error"]["reason"] == "insufficient_storage"
+    builds = tmp_path / "Audiobook/Chapters/1/builds"
+    assert not builds.exists() or list(builds.iterdir()) == []
+    assert callbacks == ["acquired", "released"]
 
 
 def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
