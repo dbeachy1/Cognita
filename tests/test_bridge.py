@@ -684,3 +684,40 @@ async def test_post_commit_receipt_save_failure_requires_reconciliation(tmp_path
     assert retry == exc.value.fields["receipt"]
     assert transfers.commit_calls == 1
     assert workspace.held == 0
+
+
+@pytest.mark.asyncio
+async def test_book_workspace_source_is_authorized_pinned_and_staged(setup, tmp_path):
+    _docs, project, workspace, transfers, service, principal = setup
+    content = b"native audio bytes\x00\x01"
+    digest = hashlib.sha256(content).hexdigest()
+    workspace.rows["exports/take.wav"] = {
+        "type": "file", "size": len(content), "sha256": digest,
+    }
+    transfers.downloads["exports/take.wav"] = content
+    leases, released = [], []
+    workspace.metadata = SimpleNamespace(
+        lease=lambda workspace_id, kind, seconds, owner: leases.append(
+            (workspace_id, kind, seconds, owner)
+        ) or f"lease:{owner}",
+        release_lease=lambda lease_id: released.append(lease_id),
+    )
+
+    staged = await service.stage_book_workspace_source(
+        principal, _connector(), project, "exports/take.wav", digest,
+        staging_root=tmp_path / "book-stage",
+    )
+    assert staged.source_kind == "workspace"
+    assert staged.bytes_sha256 == digest and staged.size_bytes == len(content)
+    assert staged.staged_path.read_bytes() == content
+    assert staged.staged_path.parent == (tmp_path / "book-stage").resolve()
+    assert not any((tmp_path / "staging").iterdir())
+    assert next(iter(transfers.manifests.values()))["direction"] == "from_workspace"
+    assert leases and released == [f"lease:{leases[0][3]}"]
+
+    with pytest.raises(BridgeError) as stale:
+        await service.stage_book_workspace_source(
+            principal, _connector(), project, "exports/take.wav", "0" * 64,
+            staging_root=tmp_path / "book-stage",
+        )
+    assert stale.value.reason == "stale_file"

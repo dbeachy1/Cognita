@@ -32,6 +32,7 @@ from .auth_policy import (
 from .backups import BackupError, backup_if_exists, resolve_target
 from .connectors import PUBLIC_CONTRACT_VERSION, ConnectorDefinition, resolve_project_access
 from .workspace import WorkspaceError
+from .books.sources import SourceStageError, StagedAudioSource, stage_verified_file
 
 log = logging.getLogger("cognita.bridge")
 
@@ -1110,6 +1111,74 @@ class BridgeService:
                         "bridge transfer lease release failed transfer_id=%s",
                         transfer_id,
                     )
+
+    async def stage_book_workspace_source(
+        self,
+        principal: Any,
+        connector: ConnectorDefinition,
+        project: Any,
+        path: str,
+        expected_sha256: str,
+        *,
+        staging_root: str | Path,
+        connector_id: str | None = None,
+    ) -> StagedAudioSource:
+        """Pin one authorized Workspace file into book-owned local staging.
+
+        This is intentionally not an MCP tool and does not expose Workspace host
+        paths.  The caller receives only a verified file owned by its book stage.
+        """
+        self._check_policy(principal, connector, project, "to_workspace")
+        source_path = _safe_rel(path)
+        expected = str(expected_sha256).lower()
+        if len(expected) != 64 or set(expected) - _SHA256:
+            raise BridgeError("invalid_arguments", "Workspace source requires an exact SHA-256.")
+        workspace_id = await self._workspace_id(principal, connector_id)
+        transfer_id = str(uuid.uuid4())
+        stage: _Stage | None = None
+        lease_id: str | None = None
+        metadata = getattr(self.workspace, "metadata", None)
+        try:
+            lease = getattr(metadata, "lease", None)
+            if callable(lease):
+                lease_id = lease(workspace_id, "book-source", 3600, owner=transfer_id)
+            async with await self._workspace_lock(workspace_id):
+                self._check_policy(principal, connector, project, "to_workspace")
+                self._check_workspace_transfer_ready(workspace_id)
+                files = await self._workspace_manifest(
+                    principal, [source_path], "", connector_id,
+                )
+                if len(files) != 1 or files[0].path != source_path:
+                    raise BridgeError("path_unavailable", "Workspace source is not one regular file.")
+                entry = files[0]
+                if entry.sha256 != expected:
+                    raise BridgeError("stale_file", "Workspace source no longer matches its expected hash.")
+                manifest = TransferManifest(transfer_id, workspace_id, "from_workspace", files)
+                stage = self._stage(transfer_id, manifest)
+                try:
+                    await self._broker("admit", manifest.wire())
+                    await self._stage_from_workspace(stage)
+                    await self._broker("commit", transfer_id)
+                except Exception:
+                    try:
+                        await self._broker("abort", transfer_id)
+                    except Exception:
+                        log.warning("book workspace source abort failed transfer_id=%s", transfer_id)
+                    raise
+            try:
+                return stage_verified_file(
+                    stage.root / entry.path, Path(staging_root),
+                    expected_sha256=expected, source_kind="workspace",
+                )
+            except SourceStageError as exc:
+                raise BridgeError(exc.reason, str(exc)) from exc
+        finally:
+            self._cleanup(stage)
+            if lease_id is not None:
+                try:
+                    metadata.release_lease(lease_id)
+                except Exception:
+                    log.warning("book workspace source lease release failed transfer_id=%s", transfer_id)
 
     async def copy_to_workspace(self, principal: Any, connector: ConnectorDefinition, project: Any, arguments: Mapping[str, Any], *, connector_id: str | None = None) -> dict[str, Any]:
         return await self.execute(principal, connector, project, "copy_to_workspace", arguments, connector_id=connector_id)
