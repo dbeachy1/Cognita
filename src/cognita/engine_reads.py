@@ -100,6 +100,12 @@ class EngineReadOperations:
             category=category, hybrid_alpha=hybrid_alpha,
             retrieval_profile=args.get("retrieval_profile"),
         )
+        # Search may await a cached or threaded retrieval while folder/per-file
+        # admission changes.  Re-evaluate the current general policy before
+        # publishing any hit; book admission alone is intentionally not a
+        # substitute for plain-project exclusion.
+        is_indexed_now = self._indexed_source_predicate(project)
+        results = [item for item in results if is_indexed_now(item.get("source", ""))]
         for r in results:
             # 5.0 §5.1: keep BOTH. `source` stays the absolute host path 3.x
             # emitted (wire compat); `filepath` is the relative path every tool
@@ -578,6 +584,8 @@ class EngineReadOperations:
                 })
             if len(similar) >= max_results:
                 break
+        is_indexed_now = self._indexed_source_predicate(project)
+        similar = [item for item in similar if is_indexed_now(item["filepath"])]
         current_pairs = await self._book_admitted_doc_pairs(project, retrieval_profile)
         _sources, _doc_ids, current_metadata = await self.core._effective_indexed_sources(
             project.name, retrieval_profile,
@@ -929,6 +937,20 @@ class EngineReadOperations:
         found = await asyncio.to_thread(
             self._walk_literal, docs_dir, selected, matcher, context_lines, max_matches
         )
+
+        # The walk runs off-thread and can outlive a folder/per-file policy
+        # change.  Rebuild the selected corpus from the current ordinary
+        # admission before publishing its result.  This matters for projects
+        # without book layouts too: book admission is additive policy, never a
+        # substitute for the general folder/per-file decision.
+        is_indexed_now = self._indexed_source_predicate(project)
+        current_selected = [d for d in selected if is_indexed_now(d.source)]
+        if len(current_selected) != len(selected):
+            selected = current_selected
+            found = await asyncio.to_thread(
+                self._walk_literal, docs_dir, selected, matcher, context_lines,
+                max_matches,
+            )
         current_pairs = await self._book_admitted_doc_pairs(project)
         if current_pairs is not None:
             current_selected = [

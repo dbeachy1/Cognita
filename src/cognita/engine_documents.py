@@ -1337,6 +1337,10 @@ class EngineDocumentOperations:
         if layout is None:
             return None
         protected: list[str] = []
+        # This is the source-side authority for book policy, receipts, and
+        # immutable media state.  It must never be relocated by a generic
+        # directory move; there is deliberately no migration behavior here.
+        protected.append(".cognita-storage")
         if layout.source_master_filepath:
             protected.append(layout.source_master_filepath)
         protected.extend((
@@ -1465,6 +1469,16 @@ class EngineDocumentOperations:
                     "message": "operation_id is required for a directory move."}
         docs = Path(project.documents_dir).resolve()
         old_rel, new_rel = self._rel(project, old_t), self._rel(project, new_t)
+        authority = (docs / ".cognita-storage").resolve(strict=False)
+        # Protect the durable source-side authority for every project, even
+        # when no Book_Layout has been registered yet.  Moving an ancestor
+        # would relocate the same authority just as surely as moving it
+        # directly; overwriting an ancestor would hide it from discovery.
+        if (authority == old_t or authority.is_relative_to(old_t)
+                or authority == new_t or authority.is_relative_to(new_t)
+                or old_t.is_relative_to(authority) or new_t.is_relative_to(authority)):
+            return {"status": "error", "reason": "permission_denied",
+                    "message": "Directory moves cannot relocate or overwrite .cognita-storage authority."}
         owner_key = str(args.get("_owner_key") or "principal:local-admin")
         operation_args = {
             "filepath": old_rel, "new_filepath": new_rel,

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -208,6 +209,159 @@ async def test_list_documents_actual_engine_payload_passes_result_contract(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_find_literal_drops_plain_project_hit_excluded_while_walk_waits(tmp_path, monkeypatch):
+    """A post-walk folder exclusion cannot leak a stale literal-search hit."""
+    host, project, core = _host(tmp_path)
+    private = project.documents_dir / "private"
+    private.mkdir()
+    target = private / "note.md"
+    target.write_text("race-only-literal-token", encoding="utf-8")
+    record = DocumentRecord(
+        doc_id="literal-race", source="private/note.md", category="general",
+        format="md", keywords=[], content_hash="a" * 64, file_size=target.stat().st_size,
+    )
+
+    class _Store:
+        async def list_documents(self, _project):
+            return [record]
+
+    host.store = core.store = _Store()
+    core.policy_for = lambda _project: SimpleNamespace(
+        tier_for=lambda suffix: "general" if suffix == ".md" else None,
+    )
+    core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
+
+    entered, release = threading.Event(), threading.Event()
+    original = host._walk_literal
+
+    def paused(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(host, "_walk_literal", paused)
+    task = asyncio.create_task(_post(
+        host, project.name, "find_literal", {"pattern": "race-only-literal-token"},
+    ))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        state = ProjectState.initialize(project.documents_dir)
+        assert state.set_folder_rule(
+            "private", False, 0, owner_key="principal:local-admin",
+            project=project.name, tool="set_folder_indexing",
+            operation_id="exclude-literal-race", args_sha256="c" * 64,
+            result={"path": "private"},
+        )[0] == "committed"
+    finally:
+        release.set()
+    payload = await task
+    assert payload["status"] == "success"
+    assert payload["matches"] == []
+    assert payload["total_matches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_drops_cached_plain_project_hit_excluded_while_awaited(tmp_path):
+    """A stale ordinary-search cache result is filtered at final publication."""
+    host, project, core = _host(tmp_path)
+    private = project.documents_dir / "private"
+    private.mkdir()
+    (private / "note.md").write_text("cached ordinary hit", encoding="utf-8")
+    core.policy_for = lambda _project: SimpleNamespace(
+        tier_for=lambda suffix: "general" if suffix == ".md" else None,
+    )
+    core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
+    entered, release = asyncio.Event(), asyncio.Event()
+    cached = [{
+        "source": "private/note.md", "content": "cached ordinary hit",
+        "category": "general", "chunk_index": 0, "score": 0.9,
+    }]
+
+    async def stale_cached_search(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+        return [dict(hit) for hit in cached]
+
+    core.search = stale_cached_search
+    task = asyncio.create_task(_post(
+        host, project.name, "search_knowledge", {"query": "cached ordinary hit"},
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        state = ProjectState.initialize(project.documents_dir)
+        assert state.set_folder_rule(
+            "private", False, 0, owner_key="principal:local-admin",
+            project=project.name, tool="set_folder_indexing",
+            operation_id="exclude-cached-search", args_sha256="d" * 64,
+            result={"path": "private"},
+        )[0] == "committed"
+    finally:
+        release.set()
+    payload = await task
+    assert payload["status"] == "no_results"
+    assert payload["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_similar_drops_per_file_exclusion_committed_while_query_awaits(tmp_path):
+    """A durable per-file exclusion wins over a stale dense-query hit."""
+    host, project, core = _host(tmp_path)
+    reference = project.documents_dir / "reference.md"
+    private = project.documents_dir / "private"
+    private.mkdir()
+    candidate = private / "note.md"
+    reference.write_text("reference", encoding="utf-8")
+    candidate.write_text("similar candidate", encoding="utf-8")
+    reference_record = DocumentRecord(
+        doc_id="reference", source="reference.md", category="general", format="md",
+        keywords=[], content_hash="a" * 64, file_size=reference.stat().st_size,
+    )
+    candidate_record = DocumentRecord(
+        doc_id="candidate", source="private/note.md", category="general", format="md",
+        keywords=[], content_hash="b" * 64, file_size=candidate.stat().st_size,
+    )
+    core.policy_for = lambda _project: SimpleNamespace(
+        tier_for=lambda suffix: "general" if suffix == ".md" else None,
+    )
+    core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class _Store:
+        async def get_document(self, _project, source):
+            return reference_record if source == "reference.md" else candidate_record
+
+        async def first_chunk_embedding(self, _project, _source):
+            return [0.25]
+
+        async def dense_search(self, *_args, **_kwargs):
+            entered.set()
+            await release.wait()
+            return [SimpleNamespace(
+                source="private/note.md", score=0.1, category="general",
+                content="similar candidate", doc_id="candidate",
+            )]
+
+    async def effective_sources(*_args, **_kwargs):
+        return None, None, {}
+
+    host.store = core.store = _Store()
+    core._effective_indexed_sources = effective_sources
+    task = asyncio.create_task(_post(
+        host, project.name, "search_similar", {"filepath": "reference.md"},
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert host.deindexed(project).add("private/note.md")
+    finally:
+        release.set()
+    payload = await task
+    assert payload["status"] == "no_results"
+    assert payload["similar_documents"] == []
+    assert host.deindexed(project).path.is_file()
+
+
+@pytest.mark.asyncio
 async def test_project_file_listing_reports_actual_index_and_blocked_outage(tmp_path):
     """Storage listing distinguishes a derived fact from a missing index row."""
     host, project, core = _host(tmp_path)
@@ -378,6 +532,32 @@ async def test_directory_move_preserves_explicit_rules_and_per_file_exclusions(t
     task = host._reindex_tasks.get(project.name)
     if task is not None:
         await task
+
+
+@pytest.mark.asyncio
+async def test_directory_move_refuses_plain_project_storage_authority_before_mutation(tmp_path):
+    """The folder-policy database is authority even without a book layout."""
+    host, project, core = _host(tmp_path)
+    core._locks[project.name] = _ReentrantLock()
+    state = ProjectState.initialize(project.documents_dir)
+    assert state.set_folder_rule(
+        "private", False, 0, owner_key="principal:local-admin", project=project.name,
+        tool="set_folder_indexing", operation_id="exclude-private", args_sha256="b" * 64,
+        result={"path": "private"},
+    )[0] == "committed"
+    (project.documents_dir / "private").mkdir()
+    for old, new in (
+        (".cognita-storage", "archived-state"),
+        ("private", ".cognita-storage/replaced"),
+    ):
+        result = await _post(host, project.name, "move_document", {
+            "filepath": old, "new_filepath": new, "expected_policy_revision": 1,
+            "operation_id": f"refuse-{old.replace('/', '-')}",
+        })
+        assert result["status"] == "error" and result["reason"] == "permission_denied"
+    assert (project.documents_dir / ".cognita-storage" / "state.sqlite").is_file()
+    reopened = ProjectState.discover(project.documents_dir)
+    assert reopened is not None and reopened.folder_policy().rules == (("private", False),)
 
 
 @pytest.mark.asyncio
