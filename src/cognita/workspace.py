@@ -45,6 +45,7 @@ from .auth_policy import (
     self_test_principal_id,
     self_test_principal_matches,
 )
+from .runtime_broker.protocol import ErrorCode, RpcFailure
 
 log = logging.getLogger("cognita.workspace")
 
@@ -242,8 +243,27 @@ class BrokerRuntimeClient:
                 f"{self.base_url}{'/rpc' if self.base_url.endswith('/v1') else '/v1/rpc'}", json=body,
                 headers={"Authorization": f"Bearer {self.bearer}"},
             )
-            response.raise_for_status()
-            payload = response.json()
+            status_code = getattr(response, "status_code", None)
+            if status_code is not None and status_code >= 400:
+                # The RPC endpoint uses HTTP 400 only for bounded, typed
+                # protocol failures. Authenticate/status-check every other
+                # response before looking at its body so arbitrary 401/5xx
+                # JSON cannot masquerade as a broker result.
+                if status_code == 400:
+                    try:
+                        payload = RpcFailure.model_validate(response.json()).model_dump(
+                            mode="json", exclude_none=True,
+                        )
+                    except Exception:
+                        response.raise_for_status()
+                        raise
+                else:
+                    response.raise_for_status()
+            else:
+                # Status-less response doubles are retained for existing unit
+                # tests; real HTTP responses always expose status_code.
+                response.raise_for_status()
+                payload = response.json()
             if "code" in payload:
                 code = str(payload.get("code"))
                 stage = payload.get("stage")
@@ -257,6 +277,7 @@ class BrokerRuntimeClient:
                     "network_denied": "network_denied",
                     "generation_conflict": "generation_conflict",
                     "ownership_mismatch": "ownership_mismatch",
+                    ErrorCode.INVALID_REQUEST.value: "invalid_arguments",
                 }.get(code, "runtime_unavailable")
                 # 13.2.5 (DESIGN-13.2 §4.2): the reason is IN the line — the
                 # console formatter used to drop every one of these fields, so
