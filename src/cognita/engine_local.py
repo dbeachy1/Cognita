@@ -676,6 +676,7 @@ class LocalEngineHost(
             "audiobook_get_chapter": book_dto.GetChapterRequest,
             "audiobook_find_chunk": book_dto.FindChunkRequest,
             "audiobook_record_generation": book_dto.RecordGenerationRequest,
+            "audiobook_get_generations": book_dto.GetGenerationsRequest,
             "set_folder_indexing": book_dto.SetFolderIndexingRequest,
             "list_project_files": book_dto.ListProjectFilesRequest,
             "read_project_file": book_dto.ReadProjectFileRequest,
@@ -706,6 +707,8 @@ class LocalEngineHost(
                 elif tool == "audiobook_record_generation":
                     data, replayed = service.record_generation(request_model, owner_key=owner_key)
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_get_generations":
+                    data = service.get_generations(request_model)
                 elif tool == "list_project_files":
                     data = service.list_files(
                         request_model.path,

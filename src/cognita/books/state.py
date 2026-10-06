@@ -450,6 +450,51 @@ class ProjectState:
             ).fetchone()
         return None if row is None else json.loads(row["payload_json"])
 
+    def update_generation(
+        self, *, generation_record_id: str, expected_revision: int, payload: dict,
+        owner_key: str, project: str, tool: str, operation_id: str, args_sha256: str,
+    ) -> tuple[str, dict]:
+        with self.transaction() as connection:
+            prior = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (owner_key, project, tool, operation_id),
+            ).fetchone()
+            if prior is not None:
+                if prior["args_sha256"] != args_sha256:
+                    raise ProjectStateError("operation_id_conflict")
+                return "replay", json.loads(prior["payload_json"])
+            row = connection.execute(
+                "SELECT generation_revision FROM book_generations WHERE generation_record_id=?",
+                (generation_record_id,),
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("generation_not_found")
+            if int(row["generation_revision"]) != expected_revision:
+                raise ProjectStateError("stale_generation")
+            connection.execute(
+                "UPDATE book_generations SET generation_revision=?,state=?,payload_json=?,updated_at=? WHERE generation_record_id=?",
+                (payload["generation_revision"], payload["state"],
+                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                 payload["updated_at"], generation_record_id),
+            )
+            result = {"generation": payload}
+            connection.execute(
+                "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) VALUES(?,?,?,?,?,?)",
+                (owner_key, project, tool, operation_id, args_sha256,
+                 json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+            )
+            return "committed", result
+
+    def generations(self, *, generation_record_id: str | None = None, chapter_id: str | None = None) -> list[dict]:
+        with self._connect() as connection:
+            if generation_record_id is not None:
+                rows = connection.execute("SELECT payload_json FROM book_generations WHERE generation_record_id=?", (generation_record_id,)).fetchall()
+            elif chapter_id is not None:
+                rows = connection.execute("SELECT payload_json FROM book_generations WHERE chapter_id=? ORDER BY created_at,generation_record_id", (chapter_id,)).fetchall()
+            else:
+                rows = []
+        return [json.loads(row["payload_json"]) for row in rows]
+
     def put_indexed_role_provenance(self, record: IndexedRoleProvenance) -> None:
         """Atomically replace the derived admission facts for one source path."""
         columns = (

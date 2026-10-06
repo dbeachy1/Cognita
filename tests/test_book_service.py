@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from cognita.books.models import InspectRequest, PrepareRequest, RecordGenerationRequest
+from cognita.books.models import GetGenerationsRequest, InspectRequest, PrepareRequest, RecordGenerationRequest
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState, ProjectStateError
 import cognita.books.service as service_module
@@ -327,3 +327,39 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
     assert generation["state"] == "reserved" and generation["media_registered"] is False
     again, replayed = service.record_generation(request, owner_key="principal:fixture")
     assert replayed and again == first
+    unknown = RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "unknown-generation", "change": {
+            "kind": "update", "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": 1, "state": "outcome_unknown",
+        },
+    })
+    unknown_result, replayed = service.record_generation(unknown, owner_key="principal:fixture")
+    assert not replayed and unknown_result["generation"]["state"] == "outcome_unknown"
+    assert unknown_result["generation"]["provider_ids"] == {}
+    with pytest.raises(BookServiceError, match="Provider evidence"):
+        service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": "bad-resolution", "change": {
+                "kind": "update", "generation_record_id": generation["generation_record_id"],
+                "expected_generation_revision": 2, "state": "submitted",
+            },
+        }), owner_key="principal:fixture")
+    submitted = RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "submitted-generation", "change": {
+            "kind": "update", "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": 2, "state": "submitted",
+            "provider_ids": {"generation_ids": ["provider-1"]},
+        },
+    })
+    updated, replayed = service.record_generation(submitted, owner_key="principal:fixture")
+    assert not replayed and updated["generation"]["generation_revision"] == 3
+    with pytest.raises(BookServiceError) as stale:
+        service.record_generation(submitted, owner_key="principal:other")
+    assert stale.value.reason == "stale_generation"
+    # Recovery reads derive the prompt only from the frozen snapshot, after a
+    # later Word/source mutation has made the live file different.
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(_docx("changed"))
+    recovered = service.get_generations(GetGenerationsRequest.model_validate({
+        "project": "fixture", "query": {"kind": "chapter", "chapter_id": "ch1"},
+        "include_prompt": True, "limit": 1,
+    }))
+    assert recovered["prompts"][0]["prompt"]["text"] == "hello"

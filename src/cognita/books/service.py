@@ -976,10 +976,7 @@ class BookService:
             "change": _data(change),
         })
         if isinstance(change, dto.UpdateGenerationChange):
-            raise BookServiceError(
-                "validation_failed",
-                "Generation evidence updates are not implemented until their CAS transition table is durable.",
-            )
+            return self._update_generation(change, state, request, owner_key, args_sha256)
         chapter = self._chapter(layout, change.chapter_id)
         stored = state.snapshot(change.snapshot_id)
         if stored is None or stored["chapter_id"] != chapter.chapter_id:
@@ -1036,6 +1033,89 @@ class BookService:
                 raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.") from exc
             raise BookServiceError("state_unavailable", "Generation state could not be persisted.") from exc
         return result, disposition == "replay"
+
+    def _update_generation(self, change, state, request, owner_key: str, args_sha256: str) -> tuple[dict[str, Any], bool]:
+        existing = state.generation(change.generation_record_id)
+        if existing is None:
+            raise BookServiceError("file_not_found", "The generation record does not exist.")
+        if existing["generation_revision"] != change.expected_generation_revision:
+            raise BookServiceError("stale_generation", "The generation evidence has changed.")
+        transitions = {
+            "reserved": {"reserved", "submitted", "failed", "outcome_unknown"},
+            "submitted": {"submitted", "running", "completed", "failed", "outcome_unknown"},
+            "running": {"running", "completed", "failed", "outcome_unknown"},
+            "outcome_unknown": {"outcome_unknown", "submitted", "running", "completed", "failed"},
+            "completed": {"completed"}, "failed": {"failed"},
+        }
+        if change.state not in transitions[existing["state"]]:
+            raise BookServiceError("stale_generation", "The requested generation state transition is not allowed.")
+        supplied_ids = _data(change.provider_ids) if "provider_ids" in change.model_fields_set else {}
+        previous_ids = dict(existing["provider_ids"])
+        merged_ids = dict(previous_ids)
+        for name, value in supplied_ids.items():
+            if isinstance(value, list):
+                merged_ids[name] = list(dict.fromkeys([*previous_ids.get(name, []), *value]))
+            elif value is not None:
+                merged_ids[name] = value
+        if existing["state"] == "outcome_unknown" and change.state != "outcome_unknown" and not merged_ids:
+            raise BookServiceError("generation_outcome_unknown", "Provider evidence is required before resolving an unknown outcome.")
+        value = dict(existing)
+        value["generation_revision"] += 1
+        value["state"] = change.state
+        value["provider_ids"] = merged_ids
+        if "provider_response_metadata" in change.model_fields_set:
+            value["provider_response_metadata"] = _data(change.provider_response_metadata)
+        if "cost" in change.model_fields_set:
+            value["cost"] = _data(change.cost)
+        if "failure" in change.model_fields_set:
+            value["failure"] = _data(change.failure)
+        value["updated_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            value = dto.GenerationRecord.model_validate(value, strict=True).model_dump(mode="json", exclude_unset=True)
+            disposition, result = state.update_generation(
+                generation_record_id=change.generation_record_id,
+                expected_revision=change.expected_generation_revision, payload=value,
+                owner_key=owner_key, project=self.project_name, tool="audiobook_record_generation",
+                operation_id=request.operation_id, args_sha256=args_sha256,
+            )
+        except ProjectStateError as exc:
+            if "operation_id_conflict" in str(exc):
+                raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.") from exc
+            if "stale_generation" in str(exc):
+                raise BookServiceError("stale_generation", "The generation evidence has changed.") from exc
+            raise BookServiceError("state_unavailable", "Generation state could not be persisted.") from exc
+        return result, disposition == "replay"
+
+    def get_generations(self, request: dto.GetGenerationsRequest) -> dict[str, Any]:
+        state = self._state_required()
+        if isinstance(request.query, dto.RecordGenerationQuery):
+            records = state.generations(generation_record_id=request.query.generation_record_id)
+        else:
+            self._chapter(self._enabled_layout()[2], request.query.chapter_id)
+            records = state.generations(chapter_id=request.query.chapter_id)
+            if "states" in request.query.model_fields_set:
+                records = [item for item in records if item["state"] in request.query.states]
+        view = canonical_json_sha256({"query": _data(request.query), "records": [r["generation_record_id"] for r in records]})
+        limit = request.limit if "limit" in request.model_fields_set else 100
+        offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
+        page = records[offset:offset + limit]
+        prompts = []
+        if "include_prompt" in request.model_fields_set and request.include_prompt:
+            for record in page:
+                stored = state.snapshot(record["snapshot_id"])
+                if stored is None:
+                    continue
+                chunk = next((c for c in stored["payload"]["result"]["chunks"] if c["chunk_id"] == record["chunk_id"]), None)
+                if chunk is None:
+                    continue
+                text = stored["payload"]["speech_text"][chunk["start"]:chunk["end"]]
+                prompts.append({"generation_record_id": record["generation_record_id"], "prompt": {
+                    "text": text, "returned_start": 0, "returned_end": len(text),
+                    "total_codepoints": len(text), "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                }})
+        end = offset + len(page)
+        return {"generations": page, "prompts": prompts, "has_more": end < len(records),
+                "next_cursor": _cursor(view, end) if end < len(records) else None}
 
     def set_folder_indexing(
         self, *, path: str, indexed: bool, operation_id: str,
