@@ -2542,7 +2542,7 @@ def test_invalid_captured_chapter_annotation_blocks_before_legacy_docx_extractio
     }
     chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
 
-    with pytest.raises(BookServiceError, match="different chapter source bytes") as raised:
+    with pytest.raises(BookServiceError, match="index_annotations.source_raw_sha256") as raised:
         parse_file(
             tmp_path / "Chapters/1/chapter.docx", tmp_path,
             captured_content=lambda path, suffix, raw: service.index_captured_content(path, suffix, raw),

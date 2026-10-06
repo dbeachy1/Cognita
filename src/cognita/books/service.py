@@ -431,9 +431,9 @@ class BookService:
             return "\n\n".join(item.text for item in projection.paragraphs)
         raw_sha256 = hashlib.sha256(raw).hexdigest()
         if annotations.source_raw_sha256 != raw_sha256:
-            raise BookServiceError("validation_failed", "Index annotations bind different chapter source bytes.")
+            raise BookServiceError("validation_failed", "Invalid index_annotations.source_raw_sha256 for captured chapter source.")
         if annotations.extraction_version != PROJECTION_VERSION:
-            raise BookServiceError("validation_failed", "Index annotations use an unsupported source projection version.")
+            raise BookServiceError("validation_failed", "Invalid index_annotations.extraction_version for captured chapter source.")
         paragraphs = {item.paragraph_id: item for item in projection.paragraphs}
         spans_by_paragraph: dict[str, list[Any]] = {}
         for span in annotations.spans:
