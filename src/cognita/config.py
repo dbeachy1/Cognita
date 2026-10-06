@@ -154,6 +154,11 @@ class CognitaConfig(BaseModel):
     models_cache_dir: Path = Field(
         default_factory=lambda: Path.home() / ".cache" / "cognita" / "models"
     )
+    # Audiobook production never resolves media executables from PATH.  The
+    # service receives these explicit absolute registrations and refuses MP3
+    # output when either is absent or no longer a regular local executable.
+    ffmpeg_executable: Path | None = None
+    ffprobe_executable: Path | None = None
     # 14.0.0: worker_port_min/max and worker_probe_interval_s (the 3.x worker
     # port pool and its ChromaDB-wedge deep probe) were removed with the workers.
     # Global kill-switch: force every remote connector project read-only.

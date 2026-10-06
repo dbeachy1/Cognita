@@ -669,6 +669,8 @@ class LocalEngineHost(
             service = BookService(
                 project.documents_dir, project.name,
                 state=self.project_state_for(project),
+                ffmpeg_executable=self.config.ffmpeg_executable,
+                ffprobe_executable=self.config.ffprobe_executable,
             )
             self._book_services[project.name] = service
         return service

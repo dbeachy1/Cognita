@@ -8,6 +8,7 @@ preparation and project-file reads continue during an index outage.
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import json
 import os
@@ -29,7 +30,8 @@ from .configuration import (
 )
 from .fingerprint import canonical_json_sha256, request_fingerprint
 from .media import MediaValidationError, inspect_media_file
-from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave
+from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave, production_mp3_argv
+from .jobs import ProcessRunnerError, ffprobe_json, run_process
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
@@ -129,10 +131,13 @@ def _data(value: Any) -> Any:
 class BookService:
     """Operations for one project. Create with its documents directory."""
 
-    def __init__(self, project_root: Path, project_name: str, *, state: ProjectState | None = None):
+    def __init__(self, project_root: Path, project_name: str, *, state: ProjectState | None = None,
+                 ffmpeg_executable: Path | None = None, ffprobe_executable: Path | None = None):
         self.root = Path(project_root).resolve(strict=True)
         self.project_name = project_name
         self.state = state
+        self.ffmpeg_executable = Path(ffmpeg_executable).resolve() if ffmpeg_executable is not None else None
+        self.ffprobe_executable = Path(ffprobe_executable).resolve() if ffprobe_executable is not None else None
         self._pending_views: dict[str, dict[str, Any]] = {}
         # Runtime ownership only. Durable rows remain the restart authority;
         # an unfinished row absent from this set is never assumed to have a
@@ -1688,8 +1693,11 @@ class BookService:
             if configured is None:
                 raise BookServiceError("stale_settings", "The production snapshot lacks its pinned target settings.")
             configured_target = dto.ProductionTarget.model_validate(configured, strict=True)
+            if "mp3_bitrate_kbps" not in request.outputs.model_fields_set or request.outputs.mp3_bitrate_kbps != configured_target.mp3_bitrate_kbps:
+                raise BookServiceError("settings_mismatch", "Production builds require the configured MP3 listening download bitrate.")
             if target.model_dump(exclude={"mp3_bitrate_kbps"}) != configured_target.model_dump(exclude={"mp3_bitrate_kbps"}):
                 raise BookServiceError("media_mismatch", "Native takes do not match the frozen production target.")
+            target = configured_target
         args_sha256 = canonical_json_sha256(_data(request))
         pinned = {
             "chapter_id": chapter.chapter_id, "scope_key": stored["scope_key"],
@@ -1697,6 +1705,7 @@ class BookService:
             "request_plan_sha256": item.request_plan_sha256, "take_ids": source_take_ids,
             "chunk_ids": [source.source_id for source in sources], "target": _data(target),
             "gaps": _data(request.gaps), "metadata": _data(request.metadata),
+            "emit_mp3": scope.get("kind") == "production",
         }
         now = datetime.now(timezone.utc).isoformat()
         job_id = str(uuid.uuid4())
@@ -1781,12 +1790,34 @@ class BookService:
                 "kind": "pcm_master", "filepath": f"{build_relative}/master.pcm",
                 "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media,
             }
+            outputs = [output_data]
+            if pinned.get("emit_mp3"):
+                ffmpeg, ffprobe = self._registered_media_executables()
+                mp3 = build_dir / "listening.mp3"
+                argv = production_mp3_argv(ffmpeg, pcm, mp3, target,
+                                           dto.BuildMetadata.model_validate(pinned["metadata"], strict=True))
+                process = asyncio.run(run_process(argv, timeout_seconds=1800.0, cwd=build_dir))
+                if process.cancelled:
+                    raise BookServiceError("cancelled", "The MP3 encoder was cancelled.")
+                if process.timed_out:
+                    raise BookServiceError("tool_timeout", "The MP3 encoder exceeded its bounded runtime.")
+                if process.returncode != 0:
+                    raise BookServiceError("tool_failed", "The registered MP3 encoder failed.")
+                probe = asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0))
+                encoded = inspect_media_file(mp3, ffprobe=probe)
+                if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
+                    raise BookServiceError("media_mismatch", "The encoder output was not verified as MP3 audio.")
+                outputs.append({
+                    "kind": "mp3_download", "filepath": f"{build_relative}/listening.mp3",
+                    "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
+                    "media": encoded.media.model_dump(mode="json"),
+                })
             recipe = canonical_json_sha256({"pinned": pinned, "timeline": timeline_value})
             result = dto.BuildResult.model_validate({
                 "kind": "build", "build_id": build_id, "scope": "chapter",
                 "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]],
                 "input_take_ids": pinned["take_ids"], "chapter_dependencies": [],
-                "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [output_data],
+                "request_plan_sha256": pinned["request_plan_sha256"], "outputs": outputs,
                 "timeline_filepath": f"{build_relative}/timeline.json", "recipe_sha256": recipe,
                 "validation": {"complete": True, "media_integrity": True, "coverage": True,
                                "sample_or_packet_verification": True, "errors": []},
@@ -1811,6 +1842,20 @@ class BookService:
             for path in staged:
                 path.unlink(missing_ok=True)
             self._active_build_jobs.discard(job_id)
+
+    def _registered_media_executables(self) -> tuple[Path, Path]:
+        """Return the two explicitly configured local media tools for production."""
+        ffmpeg, ffprobe = self.ffmpeg_executable, self.ffprobe_executable
+        if ffmpeg is None or ffprobe is None:
+            raise BookServiceError("media_tool_unavailable", "Production MP3 output requires configured FFmpeg and ffprobe executables.")
+        for executable in (ffmpeg, ffprobe):
+            try:
+                facts = executable.stat()
+            except OSError as exc:
+                raise BookServiceError("media_tool_unavailable", "A configured media executable is unavailable.") from exc
+            if not executable.is_absolute() or not stat.S_ISREG(facts.st_mode):
+                raise BookServiceError("media_tool_unavailable", "Configured media executables must be regular absolute files.")
+        return ffmpeg, ffprobe
 
     def commit_build(self, request: dto.CommitBuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         state, _, layout = self._enabled_layout()
