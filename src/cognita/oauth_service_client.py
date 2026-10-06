@@ -69,7 +69,7 @@ class IntrospectionResult:
     audiences: tuple[str, ...] = ()
     client_id: str | None = None
     subject: str | None = None
-    # Required for current (v5) routes.  Kept optional at this transport layer
+    # Required for current combined-contract routes. Kept optional at this transport layer
     # Historical token records may still be present, but current-only route
     # admission prevents them from authorizing a retired generation.
     cognita_principal_id: str | None = None

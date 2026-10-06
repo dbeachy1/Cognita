@@ -108,7 +108,7 @@ async def post(app, token, payload):
             if isinstance(arguments, dict):
                 arguments.setdefault("project", project)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        return await c.post(f"/mcp/connectors/{connector_slug}/mcp/v5", json=payload,
+        return await c.post(f"/mcp/connectors/{connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=payload,
                             headers={"Authorization": f"Bearer {token}"})
 
 

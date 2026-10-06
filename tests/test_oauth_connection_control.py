@@ -84,7 +84,7 @@ with TemporaryDirectory(prefix="cognita-oauth8-connections-") as root:
         app_model = get_application_model()
         access_model = get_access_token_model()
         refresh_model = get_refresh_token_model()
-        resource = "https://kei.example/mcp/connectors/cognita/mcp/v5"
+        resource = f"https://kei.example/mcp/connectors/cognita/mcp/v{PUBLIC_CONTRACT_VERSION}"
 
         def app(name):
             return app_model.objects.create(

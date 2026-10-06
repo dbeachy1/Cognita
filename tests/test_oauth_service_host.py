@@ -124,7 +124,7 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
         "response_type": "code",
         "code_challenge": "a" * 43,
         "code_challenge_method": "S256",
-        "resource": "https://kei.example/mcp/connectors/cognita/mcp/v5",
+        "resource": f"https://kei.example/mcp/connectors/cognita/mcp/v{PUBLIC_CONTRACT_VERSION}",
         "scope": "cognita:access",
     }
     rejected_authorization = client.get(

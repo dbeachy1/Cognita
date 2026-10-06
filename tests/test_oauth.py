@@ -457,7 +457,7 @@ def test_package_oauth_http_flow_lifecycle_and_restart() -> None:
                 assert metadata.json()["authorization_response_iss_parameter_supported"] is True
 
                 client_id = _register(client)
-                resource = f"http://127.0.0.1:{port}/mcp/connectors/{CONNECTOR_SLUG}/mcp/v5"
+                resource = f"http://127.0.0.1:{port}/mcp/connectors/{CONNECTOR_SLUG}/mcp/v{PUBLIC_CONTRACT_VERSION}"
                 _authorize(
                     client,
                     client_id,
@@ -466,7 +466,7 @@ def test_package_oauth_http_flow_lifecycle_and_restart() -> None:
                     state="state + /?",
                 )
                 code = _authorize(client, client_id, resource)
-                other_resource = f"http://127.0.0.1:{port}/mcp/connectors/{OTHER_CONNECTOR_SLUG}/mcp/v5"
+                other_resource = f"http://127.0.0.1:{port}/mcp/connectors/{OTHER_CONNECTOR_SLUG}/mcp/v{PUBLIC_CONTRACT_VERSION}"
                 switched = client.post(
                     "/oauth/token",
                     data={

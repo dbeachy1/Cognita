@@ -174,7 +174,7 @@ async def test_a_gateway_with_no_engine_answers_project_unavailable(tmp_path):
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/mcp/connectors/{connector.connectors[0].slug}/mcp/v5",
+            f"/mcp/connectors/{connector.connectors[0].slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                   "params": {"name": "list_categories", "arguments": {"project": "KEI"}}},
             headers={"Authorization": f"Bearer {token}"},

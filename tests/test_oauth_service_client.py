@@ -96,7 +96,7 @@ async def test_list_connections_accepts_connector_access_summary_and_rejects_ext
         "client_id": "client",
         "client_name": "ChatGPT",
         "project": None,
-        "resource": "https://cognita.example/mcp/connectors/cognita/mcp/v5",
+        "resource": f"https://cognita.example/mcp/connectors/cognita/mcp/v{PUBLIC_CONTRACT_VERSION}",
         "created_at": "2026-09-15T00:00:00Z",
         "last_used_at": None,
         "connector": {

@@ -59,7 +59,7 @@ async def test_core_catalog_filters_workspace_but_stale_and_unknown_calls_stay_d
 
     monkeypatch.setattr("cognita.gateway.bridge_tool_result", bridge_must_not_run)
     headers = {"Authorization": f"Bearer {token}"}
-    path = f"/mcp/connectors/{slug}/mcp/v5"
+    path = f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
     bridge_tool = next(iter(BRIDGE_TOOL_NAMES))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         catalog = await client.post(path, json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, headers=headers)
@@ -110,7 +110,7 @@ async def test_full_catalog_retains_workspace_schema_and_mode_health(
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         catalog = await client.post(
-            f"/mcp/connectors/{row.slug}/mcp/v5",
+            f"/mcp/connectors/{row.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
             headers={"Authorization": f"Bearer {token}"},
         )

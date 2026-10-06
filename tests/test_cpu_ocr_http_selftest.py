@@ -276,7 +276,7 @@ def test_host_explicitly_provisions_installed_fixtures_and_removes_copied_runner
     if multiline:
         compile(host._MULTILINE_ARGV_HTTP_PROBE, "<multiline-argv-http-probe>", "exec")
         assert commands[2][-4:] == ["python", "-c", host._MULTILINE_ARGV_HTTP_PROBE,
-                                    "http://127.0.0.1:8675/mcp/connectors/self-test/mcp/v5"]
+                                    f"http://127.0.0.1:8675/mcp/connectors/self-test/mcp/v{PUBLIC_CONTRACT_VERSION}"]
         assert inputs == [b"synthetic-not-for-log\n", b"synthetic-not-for-log\n"]
     else:
         assert inputs == [b"synthetic-not-for-log\n"]

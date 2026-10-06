@@ -74,9 +74,6 @@ def env(tmp_path, full_mode_workspace_service):
     token_a = auth.mutate_global(
         expected_revision=0, oauth_enabled=False, static_key_action="generate"
     )["generated_key"]
-    project_token_a = auth.mutate_project(
-        "A", expected_revision=1, static_key_action="generate",
-    )["generated_key"]
     store = ConnectorStore(tmp_path / "connectors.yaml")
     all_config = store.create(expected_revision=0, name="All", project_names=["A", "B"])
     all_id = all_config.connectors[0].id
@@ -96,7 +93,7 @@ def env(tmp_path, full_mode_workspace_service):
         all_id: all_config.connectors[0].slug,
         selected_id: selected_config.connectors[1].slug,
     }
-    app.state.test_project_token = project_token_a
+    app.state.test_authentication_store = auth
     return app, all_id, selected_id, token_a, seen
 
 
@@ -230,7 +227,9 @@ async def test_authenticated_book_caller_context_crosses_actual_asgi_transport(e
 @pytest.mark.asyncio
 async def test_authenticated_book_context_is_isolated_across_batches_and_concurrent_principals(env):
     app, connector_id, _selected_id, global_token, seen = env
-    project_token = app.state.test_project_token
+    project_token = app.state.test_authentication_store.mutate_project(
+        "A", expected_revision=1, static_key_action="generate",
+    )["generated_key"]
 
     jsonrpc_batch = await _post(app, connector_id, global_token, [
         _rpc("tools/call", {"name": "search_knowledge",

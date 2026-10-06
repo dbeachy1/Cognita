@@ -174,7 +174,7 @@ def gw(tmp_path):
 
 async def post(app, token, payload):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        return await c.post(f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5", json=payload,
+        return await c.post(f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=payload,
                             headers={"Authorization": f"Bearer {token}"})
 
 

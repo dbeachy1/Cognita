@@ -1,7 +1,7 @@
 """Catalog-bound Workspace self-test plans.
 
 The plan is generated from one section registry shared by the Workspace-only
-v3 tool and the combined v5 adapter.  It is instructions only: no test action
+v3 tool and the current combined-contract adapter. It is instructions only: no test action
 is executed and no caller-selected Workspace or project is accepted here.
 """
 

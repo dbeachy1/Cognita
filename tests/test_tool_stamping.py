@@ -92,7 +92,7 @@ def env(tmp_path, full_mode_workspace_service):
 async def tools_of(app, token) -> list[dict]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post(
-            f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5",
+            f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                          headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200

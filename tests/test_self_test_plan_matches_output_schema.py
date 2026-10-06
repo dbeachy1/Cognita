@@ -51,7 +51,7 @@ def env(tmp_path, full_mode_workspace_service):
 async def _rpc(app, slug, token, method, params=None):
     body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        r = await client.post(f"/mcp/connectors/{slug}/mcp/v5", json=body,
+        r = await client.post(f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=body,
                               headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text
     return r.json()["result"]

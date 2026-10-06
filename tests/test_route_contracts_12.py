@@ -11,6 +11,7 @@ from cognita.config import CognitaConfig
 from cognita.connectors import (
     ConnectorDefinition,
     ConnectorStore,
+    PUBLIC_CONTRACT_VERSION,
     RouteResource,
     RevisionConflict,
     WorkspaceConnectorStore,
@@ -24,15 +25,17 @@ from cognita.registry import Project, Registry
 
 def test_route_families_accept_stable_and_exact_generation_window():
     assert parse_route_path("/mcp/connectors/primary/mcp") == RouteResource("combined", "primary")
-    assert parse_route_path("/mcp/connectors/primary/mcp/v5") == RouteResource("combined", "primary", 5)
+    assert parse_route_path(f"/mcp/connectors/primary/mcp/v{PUBLIC_CONTRACT_VERSION}") == RouteResource(
+        "combined", "primary", PUBLIC_CONTRACT_VERSION,
+    )
     assert parse_route_path("/mcp/workspace/tools/mcp") == RouteResource("workspace", "tools")
     assert parse_route_path("/mcp/workspace/tools/mcp/v3") == RouteResource("workspace", "tools", 3)
-    assert supported_route_versions("combined") == (5,)
+    assert supported_route_versions("combined") == (PUBLIC_CONTRACT_VERSION,)
     assert supported_route_versions("workspace") == (3,)
     assert is_supported_route(RouteResource("combined", "primary"))
-    assert is_supported_route(RouteResource("combined", "primary", 5))
-    assert not is_supported_route(RouteResource("combined", "primary", 4))
-    assert not is_supported_route(RouteResource("combined", "primary", 6))
+    assert is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION))
+    assert not is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION - 1))
+    assert not is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION + 1))
     assert is_supported_route(RouteResource("workspace", "tools"))
     assert is_supported_route(RouteResource("workspace", "tools", 3))
     assert not is_supported_route(RouteResource("workspace", "tools", 2))
@@ -47,8 +50,8 @@ def test_route_families_accept_stable_and_exact_generation_window():
         "/mcp/connectors/primary/mcp/v0",
         "/mcp/connectors/primary/mcp/v2",
         "/mcp/connectors/primary/mcp/v3",
-        "/mcp/connectors/primary/mcp/v6",
-        "/mcp/connectors/primary/mcp/v5?x=5",
+        f"/mcp/connectors/primary/mcp/v{PUBLIC_CONTRACT_VERSION + 1}",
+        f"/mcp/connectors/primary/mcp/v{PUBLIC_CONTRACT_VERSION}?x=5",
         "/mcp/connectors/primary/mcp?x=4",
         "/mcp/workspace/tools/mcp/",
         "/mcp/workspace/tools/mcp/v01",
@@ -103,7 +106,7 @@ def test_workspace_connector_store_is_independent_revisioned_and_durable(tmp_pat
 
 
 @pytest.mark.anyio
-async def test_named_credential_auth_and_v5_catalog_follow_connector_policy(
+async def test_named_credential_auth_and_current_catalog_follow_connector_policy(
     tmp_path, monkeypatch, full_mode_workspace_service,
 ):
     registry = Registry(tmp_path / "registry.yaml")
@@ -149,21 +152,21 @@ async def test_named_credential_auth_and_v5_catalog_follow_connector_policy(
         transport=ASGITransport(app=app), base_url="https://example.test"
     ) as client:
         disabled = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/v5", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=request, headers=headers
         )
         connectors.update(
             surface.id, expected_revision=1, project_names=["Knowledge"],
             workspace_enabled=True,
         )
         enabled = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/v5", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=request, headers=headers
         )
         connectors.update(
             surface.id, expected_revision=2, project_names=["Knowledge"],
             default_workspace_transfer="allow",
         )
         bridge = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/v5", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=request, headers=headers
         )
         stable = await client.post(
             f"/mcp/connectors/{surface.slug}/mcp", json=request, headers=headers
@@ -178,13 +181,13 @@ async def test_named_credential_auth_and_v5_catalog_follow_connector_policy(
             f"/mcp/connectors/{surface.slug}/mcp/stable", json=request, headers=headers
         )
         encoded_current_alias = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/%76%35", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/%76%{PUBLIC_CONTRACT_VERSION}", json=request, headers=headers
         )
         retired = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/v4", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/v{PUBLIC_CONTRACT_VERSION - 1}", json=request, headers=headers
         )
         future = await client.post(
-            f"/mcp/connectors/{surface.slug}/mcp/v6", json=request, headers=headers
+            f"/mcp/connectors/{surface.slug}/mcp/v{PUBLIC_CONTRACT_VERSION + 1}", json=request, headers=headers
         )
     assert disabled.status_code == 200
     assert not any(

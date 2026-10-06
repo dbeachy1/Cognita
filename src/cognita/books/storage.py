@@ -261,6 +261,19 @@ def read_project_file(
         or any(c not in "0123456789abcdef" for c in expected_bytes_sha256)
     ):
         raise ProjectFileError("validation_failed", "expected_bytes_sha256 must be lowercase SHA-256 hex")
+    # Admit the exact target before opening our own read handle. On Windows,
+    # require_unlocked uses an exclusive open; running it after os.open makes
+    # our descriptor look like an external sharing violation.
+    if lock_check is not None:
+        lock_check(target)
+    if target.suffix.lower() == ".docx":
+        try:
+            from .docx import FileLockedError, require_unlocked
+            require_unlocked(target)
+        except ImportError:
+            pass
+        except FileLockedError as exc:
+            raise ProjectFileError("file_locked", "project file is locked") from exc
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(target, flags)
@@ -277,18 +290,6 @@ def read_project_file(
             before = os.fstat(stream.fileno())
             if not stat.S_ISREG(before.st_mode):
                 raise ProjectFileError("validation_failed", "path must name a regular file")
-            if lock_check is not None:
-                lock_check(target)
-            if target.suffix.lower() == ".docx":
-                try:
-                    from .docx import require_unlocked
-                    require_unlocked(target)
-                except ImportError:
-                    pass
-                except Exception as exc:
-                    if getattr(exc, "reason", None) == "file_locked":
-                        raise ProjectFileError("file_locked", "project file is locked") from exc
-                    raise
             full_hash = hashlib.sha256()
             stream.seek(0)
             while block := stream.read(1024 * 1024):

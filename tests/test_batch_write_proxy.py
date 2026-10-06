@@ -115,7 +115,7 @@ async def call_batch(app, token, documents):
                "params": {"name": "write_documents",
                           "arguments": {"project": "RW", "documents": documents}}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.post(f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5", json=payload,
+        r = await c.post(f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=payload,
                          headers={"Authorization": f"Bearer {token}"})
     body = r.json()
     return json.loads(body["result"]["content"][0]["text"])
@@ -127,7 +127,7 @@ async def call_tool(app, token, name, arguments):
                           "arguments": {"project": "RW", **arguments}}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         response = await c.post(
-            f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5", json=payload,
+            f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=payload,
             headers={"Authorization": f"Bearer {token}"},
         )
     return json.loads(response.json()["result"]["content"][0]["text"])

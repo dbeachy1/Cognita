@@ -98,7 +98,7 @@ async def _post(app, connector_slug: str, token: str, calls: list[dict], *, on_e
     request = _call("batch", {"calls": calls, "on_error": on_error})
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         return await client.post(
-            f"/mcp/connectors/{connector_slug}/mcp/v5", json=request,
+            f"/mcp/connectors/{connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=request,
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -129,7 +129,7 @@ async def test_batch_rejects_malformed_nested_and_image_envelopes(batch_env):
     bad = _call("batch", {"calls": [{"tool": "list_categories", "arguments": {"project": "RW"},
                                       "extra": True}]})
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(f"/mcp/connectors/{connector_slug}/mcp/v5", json=bad,
+        response = await client.post(f"/mcp/connectors/{connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=bad,
                                      headers={"Authorization": f"Bearer {token}"})
     assert _payload(response)["reason"] == "invalid_batch"
     assert _payload(response)["executed"] == 0

@@ -729,7 +729,7 @@ def public_tool_catalog(contract_version: int = PUBLIC_CONTRACT_VERSION) -> list
     """Return the sole current combined public catalog.
 
     Retired generations are not retained as compatibility catalogs.  A caller
-    holding a retired URL must reconnect to the explicitly qualified current v5
+    holding a retired URL must reconnect to the explicitly qualified current
     route instead of receiving a silently downgraded schema.
     """
     if contract_version != PUBLIC_CONTRACT_VERSION:
@@ -2461,7 +2461,7 @@ async def proxy_mcp(
             )
             if intercepted is not None:
                 # Intercepted write/transform paths may still carry a legacy
-                # worker's text-only result. Apply the same final public-v5
+                # worker's text-only result. Apply the same final public-contract
                 # normalization as the ordinary forwarding path.
                 if intercepted_tool:
                     intercepted_body = getattr(intercepted, "body", b"") or b""

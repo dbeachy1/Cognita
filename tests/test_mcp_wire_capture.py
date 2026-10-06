@@ -44,7 +44,7 @@ async def _call_plan(app, slug, token, section):
     body = {"jsonrpc": "2.0", "id": 41, "method": "tools/call",
             "params": {"name": "get_self_test_plan", "arguments": {"project": "RW", "section": section}}}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        return await client.post(f"/mcp/connectors/{slug}/mcp/v5", json=body,
+        return await client.post(f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=body,
                                  headers={"Authorization": f"Bearer {token}", "User-Agent": "node"})
 
 
@@ -90,7 +90,7 @@ async def test_capture_redacts_credential_headers_on_both_sides_and_keeps_payloa
     request_body = {"jsonrpc": "2.0", "id": "headers", "method": "tools/list"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/mcp/connectors/{slug}/mcp/v5", json=request_body,
+            f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=request_body,
             headers={
                 "Authorization": f"Bearer {token}",
                 "Proxy-Authorization": "request-proxy-secret",
@@ -125,7 +125,7 @@ async def test_capture_redacts_credential_headers_on_both_sides_and_keeps_payloa
 async def test_capture_does_not_read_rejected_streaming_body(tmp_path):
     app, slug, _token = _app(tmp_path, capture=True)
     sent = []
-    path = f"/mcp/connectors/{slug}/mcp/v5"
+    path = f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
         "method": "POST", "scheme": "http", "root_path": "",

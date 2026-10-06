@@ -4,6 +4,9 @@ import hashlib
 
 import pytest
 
+from cognita.books import docx as docx_module
+from cognita.books import storage as storage_module
+from cognita.books.docx import FileLockedError
 from cognita.books.storage import ProjectFileError, list_project_files, read_project_file
 
 
@@ -65,6 +68,35 @@ def test_read_project_file_returns_exact_bytes_and_checks_expected_hash(tmp_path
             tmp_path, "media.bin", offset=1, expected_bytes_sha256="0" * 64,
         )
     assert error.value.reason == "stale_file"
+
+
+def test_docx_lock_admission_precedes_reader_open_and_translates_external_lock(tmp_path, monkeypatch):
+    path = tmp_path / "source.docx"
+    path.write_bytes(b"stable DOCX fixture")
+    opened = False
+    original_open = storage_module.os.open
+
+    def tracked_open(*args, **kwargs):
+        nonlocal opened
+        opened = True
+        return original_open(*args, **kwargs)
+
+    def admission(_path):
+        assert opened is False
+
+    monkeypatch.setattr(storage_module.os, "open", tracked_open)
+    monkeypatch.setattr(docx_module, "require_unlocked", admission)
+    result = read_project_file(tmp_path, "source.docx")
+    assert result["bytes_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def externally_locked(locked_path):
+        raise FileLockedError(locked_path)
+
+    monkeypatch.setattr(docx_module, "require_unlocked", externally_locked)
+    with pytest.raises(ProjectFileError) as failure:
+        read_project_file(tmp_path, "source.docx")
+    assert failure.value.reason == "file_locked"
+    assert str(failure.value) == "project file is locked"
 
 
 def test_nonzero_offset_requires_hash_and_path_cannot_escape_project(tmp_path):

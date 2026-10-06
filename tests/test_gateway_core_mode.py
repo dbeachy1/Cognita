@@ -110,7 +110,7 @@ def rpc(method, params=None, msg_id=1):
 
 async def post(app, token, message):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        path = f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5"
+        path = f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
         return await client.post(path, json=message,
                                  headers={"Authorization": f"Bearer {token}"})
 
@@ -131,7 +131,7 @@ async def call(app, token, tool, arguments=None):
 async def test_auth_still_enforced(env):
     app, *_ = env
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
-        path = f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v5"
+        path = f"/mcp/connectors/{app.state.test_connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
         r = await client.post(path, json=rpc("tools/list"))
     assert r.status_code == 401
 
@@ -165,7 +165,7 @@ async def test_readonly_project_filtered_and_blocked(env):
     app, _, _, _, ro_token, _ = env
     r = await post(app, ro_token, rpc("tools/list"))
     names = {t["name"] for t in r.json()["result"]["tools"]}
-    # The current v5 catalog is connector-scoped and therefore identical for
+    # The current catalog is connector-scoped and therefore identical for
     # writable/read-only projects.  Access is enforced when the call resolves
     # the exact project, not by silently changing tools/list.
     assert "add_document" in names and "edit_document" in names

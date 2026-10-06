@@ -143,7 +143,7 @@ def test_migration_dry_run_and_retry_preserve_id(tmp_path):
 
 def test_canonical_url_uses_only_origin():
     assert build_connector_url("https://cognita.example/", "cognita") == (
-        "https://cognita.example/mcp/connectors/cognita/mcp/v5"
+        f"https://cognita.example/mcp/connectors/cognita/mcp/v{PUBLIC_CONTRACT_VERSION}"
     )
     assert build_connector_path("cognita", 3).endswith("/mcp/v3")
 
@@ -302,7 +302,7 @@ async def test_admin_connector_crud_auth_unknown_fields_and_get_is_read_only(adm
         assert connector["path"] == "/mcp/connectors/c/mcp"
         assert connector["url"] == "https://cognita.example/mcp/connectors/c/mcp"
         assert connector["stable_url"] == connector["url"]
-        assert connector["current_url"] == "https://cognita.example/mcp/connectors/c/mcp/v5"
+        assert connector["current_url"] == f"https://cognita.example/mcp/connectors/c/mcp/v{PUBLIC_CONTRACT_VERSION}"
         assert "/v5" not in connector["path"]
         assert connector["current_url"].count("/v5") == 1
         obsolete_publish = await client.post(

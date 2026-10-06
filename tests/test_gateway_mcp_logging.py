@@ -46,7 +46,7 @@ def env(tmp_path):
 async def _post(app, slug, token, body, *, headers=None):
     sent = {"Authorization": f"Bearer {token}", **(headers or {})}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        return await client.post(f"/mcp/connectors/{slug}/mcp/v5", json=body, headers=sent)
+        return await client.post(f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json=body, headers=sent)
 
 
 def _lines(caplog, prefix):
@@ -123,7 +123,7 @@ async def test_batch_and_rejected_requests_are_logged_too(env, caplog):
 
     caplog.clear()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        r = await client.post(f"/mcp/connectors/{slug}/mcp/v5", json={
+        r = await client.post(f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}", json={
             "jsonrpc": "2.0", "id": 2, "method": "tools/list"},
             headers={"Authorization": "Bearer not-the-key"})
     assert r.status_code == 401
@@ -141,8 +141,8 @@ async def test_rejected_streaming_post_is_not_read_for_logging(env, caplog):
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
         "method": "POST", "scheme": "http", "root_path": "",
-        "path": f"/mcp/connectors/{slug}/mcp/v5",
-        "raw_path": f"/mcp/connectors/{slug}/mcp/v5".encode(),
+        "path": f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
+        "raw_path": f"/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}".encode(),
         "query_string": b"", "server": ("test", 80), "client": ("test", 1234),
         "headers": [(b"authorization", b"Bearer invalid"),
                     (b"content-length", b"999999999")],

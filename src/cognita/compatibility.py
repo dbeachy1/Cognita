@@ -38,7 +38,7 @@ V2_PUBLIC_TOOL_NAMES: tuple[str, ...] = (
 V2_PUBLIC_TOOL_COUNT = len(V2_PUBLIC_TOOL_NAMES)
 
 # v3 is the 11.4 Knowledge catalog.  It is intentionally independent from the
-# current v5 catalog so adding a Workspace/bridge tool cannot leak into a
+# current catalog so adding a Workspace/bridge tool cannot leak into a
 # retired generation.
 V3_PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "search_knowledge", "get_document", "search_similar", "get_documents", "list_documents",
@@ -153,9 +153,9 @@ def frozen_v2_catalog(current_catalog: Iterable[Mapping[str, Any]]) -> list[dict
 def frozen_v3_catalog(current_catalog: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Return the immutable 11.4 Knowledge catalog for combined v3.
 
-    The v5 catalog is assembled from this same Knowledge implementation plus
-    Workspace and bridge adapters. Selecting by an explicit allowlist prevents
-    those additions (and any future v5-only fields) from appearing on v3.
+    The current catalog is assembled from this same Knowledge implementation
+    plus Workspace and bridge adapters. Selecting by an explicit allowlist
+    prevents those additions from appearing on v3.
     """
     raise RuntimeError("retired connector contract v3 is not a callable catalog")
     by_name = {item.get("name"): item for item in current_catalog}

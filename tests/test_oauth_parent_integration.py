@@ -112,7 +112,7 @@ async def test_gateway_oauth_health_and_proxy_use_shared_client(tmp_path):
         health = await client.get("/healthz")
         forwarded = await client.get("/oauth/token")
         protected = await client.post(
-                f"/mcp/connectors/{connector_id}/mcp/v5",
+                f"/mcp/connectors/{connector_id}/mcp/v{PUBLIC_CONTRACT_VERSION}",
             json={
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {
@@ -161,7 +161,7 @@ async def test_gateway_unavailable_fails_closed_without_invalid_token_challenge(
     app = create_gateway_app(config, registry, oauth_client=oauth)
     async with await _client(app) as client:
         health = await client.get("/healthz")
-        protected = await client.post(f"/mcp/connectors/{connector_id}/mcp/v5", json={})
+        protected = await client.post(f"/mcp/connectors/{connector_id}/mcp/v{PUBLIC_CONTRACT_VERSION}", json={})
         forwarded = await client.post("/oauth/token", data={"grant_type": "authorization_code"})
     assert health.status_code == 200
     assert health.json()["status"] == "degraded"

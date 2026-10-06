@@ -19,14 +19,14 @@ IDENTITY_SCHEMA = 1
 # The application version — what `/healthz`, the wheel metadata, the Admin UI,
 # the `initialize` serverInfo, the self-test plan and the image tag all report.
 # Move it in the same commit as the change that ships.
-APPLICATION_VERSION = "15.7.0"
+APPLICATION_VERSION = "16.0.0"
 
 # The public combined-connector MCP generation, served at
 # `/mcp/connectors/<slug>/mcp/v<N>`. Bump ONLY for a client-visible change to
 # that contract — a tool's wire shape, the error envelope, the catalog — never
 # for an ordinary release; `cognita.connectors` re-exports it under the name
 # the rest of the code already uses, PUBLIC_CONTRACT_VERSION.
-COMBINED_CONTRACT_VERSION = 5
+COMBINED_CONTRACT_VERSION = 6
 
 # The Workspace-only MCP generation, served at `/mcp/workspace/<slug>/mcp/v<N>`.
 # Bump ONLY for a client-visible change to the Workspace-only contract. It is

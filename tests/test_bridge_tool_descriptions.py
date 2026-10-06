@@ -68,7 +68,7 @@ async def test_tools_list_serves_the_placement_rule_on_the_connector_route(
         workspace_service=full_mode_workspace_service,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        r = await client.post(f"/mcp/connectors/{config.connectors[0].slug}/mcp/v5",
+        r = await client.post(f"/mcp/connectors/{config.connectors[0].slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
                               json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                               headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text

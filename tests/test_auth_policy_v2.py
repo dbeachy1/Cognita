@@ -210,7 +210,7 @@ def test_combined_credential_setup_offers_stable_and_current_v5(tmp_path: Path):
         current_password="correct horse",
     )
     assert stable["url"] == "https://example.test/mcp/connectors/primary/mcp"
-    assert current["url"] == "https://example.test/mcp/connectors/primary/mcp/v5"
+    assert current["url"] == f"https://example.test/mcp/connectors/primary/mcp/v{PUBLIC_CONTRACT_VERSION}"
     assert stable["secret"] == current["secret"]
 
 

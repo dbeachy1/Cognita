@@ -68,7 +68,7 @@ def _policy(tmp_path):
 
 def test_connector_resource_is_exact_and_resolves_current_access(tmp_path):
     policy, _store = _policy(tmp_path)
-    resource = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v5"
+    resource = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v{PUBLIC_CONTRACT_VERSION}"
     stable = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp"
 
     assert policy.resource_for(CONNECTOR_ID) == resource
@@ -84,7 +84,7 @@ def test_connector_resource_is_exact_and_resolves_current_access(tmp_path):
 
 def test_retired_generation_is_not_an_oauth_resource(tmp_path):
     policy, _store = _policy(tmp_path)
-    current = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v5"
+    current = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v{PUBLIC_CONTRACT_VERSION}"
     previous = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v4"
 
     assert policy.validate(current) == current
@@ -104,7 +104,7 @@ def test_stable_alias_is_a_distinct_valid_oauth_resource(tmp_path):
 
     assert policy.validate(stable) == stable
     assert stable != current
-    assert current.endswith("/mcp/v5")
+    assert current.endswith(f"/mcp/v{PUBLIC_CONTRACT_VERSION}")
 
 
 def test_versioned_resources_honor_public_base_path_prefix(tmp_path):

@@ -87,8 +87,11 @@ def test_importing_the_authority_pulls_in_nothing_else():
 
 def test_the_identity_names_are_the_ones_the_design_declares():
     assert IDENTITY_SCHEMA == 1
-    assert isinstance(APPLICATION_VERSION, str) and APPLICATION_VERSION.count(".") == 2
-    assert isinstance(COMBINED_CONTRACT_VERSION, int) and COMBINED_CONTRACT_VERSION >= 1
+    assert APPLICATION_VERSION == "16.0.0"
+    assert COMBINED_CONTRACT_VERSION == 6
+    assert WORKSPACE_CONTRACT_VERSION == 3
+    assert DATABASE_SCHEMA_VERSION == 1
+    assert TOOLBOX_VERSION == "12.6.0"
     assert isinstance(WORKSPACE_CONTRACT_VERSION, int) and WORKSPACE_CONTRACT_VERSION >= 1
     assert isinstance(DATABASE_SCHEMA_VERSION, int) and DATABASE_SCHEMA_VERSION >= 1
     assert isinstance(TOOLBOX_VERSION, str)
