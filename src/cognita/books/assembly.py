@@ -13,7 +13,7 @@ import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterable, Sequence
+from typing import BinaryIO, Callable, Iterable, Sequence
 
 from .media import MediaInspection
 from .jobs import PacketFact
@@ -508,7 +508,8 @@ def _validate_test_mp3_sources(sources: Sequence[Mp3Source], gaps: Iterable[Sile
             _fail("media_mismatch", "MP3 stream-copy inputs must have matching codec, rate, channels, and bitrate")
 
 
-def write_ffconcat_manifest(paths: Sequence[str | Path], manifest: str | Path) -> None:
+def write_ffconcat_manifest(paths: Sequence[str | Path], manifest: str | Path, *,
+                            on_created: Callable[[Path, int], None] | None = None) -> None:
     """Write an ffconcat manifest containing only existing absolute local files."""
     manifest_path = Path(manifest)
     if not manifest_path.is_absolute() or manifest_path.exists():
@@ -529,6 +530,8 @@ def write_ffconcat_manifest(paths: Sequence[str | Path], manifest: str | Path) -
         lines.append(f"file '{escaped}'")
     try:
         with manifest_path.open("x", encoding="utf-8", newline="\n") as stream:
+            if on_created is not None:
+                on_created(manifest_path, stream.fileno())
             stream.write("\n".join(lines) + "\n")
     except OSError as exc:
         raise AssemblyError("output_write_failed", f"Unable to write FFmpeg concat manifest: {exc}") from exc

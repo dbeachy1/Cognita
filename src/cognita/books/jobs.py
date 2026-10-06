@@ -11,7 +11,7 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import BinaryIO, Mapping, Sequence
 
 
 class ProcessRunnerError(RuntimeError):
@@ -101,12 +101,14 @@ async def run_process(
     cwd: str | Path | None = None,
     max_output_bytes: int = 1_048_576,
     cancel_event: asyncio.Event | None = None,
+    stdout_file: BinaryIO | None = None,
 ) -> ProcessResult:
     """Run an exact argv, cap retained output while draining pipes, and await cleanup.
 
-    POSIX children get a dedicated session so cancellation can stop only their
-    process group. Windows cleanup signals only the exact process this call
-    created; media tools in the supported Linux service use the group path.
+    An optional open binary file receives stdout directly from the child, which
+    lets callers pin output ownership before a media tool starts. POSIX children
+    get a dedicated session so cancellation can stop only their process group.
+    Windows cleanup signals only the exact process this call created.
     """
     if isinstance(argv, (str, bytes)) or not argv or any(not isinstance(item, str) for item in argv):
         raise ProcessRunnerError("invalid_process_request", "argv must be a nonempty sequence of strings")
@@ -116,26 +118,36 @@ async def run_process(
         raise ProcessRunnerError("invalid_process_request", "timeout_seconds must be finite and positive")
     if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int) or max_output_bytes < 0:
         raise ProcessRunnerError("invalid_process_request", "max_output_bytes must be a nonnegative integer")
+    if stdout_file is not None:
+        if stdout_file.closed or not stdout_file.writable():
+            raise ProcessRunnerError("invalid_process_request", "stdout_file must be open and writable")
+        try:
+            stdout_file.fileno()
+        except (OSError, ValueError) as exc:
+            raise ProcessRunnerError("invalid_process_request", "stdout_file must expose an open file descriptor") from exc
     started = time.monotonic()
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=str(cwd) if cwd is not None else None,
-            stdout=asyncio.subprocess.PIPE,
+            stdout=stdout_file if stdout_file is not None else asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=(os.name == "posix"),
         )
     except (OSError, ValueError) as exc:
         raise ProcessRunnerError("process_start_failed", f"Unable to start registered media tool: {exc}") from exc
-    assert process.stdout is not None and process.stderr is not None
-    stdout_task = asyncio.create_task(_drain_limited(process.stdout, max_output_bytes))
+    assert process.stderr is not None
+    stdout_task = (asyncio.create_task(_drain_limited(process.stdout, max_output_bytes))
+                   if process.stdout is not None else None)
     stderr_task = asyncio.create_task(_drain_limited(process.stderr, max_output_bytes))
     wait_task = asyncio.create_task(process.wait())
     cancel_task = asyncio.create_task(cancel_event.wait()) if cancel_event is not None else None
     deadline = started + timeout_seconds
     timed_out = False
     cancelled = False
-    pipe_tasks = {stdout_task, stderr_task}
+    pipe_tasks = {stderr_task}
+    if stdout_task is not None:
+        pipe_tasks.add(stdout_task)
 
     async def finish_stopped_drains() -> None:
         # Killing the owned group normally closes its pipes. Bound cleanup as
@@ -168,7 +180,8 @@ async def run_process(
             await finish_stopped_drains()
         # A drain abandoned after bounded cleanup has incomplete output, not a
         # task cancellation of this runner. Keep timeout/cancel-event facts.
-        stdout_result = (b"", True) if stdout_task.cancelled() else stdout_task.result()
+        stdout_result = ((b"", False) if stdout_task is None else
+                         ((b"", True) if stdout_task.cancelled() else stdout_task.result()))
         stderr_result = (b"", True) if stderr_task.cancelled() else stderr_task.result()
         return ProcessResult(
             returncode=process.returncode if process.returncode is not None else -1,

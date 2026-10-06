@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 import math
+import os
+import shutil
 import struct
 import threading
 import zipfile
@@ -1295,8 +1297,9 @@ def test_whole_book_pins_serialized_chapter_frame_count_with_internal_silence(tm
             "format": {"format_name": "mp3", "duration": "0.01", "bit_rate": "96000"},
         }
 
-    async def fake_encode(argv, **_kwargs):
-        Path(argv[-1]).write_bytes(b"ID3\x04\x00\x00synthetic-mp3")
+    async def fake_encode(argv, **kwargs):
+        assert argv[-2:] == ["mp3", "pipe:1"]
+        kwargs["stdout_file"].write(b"ID3\x04\x00\x00synthetic-mp3")
         return SimpleNamespace(cancelled=False, timed_out=False, returncode=0)
 
     monkeypatch.setattr(service_module, "_media_tool_version", fake_tool_version)
@@ -4771,7 +4774,8 @@ def test_alternate_cursor_and_historical_snapshot_keep_distinct_authorization_bo
     assert historical_denied.value.reason == "not_authorized"
 
 
-def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("replace_gap", [None, "manifest", "output"])
+def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path, monkeypatch, replace_gap):
     service, prose, tagged = _fixture(tmp_path)
     generation, _ = _completed_raw_generation(service, prose, tagged)
     source = tmp_path / "Audiobook/Chapters/1/test.mp3"
@@ -4781,14 +4785,41 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
     probe = {"streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100",
                           "channels": 1, "duration": "0.25", "bit_rate": "96000", "nb_frames": "2"}],
              "format": {"format_name": "mp3", "duration": "0.25", "bit_rate": "96000"}}
+    replacement = b"external replacement survives"
+    replaced_paths = []
     async def fake_probe(_executable, _filepath, **_kwargs): return probe
     async def fake_packets(_executable, _filepath, **_kwargs): return (PacketFact(10, "a" * 64),)
     async def fake_run(argv, **_kwargs):
         if argv[-1] == "-version":
             return SimpleNamespace(cancelled=False, timed_out=False, returncode=0,
                                    stdout=b"ffmpeg version 7.1 fixture\n", stderr=b"", stdout_truncated=False)
-        Path(argv[-1]).write_bytes(raw)
+        assert argv[-2:] == ["mp3", "pipe:1"]
+        output_stream = _kwargs["stdout_file"]
+        output_stream.write(raw)
         return SimpleNamespace(cancelled=False, timed_out=False, returncode=0)
+
+    if replace_gap == "manifest":
+        write_manifest = service_module.write_ffconcat_manifest
+
+        def replace_manifest_after_writer(paths, manifest, **kwargs):
+            write_manifest(paths, manifest, **kwargs)
+            replaced_paths.append(Path(manifest))
+            Path(manifest).unlink()
+            Path(manifest).write_bytes(replacement)
+
+        monkeypatch.setattr(service_module, "write_ffconcat_manifest", replace_manifest_after_writer)
+    elif replace_gap == "output":
+        require_owned = service_module._require_owned_build_file
+
+        def replace_output_before_first_check(path, identity):
+            output_path = Path(path)
+            if output_path.name == "listening.mp3" and not replaced_paths:
+                replaced_paths.append(output_path)
+                output_path.unlink()
+                output_path.write_bytes(replacement)
+            return require_owned(output_path, identity)
+
+        monkeypatch.setattr(service_module, "_require_owned_build_file", replace_output_before_first_check)
     from cognita.books.mp3_validation import (
         Mp3DecoderFileFacts, Mp3DecoderVerification, Mp3DecodedFrame,
         Mp3Packet, Mp3ToolInvocation,
@@ -4836,6 +4867,14 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
     assert not replayed
     service.run_build_job(build["job_id"])
     candidate = service.get_job(GetJobRequest(project="fixture", job_id=build["job_id"]))
+    if replace_gap is not None:
+        assert candidate["state"] == "failed", candidate
+        assert candidate["error"]["reason"] == "publication_conflict", candidate["error"]
+        assert len(replaced_paths) == 1
+        assert replaced_paths[0].read_bytes() == replacement
+        assert [path.name for path in replaced_paths[0].parent.iterdir()] == [replaced_paths[0].name]
+        assert state.chapter_head("ch1", snapshot["scope_key"]) is None
+        return
     assert candidate["state"] == "succeeded", candidate
     result = candidate["result"]
     assert [item["kind"] for item in result["outputs"]] == ["mp3_download"]
@@ -4868,6 +4907,77 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
     )
     assert changed_plan["request_plan_sha256"] != build_request.input.request_plan_sha256
     _assert_completed_build_replay_survives_changed_guards(service, build_request, build)
+
+
+@pytest.mark.skipif(
+    os.environ.get("COGNITA_RUN_ACTUAL_MEDIA_PROBE") != "1",
+    reason="set COGNITA_RUN_ACTUAL_MEDIA_PROBE=1 in the installed media-test environment",
+)
+def test_real_ffmpeg_stream_copy_owned_stdout_sink(tmp_path):
+    """Exercise the pinned stdout sink with real tools and synthetic matching MP3s."""
+    from cognita.books.assembly import (
+        Mp3Source, build_test_mp3_stream_copy_argv, verify_mp3_packet_copy,
+        write_ffconcat_manifest,
+    )
+    from cognita.books.jobs import ffprobe_json, ffprobe_packet_facts, run_process
+
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    assert ffmpeg is not None and ffprobe is not None, "installed media-test image must expose ffmpeg and ffprobe on PATH"
+    build_dir = tmp_path / "owned-stream-copy"
+    build_dir.mkdir()
+    identity = service_module._owned_directory_identity(build_dir)
+    source_paths = [tmp_path / "synthetic-a.mp3", tmp_path / "synthetic-b.mp3"]
+    try:
+        sources = []
+        packet_inputs = []
+        for index, (frequency, path) in enumerate(zip((440, 660), source_paths, strict=True)):
+            generated = asyncio.run(run_process([
+                ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-f", "lavfi", "-i",
+                f"sine=frequency={frequency}:sample_rate=44100", "-t", "0.35", "-c:a", "libmp3lame",
+                "-b:a", "96k", "-write_xing", "0", "-id3v2_version", "3", str(path),
+            ], timeout_seconds=30.0))
+            assert generated.returncode == 0 and not generated.timed_out and not generated.cancelled, generated.stderr
+            probe = asyncio.run(ffprobe_json(ffprobe, path, timeout_seconds=30.0))
+            inspection = inspect_media_file(path, ffprobe=probe)
+            assert inspection.media.codec == "mp3" and inspection.media.sample_rate_hz == 44_100
+            sources.append(Mp3Source(f"synthetic-{index}", path, inspection))
+            packet_inputs.append(asyncio.run(ffprobe_packet_facts(ffprobe, path, timeout_seconds=30.0)))
+
+        manifest, output = build_dir / "inputs.ffconcat", build_dir / "listening.mp3"
+        write_ffconcat_manifest(source_paths, manifest, on_created=identity.capture_file)
+        service_module._require_owned_build_file(manifest, identity)
+        argv = build_test_mp3_stream_copy_argv(
+            ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output,
+            metadata=service_module.dto.BuildMetadata.model_validate(
+                {"title": "Fixture", "author": "Fixture", "edition": "actual-media-probe"}, strict=True,
+            ),
+        )
+        argv = service_module._mp3_stdout_argv(argv, output)
+        with output.open("xb") as output_stream:
+            identity.capture_file(output, output_stream.fileno())
+            copied = asyncio.run(run_process(
+                argv, timeout_seconds=30.0, cwd=build_dir, stdout_file=output_stream,
+            ))
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        assert copied.returncode == 0 and not copied.timed_out and not copied.cancelled, copied.stderr
+        assert copied.stdout == b"" and not copied.stdout_truncated
+        service_module._require_owned_build_file(output, identity)
+        output_probe = asyncio.run(ffprobe_json(ffprobe, output, timeout_seconds=30.0))
+        inspection = inspect_media_file(output, ffprobe=output_probe)
+        assert inspection.media.codec == "mp3" and inspection.size_bytes > 0
+        packet_copy = verify_mp3_packet_copy(
+            packet_inputs, asyncio.run(ffprobe_packet_facts(ffprobe, output, timeout_seconds=30.0)),
+        )
+        assert packet_copy.packet_count > 0
+        service_module._require_owned_build_file(output, identity)
+    finally:
+        service_module._cleanup_owned_build_files(tmp_path, build_dir, identity, tuple(identity.files))
+        identity.close()
+        for path in source_paths:
+            path.unlink(missing_ok=True)
+    assert not build_dir.exists()
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
     service, prose, tagged = _fixture(tmp_path)

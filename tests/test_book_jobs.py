@@ -31,6 +31,57 @@ async def test_run_process_caps_output_but_drains_both_pipes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_process_routes_stdout_to_open_file(tmp_path: Path) -> None:
+    destination = tmp_path / "stdout.bin"
+    with destination.open("wb") as output:
+        result = await run_process(
+            [_python(), "-c", "import sys; sys.stdout.buffer.write(b'owned bytes'); sys.stderr.write('diagnostic')"],
+            timeout_seconds=5,
+            stdout_file=output,
+        )
+        output.flush()
+    assert result.returncode == 0
+    assert result.stdout == b"" and not result.stdout_truncated
+    assert result.stderr == b"diagnostic"
+    assert destination.read_bytes() == b"owned bytes"
+
+
+@pytest.mark.asyncio
+async def test_run_process_timeout_awaits_owned_child_with_stdout_file(tmp_path: Path) -> None:
+    destination = tmp_path / "timeout.bin"
+    with destination.open("wb") as output:
+        result = await run_process(
+            [_python(), "-c", "import sys,time; sys.stdout.buffer.write(b'partial'); sys.stdout.flush(); time.sleep(20)"],
+            timeout_seconds=0.1,
+            stdout_file=output,
+        )
+        output.flush()
+    assert result.timed_out and not result.cancelled
+    assert result.returncode is not None
+    assert destination.read_bytes() == b"partial"
+
+
+@pytest.mark.asyncio
+async def test_run_process_cancel_event_awaits_owned_child_with_stdout_file(tmp_path: Path) -> None:
+    destination = tmp_path / "cancel.bin"
+    cancel = asyncio.Event()
+    with destination.open("wb") as output:
+        task = asyncio.create_task(run_process(
+            [_python(), "-c", "import sys,time; sys.stdout.buffer.write(b'partial'); sys.stdout.flush(); time.sleep(20)"],
+            timeout_seconds=5,
+            cancel_event=cancel,
+            stdout_file=output,
+        ))
+        await asyncio.sleep(0.1)
+        cancel.set()
+        result = await task
+        output.flush()
+    assert result.cancelled and not result.timed_out
+    assert result.returncode is not None
+    assert destination.read_bytes() == b"partial"
+
+
+@pytest.mark.asyncio
 async def test_run_process_timeout_awaits_owned_child() -> None:
     result = await run_process(
         [_python(), "-c", "import time; time.sleep(20)"],

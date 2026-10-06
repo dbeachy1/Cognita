@@ -197,6 +197,13 @@ def _timestamp_frame(seconds: float, sample_rate_hz: int) -> int:
     return int((Decimal(str(seconds)) * sample_rate_hz).to_integral_value(rounding=ROUND_FLOOR))
 
 
+def _mp3_stdout_argv(argv: list[str], destination: Path) -> list[str]:
+    """Send a validated MP3 command's output through its pinned stdout file."""
+    if not argv or argv[-1] != str(destination):
+        raise BookServiceError("invalid_process_request", "The MP3 output path did not match its validated argv.")
+    return [*argv[:-1], "-f", "mp3", "pipe:1"]
+
+
 def _provider_fact_key(value: str) -> str:
     """Normalize conventional JSON/query key separators without matching substrings."""
     return "".join(character for character in value.casefold() if character.isalnum())
@@ -4203,23 +4210,36 @@ class BookService:
         directory_identity = _owned_directory_identity(directory)
         owned_directories.append(directory_identity)
         manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
-        write_ffconcat_manifest([source.filepath for source in sources], manifest)
-        _capture_owned_build_file(manifest, directory_identity)
+        write_ffconcat_manifest(
+            [source.filepath for source in sources], manifest,
+            on_created=directory_identity.capture_file,
+        )
+        _require_owned_build_file(manifest, directory_identity)
         stream_copy_argv = build_test_mp3_stream_copy_argv(
             ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output,
             metadata=dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
         )
+        stream_copy_argv = _mp3_stdout_argv(stream_copy_argv, output)
         tool_versions = {
             "ffmpeg": {"executable": str(ffmpeg), "version": asyncio.run(_media_tool_version(ffmpeg))},
             "ffprobe": {"executable": str(ffprobe), "version": asyncio.run(_media_tool_version(ffprobe))},
         }
-        process = asyncio.run(run_process(stream_copy_argv, timeout_seconds=1800.0, cwd=directory))
+        with output.open("xb") as output_stream:
+            directory_identity.capture_file(output, output_stream.fileno())
+            process = asyncio.run(run_process(
+                stream_copy_argv, timeout_seconds=1800.0, cwd=directory, stdout_file=output_stream,
+            ))
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
         if process.cancelled: raise BookServiceError("cancelled", "MP3 stream-copy was cancelled.")
         if process.timed_out: raise BookServiceError("tool_timeout", "MP3 stream-copy exceeded its bounded runtime.")
         if process.returncode != 0: raise BookServiceError("tool_failed", "MP3 stream-copy failed.")
+        _require_owned_build_file(output, directory_identity)
         output_probe = asyncio.run(ffprobe_json(ffprobe, output, timeout_seconds=60.0))
+        _require_owned_build_file(output, directory_identity)
         inspected = inspect_media_file(output, ffprobe=output_probe)
         proof = verify_mp3_packet_copy(packet_inputs, asyncio.run(ffprobe_packet_facts(ffprobe, output, timeout_seconds=60.0)))
+        _require_owned_build_file(output, directory_identity)
         if inspected.media.codec != "mp3" or inspected.media.duration_seconds <= 0:
             raise BookServiceError("media_mismatch", "Stream-copy output lacks decodable MP3 duration facts.")
         decoder = asyncio.run(verify_chapter_mp3_decoder(
@@ -4230,7 +4250,7 @@ class BookService:
             decoder.packet_order_checked and decoder.decoder_checked and decoder.boundaries_checked
         ):
             raise BookServiceError("validation_failed", "MP3 decoder and join-boundary verification did not complete.")
-        _capture_owned_build_file(output, directory_identity)
+        _require_owned_build_file(output, directory_identity)
         decoder_facts = asdict(decoder)
         for fact, source in zip(decoder_facts["sources"], sources, strict=True):
             fact["filepath"] = str(source.filepath.relative_to(self.root))
@@ -4393,18 +4413,27 @@ class BookService:
                     ffmpeg, pcm, mp3, target,
                     dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
                 )
-                process = asyncio.run(run_process(encoder_argv, timeout_seconds=1800.0, cwd=build_dir))
+                encoder_argv = _mp3_stdout_argv(encoder_argv, mp3)
+                with mp3.open("xb") as output_stream:
+                    build_directory_identity.capture_file(mp3, output_stream.fileno())
+                    process = asyncio.run(run_process(
+                        encoder_argv, timeout_seconds=1800.0, cwd=build_dir, stdout_file=output_stream,
+                    ))
+                    output_stream.flush()
+                    os.fsync(output_stream.fileno())
                 if process.cancelled:
                     raise BookServiceError("cancelled", "The MP3 encoder was cancelled.")
                 if process.timed_out:
                     raise BookServiceError("tool_timeout", "The MP3 encoder exceeded its bounded runtime.")
                 if process.returncode != 0:
                     raise BookServiceError("tool_failed", "The registered MP3 encoder failed.")
+                _require_owned_build_file(mp3, build_directory_identity)
                 probe = asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0))
+                _require_owned_build_file(mp3, build_directory_identity)
                 encoded = inspect_media_file(mp3, ffprobe=probe)
+                _require_owned_build_file(mp3, build_directory_identity)
                 if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
                     raise BookServiceError("media_mismatch", "The encoder output was not verified as MP3 audio.")
-                _capture_owned_build_file(mp3, build_directory_identity)
                 outputs.append({
                     "kind": "mp3_download", "filepath": f"{build_relative}/listening.mp3",
                     "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
@@ -4588,16 +4617,23 @@ class BookService:
         encoder_argv = production_mp3_argv(
             ffmpeg, pcm, mp3, target, dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
         )
-        process = asyncio.run(run_process(
-            encoder_argv,
-            timeout_seconds=1800.0, cwd=build_dir,
-        ))
+        encoder_argv = _mp3_stdout_argv(encoder_argv, mp3)
+        with mp3.open("xb") as output_stream:
+            build_directory_identity.capture_file(mp3, output_stream.fileno())
+            process = asyncio.run(run_process(
+                encoder_argv, timeout_seconds=1800.0, cwd=build_dir, stdout_file=output_stream,
+            ))
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
         if process.cancelled or process.timed_out or process.returncode != 0:
             raise BookServiceError("tool_failed", "The registered book MP3 encoder did not complete successfully.")
-        encoded = inspect_media_file(mp3, ffprobe=asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0)))
+        _require_owned_build_file(mp3, build_directory_identity)
+        probe = asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0))
+        _require_owned_build_file(mp3, build_directory_identity)
+        encoded = inspect_media_file(mp3, ffprobe=probe)
+        _require_owned_build_file(mp3, build_directory_identity)
         if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
             raise BookServiceError("media_mismatch", "The book encoder output was not verified as MP3 audio.")
-        _capture_owned_build_file(mp3, build_directory_identity)
         outputs.append({"kind": "mp3_download", "filepath": f"{root_relative}/listening.mp3",
                         "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
                         "media": encoded.media.model_dump(mode="json")})
@@ -5101,6 +5137,16 @@ def _unlink_owned_build_stage(path: Path, identity: _OwnedDirectoryIdentity) -> 
 def _capture_owned_build_file(path: Path, identity: _OwnedDirectoryIdentity) -> None:
     """Record the file object created at this build's fixed artifact name."""
     identity.capture_file(path)
+
+
+def _require_owned_build_file(path: Path, identity: _OwnedDirectoryIdentity) -> None:
+    """Reject publication checks if an output name no longer refers to its pinned file."""
+    try:
+        matches = identity.matches_file(path)
+    except OSError:
+        matches = False
+    if not matches:
+        raise BookServiceError("publication_conflict", "A build artifact path changed during media processing.")
 
 
 def _move_owned_build_file_identity(source: Path, destination: Path,
