@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import os
+import threading
 import uuid
 from pathlib import Path
 
@@ -239,6 +240,94 @@ async def test_startup_survives_a_schema_version_mismatch(mismatched_host, caplo
     # Nothing that needs the database was started.
     assert mismatched_host.watcher is None
     assert mismatched_host._probe_task is None
+
+
+async def test_startup_recovers_bookmark_publications_under_project_lock(mismatched_host, monkeypatch):
+    project = mismatched_host.registry.projects[0]
+    observed = []
+
+    class RecoveryProbe:
+        def recover_interrupted_import_jobs(self):
+            observed.append("imports")
+
+        def recover_bookmark_publications(self):
+            assert mismatched_host.core.write_lock(project.name).locked()
+            observed.append("bookmarks")
+
+    monkeypatch.setattr(mismatched_host, "book_service_for", lambda _project: RecoveryProbe())
+    original_connect = mismatched_host.store.connect
+
+    async def connect_after_recovery():
+        observed.append("connect")
+        await original_connect()
+
+    monkeypatch.setattr(mismatched_host.store, "connect", connect_after_recovery)
+    await mismatched_host.startup()
+    assert observed == ["imports", "bookmarks", "connect"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_keeps_build_worker_owned_until_media_thread_exits(tmp_path, monkeypatch):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    host = make_host(tmp_path, docs, "build-shutdown")
+    project = host.registry.get("build-shutdown")
+    entered = threading.Event()
+    release = threading.Event()
+    job_id = str(uuid.uuid4())
+    expected_job_id = job_id
+
+    class BlockingBuildService:
+        _active_build_jobs = set()
+        accepted_head_revision = 7
+        calls = []
+
+        def build(self, _request, *, owner_key):
+            self.calls.append(owner_key)
+            return {
+                "job_id": job_id, "job_revision": 1, "state": "queued",
+                "poll_after_seconds": 1, "pinned_inputs_sha256": "2" * 64,
+            }, False
+
+        def run_build_job(self, job_id):
+            assert job_id == expected_job_id
+            entered.set()
+            if not release.wait(timeout=5):
+                raise AssertionError("test did not release the controlled media worker")
+
+    service = BlockingBuildService()
+    monkeypatch.setattr(host, "book_service_for", lambda _project: service)
+    args = {
+        "operation_id": "shutdown-build",
+        "expected_head_revision": None,
+        "input": {
+            "kind": "chapter", "chapter_id": "ch1", "snapshot_id": "snapshot-1",
+            "expected_manifest_revision": 1, "request_plan_sha256": "0" * 64,
+            "takes": [{"chunk_id": "c1", "take_id": "take-1", "request_sha256": "1" * 64}],
+        },
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "1"},
+    }
+    response = await host._dispatch(project, "audiobook_build", args)
+    assert response["status"] == "success", (response, service.calls)
+    assert await asyncio.to_thread(entered.wait, 3)
+    key = (project.name, job_id)
+    worker_task = host._book_build_tasks[key]
+
+    shutdown = asyncio.create_task(host.shutdown())
+    try:
+        await asyncio.sleep(0.05)
+        assert not shutdown.done()
+        assert host._book_build_tasks.get(key) is worker_task
+        assert job_id in service._active_build_jobs
+        assert service.accepted_head_revision == 7
+    finally:
+        release.set()
+    await asyncio.wait_for(shutdown, timeout=5)
+    await asyncio.sleep(0)
+    assert key not in host._book_build_tasks
+    assert job_id not in service._active_build_jobs
+    assert service.accepted_head_revision == 7
 
 
 async def test_index_status_reports_unavailable_with_the_reason(mismatched_host):

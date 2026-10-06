@@ -267,7 +267,14 @@ class LocalEngineHost(
         # accepts calls, even if PostgreSQL is unavailable below.
         for project in self.registry.projects:
             if project.enabled:
-                self.book_service_for(project).recover_interrupted_import_jobs()
+                book_service = self.book_service_for(project)
+                book_service.recover_interrupted_import_jobs()
+                # A prepared bookmark edit has its own exact publication
+                # journal. Recover it under the same project write lock used
+                # by live chapter mutations before any caller can observe or
+                # race the protected source.
+                async with self.core.write_lock(project.name):
+                    book_service.recover_bookmark_publications()
         try:
             await self.store.connect()
         except SchemaVersionMismatch as exc:
@@ -1053,7 +1060,22 @@ class LocalEngineHost(
                         job_id = data["job_id"]
                         key = (project.name, job_id)
                         service._active_build_jobs.add(job_id)
-                        task = asyncio.create_task(asyncio.to_thread(service.run_build_job, job_id))
+
+                        async def run_build_owned() -> None:
+                            # Cancelling asyncio.to_thread's wrapper does not
+                            # stop its native media worker. Keep this task (and
+                            # its registry/active-job ownership) alive until
+                            # that worker exits during shutdown.
+                            worker = asyncio.create_task(asyncio.to_thread(
+                                service.run_build_job, job_id,
+                            ))
+                            try:
+                                await asyncio.shield(worker)
+                            except asyncio.CancelledError:
+                                await asyncio.shield(worker)
+                                raise
+
+                        task = asyncio.create_task(run_build_owned())
                         self._book_build_tasks[key] = task
                         def finished_build(_task, *, key=key, job_id=job_id, service=service) -> None:
                             self._book_build_tasks.pop(key, None)

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from httpx import ASGITransport, AsyncClient
 
 from cognita.auth_policy import AuthenticationPolicyStore
+from cognita.books.caller_context import CURRENT_BOOK_CALLER
 from cognita.config import CognitaConfig
 from cognita.connectors import ConnectorStore
 from cognita.gateway import create_gateway_app
@@ -39,6 +40,13 @@ def batch_env(tmp_path):
     @worker.post("/mcp")
     async def mcp(request: Request):
         message = await request.json()
+        caller = CURRENT_BOOK_CALLER.get()
+        message["_book_caller"] = None if caller is None else {
+            "principal_kind": caller.principal.kind,
+            "principal_id": caller.principal.principal_id,
+            "project_name": caller.project.name,
+            "connector_id": caller.connector_id,
+        }
         seen.append(message)
         name = (message.get("params") or {}).get("name")
         if name == "list_categories" and policy_change["enabled"] and not policy_change["done"]:
@@ -105,6 +113,9 @@ async def test_batch_dispatches_in_order_and_stops_or_continues(batch_env):
     assert [entry["status"] for entry in stopped["results"]] == ["success", "error", "skipped"]
     assert (stopped["succeeded"], stopped["failed"], stopped["skipped"]) == (1, 1, 1)
     assert [item["params"]["name"] for item in seen] == ["list_categories", "get_index_stats"]
+    assert all(item["_book_caller"]["principal_kind"] == "static_global" for item in seen)
+    assert all(item["_book_caller"]["project_name"] == "RW" for item in seen)
+    assert all(item["_book_caller"]["connector_id"] for item in seen)
 
     seen.clear()
     continued = _payload(await _post(app, connector_slug, token, calls, on_error="continue"))

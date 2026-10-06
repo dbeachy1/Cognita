@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -47,6 +48,9 @@ def env(tmp_path, full_mode_workspace_service):
         method = message.get("method")
         if method == "tools/call":
             name = message["params"]["name"]
+            if name == "context_error" or message["params"].get("arguments", {}).get("query") == "context_error":
+                return JSONResponse({"jsonrpc": "2.0", "id": message.get("id"),
+                                     "error": {"code": -32000, "message": "fixture error"}})
             payload = {"status": "success", "tool": name,
                        "arguments": message["params"].get("arguments", {})}
             return JSONResponse({"jsonrpc": "2.0", "id": message.get("id"), "result": {
@@ -70,6 +74,9 @@ def env(tmp_path, full_mode_workspace_service):
     token_a = auth.mutate_global(
         expected_revision=0, oauth_enabled=False, static_key_action="generate"
     )["generated_key"]
+    project_token_a = auth.mutate_project(
+        "A", expected_revision=1, static_key_action="generate",
+    )["generated_key"]
     store = ConnectorStore(tmp_path / "connectors.yaml")
     all_config = store.create(expected_revision=0, name="All", project_names=["A", "B"])
     all_id = all_config.connectors[0].id
@@ -89,6 +96,7 @@ def env(tmp_path, full_mode_workspace_service):
         all_id: all_config.connectors[0].slug,
         selected_id: selected_config.connectors[1].slug,
     }
+    app.state.test_project_token = project_token_a
     return app, all_id, selected_id, token_a, seen
 
 
@@ -216,6 +224,49 @@ async def test_authenticated_book_caller_context_crosses_actual_asgi_transport(e
     assert caller["connector_id"] == connector_id
     assert caller["has_admission"] and caller["has_workspace_stage"]
     # The scope is reset as soon as the awaited in-process ASGI request returns.
+    assert CURRENT_BOOK_CALLER.get() is None
+
+
+@pytest.mark.asyncio
+async def test_authenticated_book_context_is_isolated_across_batches_and_concurrent_principals(env):
+    app, connector_id, _selected_id, global_token, seen = env
+    project_token = app.state.test_project_token
+
+    jsonrpc_batch = await _post(app, connector_id, global_token, [
+        _rpc("tools/call", {"name": "search_knowledge",
+                            "arguments": {"project": "A", "query": "batch one"}}, 2),
+        _rpc("tools/call", {"name": "search_knowledge",
+                            "arguments": {"project": "A", "query": "batch two"}}, 3),
+    ])
+    assert jsonrpc_batch.status_code == 200 and len(jsonrpc_batch.json()) == 2
+    contexts = [item["_book_caller"] for item in seen[-2:]]
+    assert all(item is not None and item["principal_kind"] == "static_global" for item in contexts)
+    assert all(item["connector_id"] == connector_id and item["has_workspace_stage"] for item in contexts)
+
+    seen.clear()
+    first, second = await asyncio.gather(
+        _post(app, connector_id, global_token, _rpc(
+            "tools/call", {"name": "search_knowledge",
+                           # Project A has a project-scoped override in this
+                           # fixture. Exercise the global key on B, where no
+                           # override exists, while the project key targets A.
+                           "arguments": {"project": "B", "query": "global principal"}}, 4,
+        )),
+        _post(app, connector_id, project_token, _rpc(
+            "tools/call", {"name": "search_knowledge",
+                           "arguments": {"project": "A", "query": "project principal"}}, 5,
+        )),
+    )
+    assert first.status_code == second.status_code == 200
+    principals = [item["_book_caller"]["principal_kind"] for item in seen]
+    assert principals == ["static_global", "static_project"]
+    assert CURRENT_BOOK_CALLER.get() is None
+
+    errored = await _post(app, connector_id, global_token, _rpc(
+        "tools/call", {"name": "search_knowledge",
+                       "arguments": {"project": "B", "query": "context_error"}}, 6,
+    ))
+    assert "error" in errored.json()
     assert CURRENT_BOOK_CALLER.get() is None
 
 
