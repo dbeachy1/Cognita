@@ -136,6 +136,7 @@ class ProjectState:
             state._ensure_generation_schema()
             state._ensure_import_schema()
             state._ensure_build_schema()
+            state._ensure_chunk_lineage_schema()
             return state
         except ProjectStateError:
             raise
@@ -175,6 +176,7 @@ class ProjectState:
         state._ensure_generation_schema()
         state._ensure_import_schema()
         state._ensure_build_schema()
+        state._ensure_chunk_lineage_schema()
         marker = {
             "schema_version": SCHEMA_VERSION,
             "database": DATABASE_FILENAME,
@@ -529,6 +531,88 @@ class ProjectState:
                 )
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("build state schema is unavailable") from exc
+
+    def _ensure_chunk_lineage_schema(self) -> None:
+        """Add permanent caller chunk-ID reservations to existing project state."""
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_chunk_lineage (
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        chunk_id TEXT NOT NULL,
+                        replaces_json TEXT NOT NULL,
+                        replaced_by_json TEXT NOT NULL,
+                        retired INTEGER NOT NULL CHECK(retired IN (0,1)),
+                        PRIMARY KEY(chapter_id,scope_key,chunk_id)
+                    )"""
+                )
+                count = connection.execute("SELECT COUNT(*) AS count FROM book_chunk_lineage").fetchone()["count"]
+                if not count:
+                    snapshots = connection.execute(
+                        "SELECT chapter_id,scope_key,manifest_revision,payload_json FROM book_snapshots "
+                        "ORDER BY chapter_id,scope_key,manifest_revision"
+                    ).fetchall()
+                    latest: dict[tuple[str, str], set[str]] = {}
+                    for snapshot in snapshots:
+                        key = (snapshot["chapter_id"], snapshot["scope_key"])
+                        payload = json.loads(snapshot["payload_json"])
+                        chunks = payload.get("result", {}).get("chunks", [])
+                        ids = {item.get("chunk_id") for item in chunks if isinstance(item.get("chunk_id"), str)}
+                        latest[key] = ids
+                        for item in chunks:
+                            chunk_id = item.get("chunk_id")
+                            if not isinstance(chunk_id, str):
+                                continue
+                            connection.execute(
+                                "INSERT OR IGNORE INTO book_chunk_lineage(chapter_id,scope_key,chunk_id,replaces_json,replaced_by_json,retired) "
+                                "VALUES(?,?,?,?,?,0)",
+                                (key[0], key[1], chunk_id,
+                                 json.dumps(item.get("replaces_chunk_ids", []), separators=(",", ":")),
+                                 json.dumps(item.get("replaced_by_chunk_ids", []), separators=(",", ":"))),
+                            )
+                    for chapter_id, scope_key, _revision, payload_json in snapshots:
+                        payload = json.loads(payload_json)
+                        chunks = payload.get("result", {}).get("chunks", [])
+                        for item in chunks:
+                            for predecessor in item.get("replaces_chunk_ids", []):
+                                row = connection.execute(
+                                    "SELECT replaced_by_json FROM book_chunk_lineage "
+                                    "WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                                    (chapter_id, scope_key, predecessor),
+                                ).fetchone()
+                                if row is not None:
+                                    successors = sorted({*json.loads(row["replaced_by_json"]), item["chunk_id"]})
+                                    connection.execute(
+                                        "UPDATE book_chunk_lineage SET retired=1,replaced_by_json=? "
+                                        "WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                                        (json.dumps(successors, separators=(",", ":")),
+                                         chapter_id, scope_key, predecessor),
+                                    )
+                    for (chapter_id, scope_key), active_ids in latest.items():
+                        rows = connection.execute(
+                            "SELECT chunk_id FROM book_chunk_lineage WHERE chapter_id=? AND scope_key=?",
+                            (chapter_id, scope_key),
+                        ).fetchall()
+                        for row in rows:
+                            if row["chunk_id"] not in active_ids:
+                                connection.execute(
+                                    "UPDATE book_chunk_lineage SET retired=1 WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                                    (chapter_id, scope_key, row["chunk_id"]),
+                                )
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("chunk lineage state schema is unavailable") from exc
+
+    def chunk_lineage(self, *, chapter_id: str, scope_key: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT chunk_id,replaces_json,replaced_by_json,retired FROM book_chunk_lineage "
+                "WHERE chapter_id=? AND scope_key=? ORDER BY chunk_id",
+                (chapter_id, scope_key),
+            ).fetchall()
+        return [{"chunk_id": row["chunk_id"], "replaces_chunk_ids": json.loads(row["replaces_json"]),
+                 "replaced_by_chunk_ids": json.loads(row["replaced_by_json"]),
+                 "retired": bool(row["retired"])} for row in rows]
 
     def reserve_generation(
         self, *, record: dict, owner_key: str, project: str, tool: str,
@@ -1092,7 +1176,7 @@ class ProjectState:
 
     def commit_book_build(self, *, build_id: str, book_id: str, expected_head_revision: int | None,
                           owner_key: str, project: str, operation_id: str, args_sha256: str,
-                          result: dict) -> tuple[str, dict]:
+                          result: dict, plan_matches_prepared: bool) -> tuple[str, dict]:
         with self.transaction() as connection:
             prior = self._receipt_in(connection, owner_key=owner_key, project=project,
                                      tool="audiobook_commit_build", operation_id=operation_id,
@@ -1112,14 +1196,15 @@ class ProjectState:
             next_revision = 1 if revision is None else revision + 1
             previous = None if current is None else current["accepted_build_id"]
             connection.execute(
-                "INSERT INTO book_edition_heads(book_id,head_revision,accepted_build_id,accepted_plan_matches_prepared) VALUES(?,?,?,1) "
+                "INSERT INTO book_edition_heads(book_id,head_revision,accepted_build_id,accepted_plan_matches_prepared) VALUES(?,?,?,?) "
                 "ON CONFLICT(book_id) DO UPDATE SET head_revision=excluded.head_revision,"
                 "accepted_build_id=excluded.accepted_build_id,accepted_plan_matches_prepared=excluded.accepted_plan_matches_prepared",
-                (book_id, next_revision, build_id),
+                (book_id, next_revision, build_id, int(plan_matches_prepared)),
             )
             connection.execute("UPDATE book_edition_builds SET payload_json=? WHERE build_id=?",
                                (json.dumps({**build, "was_accepted": True}, ensure_ascii=False, separators=(",", ":")), build_id))
-            committed = {**result, "head_revision": next_revision, "previous_build_id": previous}
+            committed = {**result, "head_revision": next_revision, "previous_build_id": previous,
+                         "accepted_plan_matches_prepared": plan_matches_prepared}
             self._put_receipt_in(connection, owner_key=owner_key, project=project,
                                  tool="audiobook_commit_build", operation_id=operation_id,
                                  args_sha256=args_sha256, result=committed)
@@ -1506,12 +1591,16 @@ class ProjectState:
         payload: dict, expires_at: str,
     ) -> None:
         with self.transaction() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "INSERT INTO book_views(view_id,chapter_id,scope_json,payload_json,expires_at) "
-                "VALUES(?,?,?,?,?)",
+                "VALUES(?,?,?,?,?) ON CONFLICT(view_id) DO UPDATE SET expires_at=excluded.expires_at "
+                "WHERE book_views.chapter_id=excluded.chapter_id AND book_views.scope_json=excluded.scope_json "
+                "AND book_views.payload_json=excluded.payload_json",
                 (view_id, chapter_id, scope_json,
                  json.dumps(payload, ensure_ascii=False, separators=(",", ":")), expires_at),
             )
+            if cursor.rowcount != 1:
+                raise ProjectStateError("document view ID conflicts with existing pinned content")
 
     def load_view(self, view_id: str) -> dict | None:
         with self._connect() as connection:
@@ -1556,6 +1645,8 @@ class ProjectState:
         expected_manifest_revision: int | None, payload: dict,
         request_plan_sha256: str, receipt_owner_key: str, project: str,
         tool: str, operation_id: str, args_sha256: str, result: dict,
+        chunk_lineage: list[dict] | None = None,
+        journal_id: str | None = None,
     ) -> tuple[str, int, dict]:
         """Commit one immutable snapshot reference under the chapter namespace CAS."""
         with self.transaction() as connection:
@@ -1576,6 +1667,71 @@ class ProjectState:
             current = None if row is None else row["manifest_revision"]
             if current != expected_manifest_revision:
                 raise ProjectStateError("stale_manifest")
+            if journal_id is not None:
+                journal = connection.execute(
+                    "SELECT kind,phase,payload_json FROM publication_journal WHERE journal_id=?",
+                    (journal_id,),
+                ).fetchone()
+                journal_payload = json.loads(journal["payload_json"]) if journal else {}
+                expected_binding = {
+                    "snapshot_id": snapshot_id, "owner_key": receipt_owner_key,
+                    "project": project, "tool": tool, "operation_id": operation_id,
+                    "args_sha256": args_sha256,
+                }
+                if (journal is None or journal["kind"] != "chapter_bookmark_prepare"
+                        or journal["phase"] != "published"
+                        or any(journal_payload.get(key) != value for key, value in expected_binding.items())):
+                    raise ProjectStateError("publication journal ownership does not match snapshot commit")
+            current_lineage_rows = connection.execute(
+                "SELECT chunk_id,replaced_by_json,retired FROM book_chunk_lineage "
+                "WHERE chapter_id=? AND scope_key=?",
+                (chapter_id, scope_key),
+            ).fetchall()
+            current_lineage = {row["chunk_id"]: row for row in current_lineage_rows}
+            chunk_lineage = chunk_lineage or []
+            requested_ids = [item["chunk_id"] for item in chunk_lineage]
+            if len(requested_ids) != len(set(requested_ids)):
+                raise ProjectStateError("duplicate_or_recycled_chunk_id")
+            for item in chunk_lineage:
+                prior_lineage = current_lineage.get(item["chunk_id"])
+                if prior_lineage is not None and bool(prior_lineage["retired"]):
+                    raise ProjectStateError("duplicate_or_recycled_chunk_id")
+                if prior_lineage is None:
+                    connection.execute(
+                        "INSERT INTO book_chunk_lineage(chapter_id,scope_key,chunk_id,replaces_json,replaced_by_json,retired) "
+                        "VALUES(?,?,?,?,?,0)",
+                        (chapter_id, scope_key, item["chunk_id"],
+                         json.dumps(item["replaces_chunk_ids"], separators=(",", ":")), "[]"),
+                    )
+                elif item["replaces_chunk_ids"]:
+                    raise ProjectStateError("duplicate_or_recycled_chunk_id")
+            active_before = {row["chunk_id"] for row in current_lineage_rows if not bool(row["retired"])}
+            active_after = set(requested_ids)
+            replaced_by: dict[str, list[str]] = {}
+            for item in chunk_lineage:
+                for predecessor in item["replaces_chunk_ids"]:
+                    if item["chunk_id"] in current_lineage:
+                        raise ProjectStateError("duplicate_or_recycled_chunk_id")
+                    row = current_lineage.get(predecessor)
+                    if row is None or bool(row["retired"]) or predecessor not in active_before:
+                        raise ProjectStateError("duplicate_or_recycled_chunk_id")
+                    if predecessor in active_after:
+                        raise ProjectStateError("duplicate_or_recycled_chunk_id")
+                    replaced_by.setdefault(predecessor, []).append(item["chunk_id"])
+            for old_id in active_before - active_after:
+                successors = sorted(replaced_by.get(old_id, []))
+                connection.execute(
+                    "UPDATE book_chunk_lineage SET retired=1,replaced_by_json=? "
+                    "WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                    (json.dumps(successors, separators=(",", ":")), chapter_id, scope_key, old_id),
+                )
+            for item in chunk_lineage:
+                if item["chunk_id"] in active_before:
+                    connection.execute(
+                        "UPDATE book_chunk_lineage SET retired=0,replaced_by_json='[]' "
+                        "WHERE chapter_id=? AND scope_key=? AND chunk_id=?",
+                        (chapter_id, scope_key, item["chunk_id"]),
+                    )
             next_revision = 1 if current is None else int(current) + 1
             committed_result = dict(result)
             committed_result["manifest_revision"] = next_revision
@@ -1599,6 +1755,11 @@ class ProjectState:
                 (receipt_owner_key, project, tool, operation_id, args_sha256,
                  json.dumps(committed_result, ensure_ascii=False, separators=(",", ":"))),
             )
+            if journal_id is not None:
+                connection.execute(
+                    "UPDATE publication_journal SET phase='committed',updated_at=CURRENT_TIMESTAMP WHERE journal_id=?",
+                    (journal_id,),
+                )
             return "committed", next_revision, committed_result
 
 __all__ = [

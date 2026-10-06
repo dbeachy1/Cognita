@@ -149,6 +149,65 @@ def _inspect(service: BookService) -> dict:
     return service.inspect(request)
 
 
+def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks):
+    inspected = _inspect(service)
+    request = PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": operation_id, "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": expected_revision,
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": chunks, "publish_bookmarks_to_working_tagged_docx": False,
+    })
+    return service.prepare(request, owner_key="principal:fixture")[0]
+
+
+def test_chunk_lineage_split_merge_keeps_later_ids_and_permanently_retires_ids(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    first = _prepare_test_plan(service, "lineage-first", prose, tagged, None, [
+        {"chunk_id": "a", "start": 0, "end": 1, "request_spec": None},
+        {"chunk_id": "b", "start": 1, "end": 3, "request_spec": None},
+        {"chunk_id": "c", "start": 3, "end": 4, "request_spec": None},
+        {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
+    ])
+    split = _prepare_test_plan(service, "lineage-split", prose, tagged, first["manifest_revision"], [
+        {"chunk_id": "a", "start": 0, "end": 1, "request_spec": None},
+        {"chunk_id": "b-left", "start": 1, "end": 2, "replaces_chunk_ids": ["b"], "request_spec": None},
+        {"chunk_id": "b-right", "start": 2, "end": 3, "replaces_chunk_ids": ["b"], "request_spec": None},
+        {"chunk_id": "c", "start": 3, "end": 4, "request_spec": None},
+        {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
+    ])
+    assert split["retired_chunk_ids"] == ["b"]
+    assert [item["chunk_id"] for item in split["chunks"]][-2:] == ["c", "d"]
+    merge = _prepare_test_plan(service, "lineage-merge", prose, tagged, split["manifest_revision"], [
+        {"chunk_id": "a", "start": 0, "end": 1, "request_spec": None},
+        {"chunk_id": "b-merged", "start": 1, "end": 3,
+         "replaces_chunk_ids": ["b-left", "b-right"], "request_spec": None},
+        {"chunk_id": "c", "start": 3, "end": 4, "request_spec": None},
+        {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
+    ])
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    lineage = {item["chunk_id"]: item for item in state.chunk_lineage(
+        chapter_id="ch1", scope_key='{"kind":"test","authorization_id":"test-auth"}')}
+    assert lineage["b"]["retired"] is True
+    assert lineage["b"]["replaced_by_chunk_ids"] == ["b-left", "b-right"]
+    assert lineage["b-left"]["replaced_by_chunk_ids"] == ["b-merged"]
+    assert lineage["d"]["retired"] is False
+    with pytest.raises(BookServiceError) as recycled:
+        _prepare_test_plan(service, "lineage-recycled", prose, tagged, merge["manifest_revision"], [
+            {"chunk_id": "a", "start": 0, "end": 1, "request_spec": None},
+            {"chunk_id": "b", "start": 1, "end": 3, "request_spec": None},
+            {"chunk_id": "c", "start": 3, "end": 4, "request_spec": None},
+            {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
+        ])
+    assert recycled.value.reason == "duplicate_or_recycled_chunk_id"
+
+
 def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
     service, _, _ = _fixture(tmp_path)
     prose = _docx("repeat  repeat")

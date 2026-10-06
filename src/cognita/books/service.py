@@ -106,6 +106,14 @@ def _read_bytes(root: Path, relative: str) -> bytes:
     return content
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _cursor(view_id: str, offset: int) -> str:
     raw = json.dumps({"v": 1, "view": view_id, "offset": offset}, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -599,6 +607,152 @@ class BookService:
                 return chapter
         raise BookServiceError("chapter_not_found", "The requested chapter is not registered.")
 
+    def _production_facts(self, layout: BookLayout, chapter, *, require_authorization: bool = True):
+        """Resolve live approval, source and canonical production settings once."""
+        authorization = layout.production_authorization
+        if (require_authorization and (authorization is None or authorization.revoked
+                                       or not authorization.completed_book)):
+            raise BookServiceError("production_not_authorized", "Production requires an active completed-book authorization.")
+        try:
+            prose = _read_bytes(self.root, chapter.working_filepath)
+            tagged = _read_bytes(self.root, chapter.tagged_filepath)
+            projected = project_docx_pair(prose, tagged)
+            chapter_state = validate_chapter_state(_read_bytes(self.root, chapter.chapter_state_filepath))
+            if chapter_state.chapter_id != chapter.chapter_id or chapter_state.layout_revision != layout.layout_revision:
+                raise BookServiceError("configuration_conflict", "Chapter editorial state is bound to another layout revision.")
+            approval = chapter_state.approval_provenance
+            if (chapter_state.editorial_status != "approved" or approval is None
+                    or chapter_state.approved_source_raw_sha256 != approval.source_raw_sha256
+                    or chapter_state.approved_prose_projection_sha256 != approval.prose_projection_sha256
+                    or chapter_state.approval_projection_version != approval.projection_version
+                    or approval.prose_projection_sha256 != projected.prose_projection_sha256
+                    or approval.projection_version != projected.projection_version
+                    or not projected.source_text_matches_without_tags):
+                raise BookServiceError("chapter_not_approved", "Current source prose does not match its asserted approval.")
+            settings_bytes = _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
+            settings = validate_production_settings(settings_bytes)
+        except BookServiceError:
+            raise
+        except (OSError, ValueError, ProjectionError) as exc:
+            raise BookServiceError("configuration_conflict", "Current source or production settings cannot be verified.") from exc
+        if settings.production_target is None or settings.request_spec is None:
+            raise BookServiceError("settings_mismatch", "Production settings lack a resolved request specification or media target.")
+        return {
+            "prose": prose, "tagged": tagged, "projection": projected,
+            "chapter_state": chapter_state, "settings": settings,
+            "settings_raw_sha256": hashlib.sha256(settings_bytes).hexdigest(),
+            "settings_digest_sha256": canonical_json_sha256(settings.model_dump(mode="json", exclude_unset=True)),
+        }
+
+    @staticmethod
+    def _plan_requests_match_settings(
+        snapshot_payload: dict[str, Any], settings, *, require_registered_match: bool = True,
+    ) -> bool:
+        result = snapshot_payload.get("result", {})
+        speech = snapshot_payload.get("speech_text", "")
+        registered = settings.request_spec
+        if registered is None:
+            return False
+        for chunk in result.get("chunks", []):
+            spec = chunk.get("request_spec")
+            request_sha = chunk.get("request_sha256")
+            if not isinstance(spec, dict) or not request_sha:
+                return False
+            try:
+                start, end = int(chunk["start"]), int(chunk["end"])
+                text = speech[start:end]
+                request_spec = dto.RequestSpec.model_validate(spec, strict=True)
+                if request_fingerprint(text, request_spec) != request_sha:
+                    return False
+            except (KeyError, TypeError, ValueError):
+                return False
+            if require_registered_match:
+                if any(getattr(request_spec, name) != getattr(registered, name)
+                       for name in ("provider", "route", "model_id", "voice_id", "parameters")):
+                    return False
+                if any(request_spec.context_fields.get(key) != value
+                       for key, value in registered.context_fields.items()):
+                    return False
+        return bool(result.get("chunks"))
+
+    def _production_snapshot_eligible(
+        self, state: ProjectState, layout: BookLayout, chapter, snapshot: dict[str, Any], *,
+        allow_historical_plan: bool = False,
+    ) -> tuple[bool, str]:
+        """Shared current-prose/settings authority for build, commit and getters."""
+        if snapshot.get("chapter_id") != chapter.chapter_id or snapshot.get("scope_key") != dto.ProductionScope(kind="production").model_dump_json():
+            return False, "wrong_namespace"
+        try:
+            facts = self._production_facts(layout, chapter)
+        except BookServiceError as exc:
+            return False, exc.reason
+        payload = snapshot.get("payload", {})
+        if payload.get("result", {}).get("prose_projection_sha256") != facts["projection"].prose_projection_sha256:
+            return False, "source_changed"
+        if not self._plan_requests_match_settings(
+            payload, facts["settings"], require_registered_match=not allow_historical_plan,
+        ):
+            return False, "plan_ineligible"
+        if (not allow_historical_plan
+                and payload.get("production_settings_digest_sha256") != facts["settings_digest_sha256"]):
+            return False, "settings_changed"
+        if (payload.get("production_target") is None
+                or (not allow_historical_plan
+                    and payload.get("production_target") != _data(facts["settings"].production_target))):
+            return False, "target_changed"
+        return True, "eligible"
+
+    def _accepted_chapter_build_eligible(
+        self, state: ProjectState, layout: BookLayout, chapter, build: dict[str, Any], *,
+        allow_historical_plan: bool,
+    ) -> tuple[bool, str]:
+        if (build.get("scope") != "chapter"
+                or build.get("scope_key") != dto.ProductionScope(kind="production").model_dump_json()):
+            return False, "wrong_namespace"
+        stored = state.snapshot(build.get("snapshot_id", ""))
+        if stored is None:
+            return False, "snapshot_unavailable"
+        if build.get("request_plan_sha256") != stored.get("payload", {}).get("result", {}).get("request_plan_sha256"):
+            return False, "plan_mismatch"
+        eligible, reason = self._production_snapshot_eligible(
+            state, layout, chapter, stored, allow_historical_plan=allow_historical_plan,
+        )
+        if not eligible:
+            return False, reason
+        result = stored["payload"].get("result", {})
+        chunks = result.get("chunks", [])
+        by_id = {item.get("chunk_id"): item for item in chunks}
+        take_ids = build.get("input_take_ids", [])
+        takes = [state.take(take_id) for take_id in take_ids]
+        if (not chunks or len(takes) != len(chunks) or any(take is None for take in takes)
+                or [take.get("chunk_id") for take in takes if take is not None]
+                != [item.get("chunk_id") for item in chunks]):
+            return False, "take_unavailable"
+        scope = dto.ProductionScope(kind="production").model_dump(mode="json")
+        for take in takes:
+            chunk = by_id.get(take.get("chunk_id"))
+            if (chunk is None or take.get("chapter_id") != chapter.chapter_id
+                    or take.get("namespace") != scope
+                    or take.get("request_sha256") != chunk.get("request_sha256")
+                    or take.get("provenance") != "native_generation"
+                    or take.get("media", {}).get("encoding") not in {"signed_integer", "float"}):
+                return False, "take_ineligible"
+            try:
+                if _file_sha256(_path(self.root, take["filepath"])) != take.get("bytes_sha256"):
+                    return False, "take_changed"
+            except (BookServiceError, OSError, KeyError):
+                return False, "take_unavailable"
+        outputs = build.get("result", {}).get("outputs", [])
+        master = next((value for value in outputs if value.get("kind") == "pcm_master"), None)
+        if master is None:
+            return False, "master_unavailable"
+        try:
+            if _file_sha256(_path(self.root, master["filepath"])) != master.get("bytes_sha256"):
+                return False, "master_changed"
+        except (BookServiceError, OSError, KeyError):
+            return False, "master_unavailable"
+        return True, "eligible"
+
     def _first_original_path(self, chapter) -> str:
         return f"{chapter.originals_root}/{chapter.chapter_id}/first-original.docx"
 
@@ -854,9 +1008,11 @@ class BookService:
                 raise BookServiceError("production_not_authorized", "Production requires an active completed-book authorization.")
             approval = chapter_state.approval_provenance
             if (chapter_state.editorial_status != "approved" or approval is None
-                    or chapter_state.approved_source_raw_sha256 != projected.prose_sha256
                     or chapter_state.approved_prose_projection_sha256 != projected.prose_projection_sha256
-                    or chapter_state.approval_projection_version != projected.projection_version):
+                    or chapter_state.approval_projection_version != projected.projection_version
+                    or chapter_state.approved_source_raw_sha256 != approval.source_raw_sha256
+                    or approval.prose_projection_sha256 != chapter_state.approved_prose_projection_sha256
+                    or approval.projection_version != chapter_state.approval_projection_version):
                 raise BookServiceError("chapter_not_approved", "The current prose revision lacks matching approval provenance.")
             settings_path = layout.shared_paths.production_settings_filepath
             settings_bytes = _read_bytes(self.root, settings_path)
@@ -867,10 +1023,22 @@ class BookService:
                 settings = validate_production_settings(settings_bytes)
             except Exception as exc:
                 raise BookServiceError("configuration_conflict", "Production settings are invalid.") from exc
+            if settings.request_spec is None or settings.production_target is None:
+                raise BookServiceError("settings_mismatch", "Production settings lack a resolved request specification or media target.")
             if (request.production_target != settings.production_target
                     or request.request_limit.value != settings.request_limit.value
                     or request.request_limit.unit != settings.request_limit.unit):
                 raise BookServiceError("settings_mismatch", "The requested production settings differ from the validated book settings.")
+            for item in request.chunks:
+                spec = item.request_spec
+                if spec is None:
+                    raise BookServiceError("request_hash_mismatch", "Every production chunk needs its complete resolved request specification.")
+                registered = settings.request_spec
+                if (any(getattr(spec, name) != getattr(registered, name)
+                        for name in ("provider", "route", "model_id", "voice_id", "parameters"))
+                        or any(spec.context_fields.get(key) != value
+                               for key, value in registered.context_fields.items())):
+                    raise BookServiceError("settings_mismatch", "A production chunk request differs from the registered provider settings.")
             production_settings_sha256 = settings_sha
             prepared_production_target = _data(settings.production_target)
         else:
@@ -891,6 +1059,35 @@ class BookService:
             projected, request.chunks,
             limit=request.request_limit.value, unit=request.request_limit.unit,
         )
+        scope_key = request.scope.model_dump_json()
+        prior_namespace = state.namespace(chapter.chapter_id, scope_key) if state is not None else None
+        prior_snapshot = (state.snapshot(prior_namespace["current_snapshot_id"])
+                          if state is not None and prior_namespace and prior_namespace.get("current_snapshot_id")
+                          else None)
+        previous_chunks = (prior_snapshot or {}).get("payload", {}).get("result", {}).get("chunks", [])
+        previous_by_id = {value["chunk_id"]: value for value in previous_chunks}
+        current_lineage = ({value["chunk_id"]: value for value in state.chunk_lineage(
+            chapter_id=chapter.chapter_id, scope_key=scope_key)} if state is not None else {})
+        requested_chunks = {item.chunk_id: item for item in request.chunks}
+        if len(requested_chunks) != len(request.chunks):
+            raise BookServiceError("duplicate_or_recycled_chunk_id", "Chunk IDs must be unique in a prepared plan.")
+        lineage_rows: list[dict[str, Any]] = []
+        predecessor_to_successors: dict[str, list[str]] = {}
+        for item in request.chunks:
+            raw_predecessors = item.replaces_chunk_ids if "replaces_chunk_ids" in item.model_fields_set else []
+            if len(raw_predecessors) != len(set(raw_predecessors)) or item.chunk_id in raw_predecessors:
+                raise BookServiceError("duplicate_or_recycled_chunk_id", "Chunk lineage contains a duplicate or self reference.")
+            prior_lineage = current_lineage.get(item.chunk_id)
+            if prior_lineage is not None and prior_lineage["retired"]:
+                raise BookServiceError("duplicate_or_recycled_chunk_id", "A retired chunk ID cannot be reused.")
+            if item.chunk_id in previous_by_id and raw_predecessors:
+                raise BookServiceError("duplicate_or_recycled_chunk_id", "An unchanged logical chunk cannot also replace another chunk.")
+            for predecessor in raw_predecessors:
+                if predecessor not in previous_by_id or predecessor not in current_lineage or current_lineage[predecessor]["retired"]:
+                    raise BookServiceError("duplicate_or_recycled_chunk_id", "Lineage may reference only active chunks in this chapter namespace.")
+                predecessor_to_successors.setdefault(predecessor, []).append(item.chunk_id)
+            lineage_rows.append({"chunk_id": item.chunk_id, "replaces_chunk_ids": list(raw_predecessors)})
+        retired_chunk_ids = sorted(set(previous_by_id) - set(requested_chunks))
         # Do not create a state tree or bind a layout until the source pair,
         # authorization and plan have passed validation. Both operations are
         # create-only; a crash after DB creation remains bootstrap_pending and
@@ -957,7 +1154,7 @@ class BookService:
             if paragraph.speech_start is not None
             for start, end in paragraph.tags
         ]
-        requested_chunks = {item.chunk_id: item for item in request.chunks}
+        plan_rows: list[dict[str, Any]] = []
         for order, item in enumerate(ranges):
             text = projected.speech_text[item.start:item.end]
             spoken_text = spoken_interval(
@@ -986,10 +1183,64 @@ class BookService:
                 "take_ids": [], "accepted_take_id": None,
                 "reuse_status": "new", "reusable_take_ids": [],
             }
+            if item.chunk_id in previous_by_id:
+                chunk["replaced_by_chunk_ids"] = []
+            chunkspec = requested_chunks[item.chunk_id]
+            chunk["replaces_chunk_ids"] = list(
+                chunkspec.replaces_chunk_ids if "replaces_chunk_ids" in chunkspec.model_fields_set else []
+            )
+            matching_takes: list[dict[str, Any]] = []
+            if state is not None and chunk["request_sha256"] is not None and item.chunk_id in previous_by_id:
+                for take in state.takes(chapter_id=chapter.chapter_id):
+                    take_scope = take.get("namespace")
+                    if (take.get("chunk_id") == item.chunk_id
+                            and take.get("request_sha256") == chunk["request_sha256"]
+                            and take.get("namespace") == _data(request.scope)
+                            and (not isinstance(request.scope, dto.ProductionScope)
+                                 or (take.get("provenance") == "native_generation"
+                                     and take.get("media", {}).get("encoding") in {"signed_integer", "float"}))):
+                        matching_takes.append(take)
+            if matching_takes:
+                chunk["reuse_status"] = "reusable"
+                chunk["take_ids"] = [take["take_id"] for take in matching_takes]
+                chunk["reusable_take_ids"] = [take["take_id"] for take in matching_takes]
+            elif item.chunk_id in previous_by_id:
+                chunk["reuse_status"] = "changed" if chunk["request_sha256"] is not None else "needs_check"
+            elif chunk["request_sha256"] is None:
+                chunk["reuse_status"] = "needs_check"
             chunks.append(chunk)
-            plan_rows.append({"chunk_id": chunk["chunk_id"], "start": item.start,
-                              "end": item.end, "prompt_sha256": item.prompt_sha256})
-        plan_sha = canonical_json_sha256(plan_rows)
+            plan_rows.append({"chunk_id": chunk["chunk_id"], "prompt_sha256": chunk["prompt_sha256"],
+                              "request_sha256": chunk["request_sha256"]})
+        if state is not None:
+            accepted_head = state.chapter_head(chapter.chapter_id, scope_key)
+            accepted_build = state.build(accepted_head["accepted_build_id"]) if accepted_head else None
+            accepted_snapshot = state.snapshot(accepted_head["accepted_snapshot_id"]) if accepted_head else None
+            if accepted_build is not None and accepted_snapshot is not None:
+                accepted_chunk_ids = {
+                    value.get("chunk_id") for value in accepted_snapshot["payload"].get("result", {}).get("chunks", [])
+                }
+                accepted_takes: dict[str, str] = {}
+                for take_id in accepted_build.get("input_take_ids", []):
+                    accepted_take = state.take(take_id)
+                    if accepted_take is not None and accepted_take.get("chunk_id") in accepted_chunk_ids:
+                        accepted_takes[accepted_take["chunk_id"]] = take_id
+                for chunk in chunks:
+                    take_id = accepted_takes.get(chunk["chunk_id"])
+                    if take_id in chunk["reusable_take_ids"]:
+                        chunk["accepted_take_id"] = take_id
+        plan_sha = canonical_json_sha256({
+            "chunks": plan_rows,
+            "selection": {"speech_paragraph_ids": payload["speech_paragraph_ids"],
+                          "excluded_paragraphs": payload["excluded_paragraphs"]},
+            "request_limit": _data(request.request_limit),
+            "production_settings_sha256": (
+                canonical_json_sha256(validate_production_settings(
+                    _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
+                ).model_dump(mode="json", exclude_unset=True))
+                if isinstance(request.scope, dto.ProductionScope) else None
+            ),
+            "production_target": prepared_production_target,
+        })
         result = {
             "snapshot_id": snapshot_id,
             "manifest_revision": 1,
@@ -1002,7 +1253,7 @@ class BookService:
             "snapshot_filepath": prose_path.relative_to(self.root).as_posix(),
             "working_tagged_filepath": chapter.tagged_filepath,
             "working_tagged_updated": False,
-            "chunks": chunks, "retired_chunk_ids": [],
+            "chunks": chunks, "retired_chunk_ids": retired_chunk_ids,
             "coverage": _data(coverage), "current_outputs_stale": True,
         }
         snapshot_payload = {
@@ -1013,8 +1264,28 @@ class BookService:
             "tag_deletion_spans": tag_deletion_spans,
             "prose_projection": projected.prose_projection,
             "production_settings_sha256": production_settings_sha256,
+            "production_settings_digest_sha256": (
+                canonical_json_sha256(validate_production_settings(
+                    _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
+                ).model_dump(mode="json", exclude_unset=True))
+                if isinstance(request.scope, dto.ProductionScope) else None
+            ),
             "production_target": prepared_production_target,
         }
+        if isinstance(request.scope, dto.ProductionScope):
+            approval = chapter_state.approval_provenance
+            assert approval is not None
+            snapshot_payload["approval_equivalence"] = {
+                "approval_source_raw_sha256": approval.source_raw_sha256,
+                "observed_prose_raw_sha256": projected.prose_sha256,
+                "complete_prose_projection_sha256": projected.prose_projection_sha256,
+                "projection_version": projected.projection_version,
+                "equivalent": True,
+            }
+            snapshot_payload["production_settings_binding"] = {
+                "observed_raw_sha256": production_settings_sha256,
+                "canonical_relevant_sha256": snapshot_payload["production_settings_digest_sha256"],
+            }
         try:
             status, revision, committed = state.commit_snapshot(
                 snapshot_id=snapshot_id, chapter_id=request.chapter_id,
@@ -1024,9 +1295,12 @@ class BookService:
                 receipt_owner_key=owner_key, project=self.project_name,
                 tool="audiobook_prepare_chapter", operation_id=request.operation_id,
                 args_sha256=args_sha, result=result,
+                chunk_lineage=lineage_rows,
             )
         except ProjectStateError as exc:
-            raise BookServiceError("stale_manifest" if "stale_manifest" in str(exc) else "state_unavailable",
+            reason = "duplicate_or_recycled_chunk_id" if "duplicate_or_recycled_chunk_id" in str(exc) else (
+                "stale_manifest" if "stale_manifest" in str(exc) else "state_unavailable")
+            raise BookServiceError(reason,
                                    "Snapshot publication could not be committed.") from exc
         if status == "replay":
             return committed, True
@@ -1050,7 +1324,9 @@ class BookService:
         snap = stored["payload"] if stored else {}
         result_data = snap.get("result", {})
         chunks = [dict(item) for item in result_data.get("chunks", [])]
-        takes = state.takes(chapter_id=chapter.chapter_id, snapshot_id=snapshot_id) if snapshot_id else []
+        selected_chunk_ids = {item.get("chunk_id") for item in chunks}
+        takes = [item for item in state.takes(chapter_id=chapter.chapter_id)
+                 if item.get("namespace") == _data(scope) and item.get("chunk_id") in selected_chunk_ids]
         take_ids_by_chunk: dict[str, list[str]] = {}
         for take in takes:
             take_ids_by_chunk.setdefault(take["chunk_id"], []).append(take["take_id"])
@@ -1065,17 +1341,14 @@ class BookService:
         source_status = "not_prepared"
         if snapshot_id:
             try:
-                current_raw = hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
-                if current_raw != result_data.get("snapshot_prose_sha256"):
-                    source_status = "changed"
-                elif isinstance(scope, dto.ProductionScope):
-                    chapter_state = validate_chapter_state(_read_bytes(self.root, chapter.chapter_state_filepath))
-                    source_status = "eligible" if (
-                        chapter_state.editorial_status == "approved"
-                        and chapter_state.approved_source_raw_sha256 == current_raw
-                    ) else "unapproved"
+                if isinstance(scope, dto.ProductionScope):
+                    eligible, reason = self._production_snapshot_eligible(state, layout, chapter, stored)
+                    source_status = "eligible" if eligible else (
+                        "changed" if reason == "source_changed" else "unapproved"
+                    )
                 else:
-                    source_status = "eligible"
+                    current_raw = hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
+                    source_status = "eligible" if current_raw == result_data.get("snapshot_prose_sha256") else "changed"
             except (BookServiceError, ValueError):
                 source_status = "blocked"
         metadata: list[tuple[str, Any]] = [
@@ -1187,7 +1460,10 @@ class BookService:
             "production_settings_sha256": snap.get("production_settings_sha256"),
             "candidate_build_ids": page_candidates,
             "accepted_plan_matches_prepared": (bool(head["accepted_plan_matches_prepared"]) if head else None),
-            "current_outputs_stale": bool(head and (head["accepted_snapshot_id"] != snapshot_id or not head["accepted_plan_matches_prepared"])),
+            "current_outputs_stale": bool(head and (
+                not namespace or head["accepted_plan_sha256"] != namespace.get("current_plan_sha256")
+                or not head["accepted_plan_matches_prepared"]
+            )),
             "source_status": source_status,
             "chunks": page_chunks, "takes": page_takes, "returned_texts": returned_texts,
             "has_more": next_offset < len(metadata),
@@ -2220,6 +2496,20 @@ class BookService:
             raise BookServiceError("request_hash_mismatch", "The requested build plan does not match the frozen snapshot.")
         scope = json.loads(stored["scope_key"])
         chunks = snapshot_result.get("chunks", [])
+        if scope.get("kind") == "production":
+            eligible, reason = self._production_snapshot_eligible(state, layout, chapter, stored)
+            if (not eligible or namespace.get("current_snapshot_id") != item.snapshot_id
+                    or namespace.get("current_plan_sha256") != item.request_plan_sha256):
+                raise BookServiceError("stale_dependency", f"The production chapter plan is no longer eligible ({reason}).")
+        else:
+            auth = next((entry for entry in layout.test_authorizations
+                         if entry.authorization_id == scope.get("authorization_id")), None)
+            now = datetime.now(timezone.utc)
+            if (auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id
+                    or auth.source_raw_sha256 != hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
+                    or now < datetime.fromisoformat(auth.authorized_at.replace("Z", "+00:00"))
+                    or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00"))):
+                raise BookServiceError("test_scope_not_authorized", "The test authorization is no longer active for the current source.")
         if [value.chunk_id for value in item.takes] != [value.get("chunk_id") for value in chunks]:
             raise BookServiceError("coverage_incomplete", "Build takes must cover frozen chunks exactly once in frozen order.")
         source_take_ids: list[str] = []
@@ -2228,7 +2518,7 @@ class BookService:
         for supplied, frozen in zip(item.takes, chunks, strict=True):
             take = state.take(supplied.take_id)
             if take is None or (
-                take.get("chapter_id") != chapter.chapter_id or take.get("snapshot_id") != item.snapshot_id
+                take.get("chapter_id") != chapter.chapter_id or take.get("namespace") != scope
                 or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256
                 or frozen.get("request_sha256") != supplied.request_sha256
                 or take.get("provenance") != "native_generation"
@@ -2317,7 +2607,7 @@ class BookService:
         for supplied, frozen in zip(item.takes, snapshot["chunks"], strict=True):
             take = state.take(supplied.take_id)
             media = None if take is None else take.get("media", {})
-            if take is None or take.get("chapter_id") != item.chapter_id or take.get("snapshot_id") != item.snapshot_id or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256 or frozen.get("request_sha256") != supplied.request_sha256 or media.get("codec") != "mp3" or media.get("encoding") != "compressed":
+            if take is None or take.get("chapter_id") != item.chapter_id or take.get("namespace") != scope or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256 or frozen.get("request_sha256") != supplied.request_sha256 or media.get("codec") != "mp3" or media.get("encoding") != "compressed":
                 raise BookServiceError("stale_dependency", "A selected test take is not a matching verified MP3 chunk.")
             bitrate = media.get("bitrate_bps")
             if not isinstance(bitrate, int) or bitrate <= 0 or bitrate % 1000:
@@ -2371,6 +2661,13 @@ class BookService:
             build = state.build(dependency.chapter_build_id)
             if build is None:
                 raise BookServiceError("stale_dependency", "A current chapter build is unavailable.")
+            chapter = self._chapter(layout, dependency.chapter_id)
+            eligible, reason = self._accepted_chapter_build_eligible(
+                state, layout, chapter, build,
+                allow_historical_plan=not bool(chapter_head["accepted_plan_matches_prepared"]),
+            )
+            if not eligible:
+                raise BookServiceError("stale_dependency", f"An accepted chapter plan is no longer eligible ({reason}).")
             output = next((value for value in build["result"]["outputs"] if value["kind"] == "pcm_master"), None)
             if output is None or output["media"].get("encoding") not in {"signed_integer", "float"}:
                 raise BookServiceError("media_mismatch", "A chapter head lacks a retained native PCM master.")
@@ -2753,32 +3050,41 @@ class BookService:
         namespace = state.namespace(chapter.chapter_id, build["scope_key"])
         current_plan = namespace.get("current_plan_sha256") if namespace else None
         current_snapshot = namespace.get("current_snapshot_id") if namespace else None
-        plan_matches = current_snapshot == build["snapshot_id"] and current_plan == build["request_plan_sha256"]
+        plan_matches = current_plan == build["request_plan_sha256"]
         if request.intent == "accept_candidate" and not plan_matches:
             raise BookServiceError("stale_dependency", "The candidate no longer matches the current prepared chapter plan.")
         # A rollback selects prior acceptance only when its frozen prose still
         # equals current registered prose; it never rewrites working documents.
-        prose = _read_bytes(self.root, chapter.working_filepath)
-        tagged = _read_bytes(self.root, chapter.tagged_filepath)
-        projected = project_docx_pair(prose, tagged)
-        if projected.prose_projection_sha256 != snap_result.get("prose_projection_sha256"):
-            raise BookServiceError("stale_source", "The working prose no longer matches this build snapshot.")
         scope = json.loads(build["scope_key"])
         if scope.get("kind") == "test":
+            prose = _read_bytes(self.root, chapter.working_filepath)
+            tagged = _read_bytes(self.root, chapter.tagged_filepath)
+            projected = project_docx_pair(prose, tagged)
+            if projected.prose_projection_sha256 != snap_result.get("prose_projection_sha256"):
+                raise BookServiceError("stale_source", "The current test prose differs from this frozen build.")
+            if (request.intent == "rollback"
+                    and projected.spoken_projection_sha256 != snap_result.get("spoken_projection_sha256")):
+                raise BookServiceError("stale_source", "Test rollback requires the same currently authorized spoken projection.")
             auth = next((entry for entry in layout.test_authorizations
                          if entry.authorization_id == scope.get("authorization_id")), None)
             now = datetime.now(timezone.utc)
             if auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id or auth.source_raw_sha256 != hashlib.sha256(prose).hexdigest() or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00")):
                 raise BookServiceError("test_scope_not_authorized", "The test authorization is no longer active for this source.")
         elif scope.get("kind") == "production":
-            state_bytes = _read_bytes(self.root, chapter.chapter_state_filepath)
-            chapter_state = validate_chapter_state(state_bytes)
-            if chapter_state.editorial_status != "approved" or chapter_state.approved_prose_projection_sha256 != projected.prose_projection_sha256:
-                raise BookServiceError("chapter_not_approved", "Current production prose is no longer approved.")
-            expected_settings = stored["payload"].get("production_settings_sha256")
-            settings_bytes = _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
-            if expected_settings is None or hashlib.sha256(settings_bytes).hexdigest() != expected_settings:
-                raise BookServiceError("stale_settings", "Production settings changed after the candidate was prepared.")
+            eligible, reason = self._production_snapshot_eligible(
+                state, layout, chapter, stored,
+                allow_historical_plan=request.intent == "rollback",
+            )
+            if not eligible:
+                raise BookServiceError("stale_dependency", f"Current production source or settings are ineligible ({reason}).")
+            if request.intent == "accept_candidate":
+                eligible, reason = self._accepted_chapter_build_eligible(
+                    state, layout, chapter, build, allow_historical_plan=False,
+                )
+                if not eligible:
+                    raise BookServiceError("stale_dependency", f"The candidate dependencies are ineligible ({reason}).")
+            elif not build.get("was_accepted"):
+                raise BookServiceError("stale_dependency", "Rollback requires an archived previously accepted chapter build.")
         exports = [{key: output[key] for key in ("kind", "filepath", "bytes_sha256")} for output in result["outputs"]]
         try:
             disposition, committed = state.commit_chapter_build(
@@ -2804,10 +3110,37 @@ class BookService:
         if request.intent == "rollback" and not build.get("was_accepted"):
             raise BookServiceError("stale_dependency", "Only an earlier accepted book build can be restored.")
         production_key = dto.ProductionScope(kind="production").model_dump_json()
-        for dependency in build.get("dependencies", []):
+        dependencies = build.get("dependencies", [])
+        if [item.get("chapter_id") for item in dependencies] != layout.chapter_order:
+            raise BookServiceError("stale_dependency", "The book candidate does not match current registered chapter order.")
+        plan_matches = True
+        for dependency in dependencies:
+            chapter = self._chapter(layout, dependency["chapter_id"])
             current = state.chapter_head(dependency["chapter_id"], production_key)
-            if current is None or current["accepted_build_id"] != dependency["chapter_build_id"] or int(current["head_revision"]) != dependency["chapter_head_revision"]:
-                raise BookServiceError("stale_dependency", "A chapter head changed after this book candidate was assembled.")
+            chosen = state.build(dependency["chapter_build_id"])
+            if chosen is None:
+                raise BookServiceError("stale_dependency", "A historical chapter build is unavailable.")
+            exact_head = (current is not None
+                          and current["accepted_build_id"] == dependency["chapter_build_id"]
+                          and int(current["head_revision"]) == dependency["chapter_head_revision"]
+                          and current["accepted_snapshot_id"] == dependency["snapshot_id"]
+                          and current["accepted_plan_sha256"] == dependency["request_plan_sha256"])
+            plan_matches = plan_matches and exact_head and bool(current["accepted_plan_matches_prepared"])
+            if request.intent == "accept_candidate":
+                if not exact_head:
+                    raise BookServiceError("stale_dependency", "A chapter head changed after this book candidate was assembled.")
+                eligible, reason = self._accepted_chapter_build_eligible(
+                    state, layout, chapter, chosen,
+                    allow_historical_plan=not bool(current["accepted_plan_matches_prepared"]),
+                )
+            else:
+                if not chosen.get("was_accepted"):
+                    raise BookServiceError("stale_dependency", "Book rollback requires previously accepted chapter builds.")
+                eligible, reason = self._accepted_chapter_build_eligible(
+                    state, layout, chapter, chosen, allow_historical_plan=True,
+                )
+            if not eligible:
+                raise BookServiceError("stale_dependency", f"A book chapter dependency is no longer eligible ({reason}).")
         exports = [{key: output[key] for key in ("kind", "filepath", "bytes_sha256")}
                    for output in build["result"]["outputs"]]
         try:
@@ -2817,8 +3150,9 @@ class BookService:
                 owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
                 args_sha256=args_sha256,
                 result={"accepted_build_id": request.build_id, "head_revision": 1, "previous_build_id": None,
-                        "accepted_plan_matches_prepared": True, "exports": exports,
+                        "accepted_plan_matches_prepared": plan_matches, "exports": exports,
                         "dependent_book_ids_marked_stale": [], "rollback_available": True},
+                plan_matches_prepared=plan_matches,
             )
         except ProjectStateError as exc:
             raise BookServiceError("stale_head" if str(exc) == "stale_head" else "state_unavailable",
@@ -2838,9 +3172,32 @@ class BookService:
                 not_ready.append({"chapter_id": chapter_id, "reason": "no_accepted_production_head"})
                 continue
             accepted_chapter = state.build(head["accepted_build_id"])
-            outputs = (accepted_chapter or {}).get("result", {}).get("outputs", [])
-            if not outputs or any(item.get("media", {}).get("encoding") == "compressed" for item in outputs):
+            if accepted_chapter is None:
                 not_ready.append({"chapter_id": chapter_id, "reason": "ineligible_accepted_production_head"})
+                continue
+            registered_chapter = self._chapter(layout, chapter_id)
+            eligible, reason = self._accepted_chapter_build_eligible(
+                state, layout, registered_chapter, accepted_chapter,
+                allow_historical_plan=not bool(head["accepted_plan_matches_prepared"]),
+            )
+            outputs = accepted_chapter.get("result", {}).get("outputs", [])
+            settings_current = None
+            try:
+                settings_current = validate_production_settings(
+                    _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
+                )
+            except (BookServiceError, ValueError):
+                pass
+            pcm = next((item for item in outputs if item.get("kind") == "pcm_master"), None)
+            target = settings_current.production_target if settings_current else None
+            media = pcm.get("media", {}) if pcm else {}
+            if (not eligible or pcm is None or target is None
+                    or media.get("sample_rate_hz") != target.sample_rate_hz
+                    or media.get("channels") != target.channels
+                    or media.get("storage_bits") != target.storage_bits
+                    or media.get("encoding") != target.encoding):
+                not_ready.append({"chapter_id": chapter_id,
+                                  "reason": reason if not eligible else "ineligible_accepted_production_head"})
                 continue
             dependencies.append({"chapter_id": chapter_id, "chapter_build_id": head["accepted_build_id"],
                                  "chapter_head_revision": int(head["head_revision"]),
