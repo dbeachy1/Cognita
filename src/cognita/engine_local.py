@@ -110,13 +110,11 @@ from .parsing import (
 )
 from .readonly import MUTATING_TOOLS
 from .books import models as book_dto
+from .books.caller_context import CURRENT_BOOK_CALLER
 from .books.configuration import load_book_config
 from .books.policy import BookMutationPolicy, EffectiveIndexPolicy
 from .books.schemas import (
     ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES,
-    BOOK_MUTATING_TOOLS, PROJECT_STORAGE_MUTATING_TOOLS,
-    error_envelope as book_error_envelope,
-    success_envelope as book_success_envelope,
 )
 from .books.service import BookService, BookServiceError
 from .books.state import ProjectState, ProjectStateError
@@ -264,6 +262,12 @@ class LocalEngineHost(
         start_load = getattr(self.core.reranker, "start_background_load", None)
         if start_load is not None:
             start_load()
+        # Source import jobs may own transient signed URLs or gateway-only
+        # Workspace callbacks. Resolve every interrupted row before the engine
+        # accepts calls, even if PostgreSQL is unavailable below.
+        for project in self.registry.projects:
+            if project.enabled:
+                self.book_service_for(project).recover_interrupted_import_jobs()
         try:
             await self.store.connect()
         except SchemaVersionMismatch as exc:
@@ -829,7 +833,12 @@ class LocalEngineHost(
         mutating = tool in ALL_ADDITIVE_MUTATING_TOOLS
         correlation_id = uuid.uuid4().hex
         try:
-            request_model = request_models[tool].model_validate(args, strict=True)
+            # The combined gateway removes the caller-supplied `project` before
+            # proxying and carries the resolved project in this engine route.
+            # Rebind the private book DTO to that authenticated route; keep an
+            # explicitly present mismatch visible for the normal check below.
+            internal_args = args if "project" in args else {**args, "project": project.name}
+            request_model = request_models[tool].model_validate(internal_args, strict=True)
             if request_model.project != project.name:
                 raise BookServiceError("project_mismatch", "The request project does not match the authenticated route.")
             owner_key = (
@@ -838,6 +847,36 @@ class LocalEngineHost(
                 "principal:local-admin"
             )
             service = self.book_service_for(project)
+            caller = CURRENT_BOOK_CALLER.get()
+            if tool == "audiobook_import_audio":
+                source = request_model.source
+                trusted_remote = bool(
+                    trusted_connector_id or trusted_project_key_project or trusted_principal_id
+                )
+                if trusted_remote and caller is None:
+                    raise BookServiceError(
+                        "permission_denied", "Authenticated source context is unavailable."
+                    )
+                if caller is not None:
+                    identity = caller.principal.principal_id or caller.principal.key_id
+                    try:
+                        caller_root = Path(caller.project.documents_dir).resolve(strict=True)
+                        route_root = Path(project.documents_dir).resolve(strict=True)
+                    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                        raise BookServiceError(
+                            "project_unavailable", "The authenticated project source is unavailable."
+                        ) from exc
+                    if (caller.project.name != project.name or caller_root != route_root
+                            or caller.connector_id != trusted_connector_id
+                            or identity != trusted_principal_id
+                            or caller.principal.project_name != trusted_project_key_project):
+                        raise BookServiceError(
+                            "permission_denied", "The authenticated source caller does not match this route."
+                        )
+                if isinstance(source, book_dto.WorkspaceAudioSource) and caller is None:
+                    raise BookServiceError(
+                        "source_unavailable", "Workspace import requires an authenticated gateway caller."
+                    )
 
             async def perform() -> dict[str, Any]:
                 if tool == "audiobook_inspect_chapter":
@@ -853,34 +892,153 @@ class LocalEngineHost(
                     data, replayed = service.record_generation(request_model, owner_key=owner_key)
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 elif tool == "audiobook_import_audio":
+                    if caller is not None and (denial := caller.check_write_admission()):
+                        raise BookServiceError(denial[0], denial[1])
                     data, replayed = service.import_audio(request_model, owner_key=owner_key)
                     if not replayed:
                         job_id = data["job_id"]
                         key = (project.name, job_id)
                         service.mark_import_worker_started(job_id)
+                        source_request = request_model.source
+                        book_caller = caller
 
                         async def run_import() -> None:
-                            # The durable reservation was committed under the
-                            # admission lock. Stream/hash/PCM work happens
-                            # outside it; final guarded publication reacquires
-                            # the same project lock in the event-loop owner.
-                            loop = asyncio.get_running_loop()
-                            lock = self.core.write_lock(project.name)
-
-                            async def acquire_finalization() -> None:
-                                if not await lock.acquire_within(WRITE_LOCK_WAIT_S):
-                                    raise BookServiceError("busy", "Another project write is in progress.")
-
-                            def before_finalize() -> None:
-                                asyncio.run_coroutine_threadsafe(acquire_finalization(), loop).result()
-
-                            def after_finalize() -> None:
-                                asyncio.run_coroutine_threadsafe(lock.release(), loop).result()
-
-                            await asyncio.to_thread(
-                                service.run_import_job, job_id,
-                                before_finalize=before_finalize, after_finalize=after_finalize,
+                            from .books.sources import (
+                                SourceStageError, discard_staged_audio,
+                                stage_https_audio_source,
                             )
+
+                            claimed = None
+                            staged = None
+                            stage_root = None
+                            media_worker = None
+                            try:
+                                # Claim before the first filesystem, broker or
+                                # network source access. This task owns the one
+                                # durable job claim and its exact stage UUID.
+                                claimed = service.claim_import_job(job_id)
+                                if claimed is None:
+                                    return
+                                stage_root, max_bytes, reserve_bytes = service.source_stage_policy(job_id)
+                                if source_request.kind == "workspace":
+                                    if book_caller is None:
+                                        raise SourceStageError(
+                                            "source_unavailable", "Workspace import requires an authenticated gateway caller."
+                                        )
+                                    if denial := book_caller.check_write_admission():
+                                        raise SourceStageError(denial[0], denial[1])
+                                    staged = await book_caller.stage_workspace(
+                                        source_request, staging_root=stage_root,
+                                        max_bytes=max_bytes, reserve_bytes=reserve_bytes,
+                                    )
+                                elif source_request.kind == "https_url":
+                                    staged = await stage_https_audio_source(
+                                        source_request.url, stage_root,
+                                        allowed_hosts=service.import_https_hosts(),
+                                        max_bytes=max_bytes, reserve_bytes=reserve_bytes,
+                                        expected_sha256=(source_request.expected_sha256
+                                                         if "expected_sha256" in source_request.model_fields_set else None),
+                                    )
+                                elif source_request.kind != "project_file":
+                                    raise BookServiceError(
+                                        "validation_failed", "The audio source kind is unsupported."
+                                    )
+
+                                loop = asyncio.get_running_loop()
+                                lock = self.core.write_lock(project.name)
+
+                                async def acquire_finalization() -> None:
+                                    if not await lock.acquire_within(WRITE_LOCK_WAIT_S):
+                                        raise BookServiceError("busy", "Another project write is in progress.")
+                                    try:
+                                        if book_caller is not None:
+                                            if denial := book_caller.check_write_admission():
+                                                raise BookServiceError(denial[0], denial[1])
+                                        current = self.registry.get(project.name)
+                                        if (current is None or current.name != project.name
+                                                or Path(current.documents_dir).resolve(strict=True)
+                                                != Path(project.documents_dir).resolve(strict=True)):
+                                            raise BookServiceError(
+                                                "project_unavailable", "The authorized project source changed."
+                                            )
+                                    except BaseException:
+                                        await lock.release()
+                                        raise
+
+                                def before_finalize() -> None:
+                                    asyncio.run_coroutine_threadsafe(acquire_finalization(), loop).result()
+
+                                def after_finalize() -> None:
+                                    asyncio.run_coroutine_threadsafe(lock.release(), loop).result()
+
+                                media_worker = asyncio.create_task(asyncio.to_thread(
+                                    service.run_import_job, job_id,
+                                    before_finalize=before_finalize, after_finalize=after_finalize,
+                                    claimed_job=claimed, staged_source=staged,
+                                    source_staging_root=stage_root,
+                                ))
+                                await asyncio.shield(media_worker)
+                            except asyncio.CancelledError:
+                                # The explicit cancel tool first commits
+                                # cancel_requested, then cancels this exact
+                                # task. A shutdown interruption instead gets
+                                # the ordinary truthful failure state.
+                                if media_worker is not None:
+                                    try:
+                                        await asyncio.shield(media_worker)
+                                    except BaseException:
+                                        pass
+                                current = service.discover_state().import_job(job_id)
+                                explicit_cancel = current is not None and current["state"] == "cancel_requested"
+                                if explicit_cancel:
+                                    service.finish_staging_failure(
+                                        job_id, "cancelled", "The import was cancelled.", cancelled=True,
+                                    )
+                                else:
+                                    source_reason = "source_unavailable" if source_request.kind in {"workspace", "https_url"} else "job_failed"
+                                    service.finish_staging_failure(
+                                        job_id, source_reason,
+                                        "The import was interrupted before it completed.",
+                                    )
+                            except SourceStageError as exc:
+                                service.finish_staging_failure(
+                                    job_id, exc.reason, str(exc), cancelled=exc.reason == "cancelled",
+                                )
+                            except BookServiceError as exc:
+                                service.finish_staging_failure(
+                                    job_id, exc.reason, str(exc), cancelled=exc.reason == "cancelled",
+                                )
+                            except Exception as exc:
+                                log.warning(
+                                    "Book source import failed project=%s job=%s reason=%s",
+                                    project.name, job_id, type(exc).__name__,
+                                )
+                                service.finish_staging_failure(
+                                    job_id, "source_unavailable",
+                                    "The authorized audio source could not be staged.",
+                                )
+                            finally:
+                                if staged is not None and stage_root is not None:
+                                    try:
+                                        discard_staged_audio(staged, stage_root)
+                                    except SourceStageError as exc:
+                                        log.error(
+                                            "Book source stage cleanup failed project=%s job=%s reason=%s",
+                                            project.name, job_id, exc.reason,
+                                        )
+                                if stage_root is not None:
+                                    try:
+                                        stage_root.rmdir()
+                                    except OSError:
+                                        try:
+                                            leftovers = [item.name for item in stage_root.iterdir()]
+                                        except OSError:
+                                            leftovers = ["unreadable"]
+                                        if leftovers:
+                                            log.error(
+                                                "Book source stage cleanup left project=%s job=%s entries=%s",
+                                                project.name, job_id, ",".join(leftovers),
+                                            )
 
                         task = asyncio.create_task(run_import())
                         self._book_import_tasks[key] = task
@@ -909,6 +1067,12 @@ class LocalEngineHost(
                     data = service.get_job(request_model)
                 elif tool == "audiobook_cancel_job":
                     data, replayed = service.cancel_job(request_model, owner_key=owner_key)
+                    current_import = service.discover_state().import_job(request_model.job_id)
+                    if (data.get("state") == "cancel_requested" and current_import is not None
+                            and current_import["state"] == "cancel_requested"):
+                        task = self._book_import_tasks.get((project.name, request_model.job_id))
+                        if task is not None and not task.done():
+                            task.cancel()
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 elif tool == "audiobook_get_generations":
                     data = service.get_generations(request_model)

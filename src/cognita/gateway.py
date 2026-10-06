@@ -18,12 +18,13 @@ from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from . import __version__
+from .books.caller_context import BookCallerContext, CURRENT_BOOK_CALLER
 from .auth_policy import (
     SELF_TEST_API_KEY,
     SELF_TEST_PRINCIPAL_KIND,
@@ -308,6 +309,7 @@ def create_gateway_app(
     workspace_manager: Any = None,
     bridge_service: Any = None,
     public_url_store: PublicBaseURLStore | None = None,
+    credential_admission: Callable[[str], bool | None] | None = None,
 ) -> FastAPI:
     """engine (a LocalEngineHost) routes tool traffic in-process over ASGI to the
     retrieval core. With no engine there is nothing to route to and every project
@@ -1010,6 +1012,43 @@ def create_gateway_app(
                 )
         if config.remote_readonly or access != "write":
             return "read_only", "This connector has read-only access; nothing was written."
+        return None
+
+    def _book_caller_admission(
+        principal: AuthPrincipal, connector_id: str, project: Any,
+    ) -> tuple[str, str] | None:
+        denial = _write_admission(connector_id, project.name, principal)
+        if denial is not None:
+            return denial
+        if principal.kind in {"static_credential", "legacy_static"}:
+            credential_id = (
+                principal.key_id if principal.kind == "static_credential"
+                else principal.principal_id
+            )
+            if not isinstance(credential_id, str) or not credential_id:
+                return "project_unavailable", "The authenticated credential is no longer available."
+            try:
+                import uuid
+                credential_id = str(uuid.UUID(credential_id))
+                active = credential_admission(credential_id) if credential_admission else None
+            except Exception:
+                active = None
+            if active is not True:
+                return "project_unavailable", "The authenticated credential is no longer available."
+        snapshot = _policy_snapshot()
+        if snapshot is None:
+            return "policy_unavailable", "Connector policy is unavailable; nothing was written."
+        resolved = _resolve_project(snapshot, connector_id, project.name, principal)
+        if resolved is None:
+            return "project_unavailable", "The requested project is unavailable through this connector."
+        current_project, _access = resolved
+        try:
+            original_root = Path(project.documents_dir).resolve(strict=True)
+            current_root = Path(current_project.documents_dir).resolve(strict=True)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return "project_unavailable", "The requested project source is unavailable."
+        if current_project.name != project.name or current_root != original_root:
+            return "project_unavailable", "The requested project source has changed."
         return None
 
 
@@ -2136,14 +2175,82 @@ def create_gateway_app(
         worker_url = engine.url_for(project.name)
         log.info("project operation accepted connector_id=%s project=%s access=%s tool=%s revision=%d",
                  connector_id, project.name, access, tool, snapshot.revision)
-        return await proxy_mcp(
-            client, request, worker_url, readonly=readonly, documents_dir=project.documents_dir,
-            backup_keep=config.backup_keep_per_file, project_name=project.name,
-            connector_id=connector_id, body_override=json.dumps(forwarded).encode(),
-            write_admission=lambda: _write_admission(
-                connector_id, project.name, principal
-            ),
-        )
+        caller_token = None
+        if isinstance(principal, AuthPrincipal):
+            from .books.models import WorkspaceAudioSource
+            from .books.sources import SourceStageError
+
+            def check_write_admission() -> tuple[str, str] | None:
+                return _book_caller_admission(principal, connector_id, project)
+
+            async def stage_workspace(
+                source: WorkspaceAudioSource,
+                *, staging_root: Path,
+                max_bytes: int,
+                reserve_bytes: int,
+            ):
+                denial = check_write_admission()
+                if denial is not None:
+                    raise SourceStageError(*denial)
+                current = _policy_snapshot()
+                connector_now = _connector(current, connector_id) if current else None
+                resolved_now = (
+                    _resolve_project(current, connector_id, project.name, principal)
+                    if current is not None else None
+                )
+                if connector_now is None or resolved_now is None or bridge_service is None:
+                    raise SourceStageError(
+                        "source_unavailable", "The authorized Workspace source is unavailable."
+                    )
+                current_project, _current_access = resolved_now
+                try:
+                    if (current_project.name != project.name or
+                            Path(current_project.documents_dir).resolve(strict=True) !=
+                            Path(project.documents_dir).resolve(strict=True)):
+                        raise SourceStageError(
+                            "project_unavailable", "The requested project source has changed."
+                        )
+                except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                    raise SourceStageError(
+                        "project_unavailable", "The requested project source is unavailable."
+                    ) from exc
+                try:
+                    return await bridge_service.stage_book_workspace_source(
+                        principal, connector_now, current_project, source.path,
+                        source.expected_sha256, staging_root=staging_root,
+                        connector_id=connector_id, max_bytes=max_bytes,
+                        reserve_bytes=reserve_bytes,
+                    )
+                except Exception as exc:
+                    from .bridge import BridgeError
+                    if not isinstance(exc, BridgeError):
+                        raise SourceStageError(
+                            "source_unavailable", "Workspace source staging is unavailable."
+                        ) from exc
+                    raise SourceStageError(
+                        exc.reason, str(exc)
+                    ) from exc
+
+            caller = BookCallerContext(
+                principal=principal,
+                project=project,
+                connector_id=connector_id,
+                check_write_admission=check_write_admission,
+                stage_workspace=stage_workspace,
+            )
+            caller_token = CURRENT_BOOK_CALLER.set(caller)
+        try:
+            return await proxy_mcp(
+                client, request, worker_url, readonly=readonly, documents_dir=project.documents_dir,
+                backup_keep=config.backup_keep_per_file, project_name=project.name,
+                connector_id=connector_id, body_override=json.dumps(forwarded).encode(),
+                write_admission=lambda: _write_admission(
+                    connector_id, project.name, principal
+                ),
+            )
+        finally:
+            if caller_token is not None:
+                CURRENT_BOOK_CALLER.reset(caller_token)
 
     async def _dispatch_batch(request: Request, snapshot: ConnectorConfig,
                               connector_id: str, messages: list,

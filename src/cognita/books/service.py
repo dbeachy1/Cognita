@@ -11,6 +11,7 @@ import base64
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -30,6 +31,7 @@ from .configuration import (
 )
 from .fingerprint import canonical_json_sha256, request_fingerprint
 from .media import MediaValidationError, inspect_media_file
+from .sources import StagedAudioSource
 from .assembly import (AssemblyError, Mp3Source, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave,
                        production_mp3_argv, build_test_mp3_stream_copy_argv, verify_mp3_packet_copy,
                        write_ffconcat_manifest)
@@ -45,6 +47,7 @@ from ..parsing import compute_doc_id
 
 VIEW_TTL = timedelta(hours=24)
 MAX_DOCX_BYTES = 256 * 1024 * 1024
+log = logging.getLogger("cognita.books")
 
 
 class BookServiceError(ValueError):
@@ -1575,9 +1578,9 @@ class BookService:
         return False
 
     def _import_paths(self, layout, chapter, job_id: str, take_id: str, *, media_kind: str) -> tuple[Path, Path, str]:
-        staging_root = self.root / STATE_ROOT / "audiobook-staging"
-        staging_root.mkdir(mode=0o700, exist_ok=True)
-        staging = staging_root / f"{job_id}.part"
+        staging_root = self.root / STATE_ROOT / "audiobook-staging" / job_id
+        staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        staging = staging_root / "source.part"
         extensions = {"raw_pcm": "pcm", "headered_pcm": "wav", "mp3": "mp3"}
         try:
             extension = extensions[media_kind]
@@ -1588,10 +1591,45 @@ class BookService:
         return staging, target, relative
 
     def _available_import_space(self, layout, chapter, source_size: int) -> None:
-        audio_root = _path(self.root, layout.shared_paths.book_audio_root, allow_missing=True)
-        usage = shutil.disk_usage(audio_root if audio_root.exists() else self.root)
-        retained_bytes = 0
-        if audio_root.exists():
+        canonical = self._registered_audio_roots(layout)
+        retained_bytes = self._retained_audio_bytes(canonical)
+        locations = [self.root / STATE_ROOT / "audiobook-staging", *canonical]
+        free_by_device: dict[int, int] = {}
+        for location in locations:
+            probe = location
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            try:
+                usage = shutil.disk_usage(probe)
+            except OSError as exc:
+                raise BookServiceError("insufficient_storage", "Audiobook staging storage is unavailable.") from exc
+            free_by_device[os.stat(probe).st_dev] = usage.free
+        # Native media and a possible exact WAVE wrapper are retained. During
+        # publication the source stage, job copy, canonical PCM and wrapper can
+        # coexist briefly; count that peak plus the configured free-space reserve.
+        required = source_size * 4 + layout.storage.reserve_bytes
+        if min(free_by_device.values(), default=0) < required:
+            raise BookServiceError("insufficient_storage", "The configured media reserve leaves insufficient free space.")
+        if retained_bytes + source_size * 2 > layout.storage.quota_bytes:
+            raise BookServiceError("insufficient_storage", "The import would exceed the configured audiobook media quota.")
+
+    def _registered_audio_roots(self, layout) -> list[Path]:
+        roots = [
+            _path(self.root, layout.shared_paths.book_audio_root, allow_missing=True),
+            *(_path(self.root, item.audio_root, allow_missing=True) for item in layout.chapters),
+        ]
+        canonical: list[Path] = []
+        for root in sorted({item.resolve(strict=False) for item in roots}, key=lambda item: len(item.parts)):
+            if not any(root == parent or parent in root.parents for parent in canonical):
+                canonical.append(root)
+        return canonical
+
+    @staticmethod
+    def _retained_audio_bytes(roots: list[Path]) -> int:
+        retained = 0
+        for audio_root in roots:
+            if not audio_root.exists():
+                continue
             for current, directories, filenames in os.walk(audio_root, followlinks=False):
                 current_path = Path(current)
                 directories[:] = [name for name in directories if not (current_path / name).is_symlink()]
@@ -1600,29 +1638,154 @@ class BookService:
                     try:
                         facts = candidate.lstat()
                     except OSError as exc:
-                        raise BookServiceError("source_unavailable", "Existing audiobook storage could not be inventoried.") from exc
-                    if stat.S_ISLNK(facts.st_mode):
-                        continue
-                    if stat.S_ISREG(facts.st_mode):
-                        retained_bytes += facts.st_size
-        # The final take retains native PCM and an exact WAVE wrapper. Before
-        # publication, staging additionally holds a raw copy and canonical PCM.
-        required = source_size * 3 + layout.storage.reserve_bytes
-        if usage.free < required:
-            raise BookServiceError("insufficient_storage", "The configured media reserve leaves insufficient free space.")
-        if retained_bytes + source_size * 2 > layout.storage.quota_bytes:
-            raise BookServiceError("insufficient_storage", "The import would exceed the configured audiobook media quota.")
+                        raise BookServiceError(
+                            "source_unavailable", "Existing audiobook storage could not be inventoried."
+                        ) from exc
+                    if stat.S_ISREG(facts.st_mode) and not stat.S_ISLNK(facts.st_mode):
+                        retained += facts.st_size
+        return retained
+
+    def source_stage_policy(self, job_id: str) -> tuple[Path, int, int]:
+        """Create one exclusive UUID-owned stage and calculate its current budget."""
+        job = self._state_required().import_job(job_id)
+        if job is None or job["state"] != "running":
+            raise BookServiceError("job_failed", "The import no longer owns a running job.")
+        _, _, layout = self._enabled_layout()
+        chapter = self._chapter(layout, job["payload"]["chapter_id"])
+        self._available_import_space(layout, chapter, 1)
+        canonical = self._registered_audio_roots(layout)
+        # Use the quota left after retained media and allow up to the proven
+        # four-copy peak to coexist while the source is staged.
+        retained = self._retained_audio_bytes(canonical)
+        locations = [self.root / STATE_ROOT / "audiobook-staging", *canonical]
+        free_by_device: dict[int, int] = {}
+        for location in locations:
+            probe = location
+            while not probe.exists() and probe != probe.parent:
+                probe = probe.parent
+            usage = shutil.disk_usage(probe)
+            free_by_device[os.stat(probe).st_dev] = usage.free
+        free_bytes = max(0, min(free_by_device.values(), default=0) - layout.storage.reserve_bytes)
+        quota_bytes = max(0, (layout.storage.quota_bytes - retained) // 2)
+        from ..bridge import MAX_TRANSFER_BYTES
+        max_bytes = min(MAX_TRANSFER_BYTES, free_bytes // 4, quota_bytes)
+        if max_bytes < 1:
+            raise BookServiceError("insufficient_storage", "No safe source-import storage budget is available.")
+        base = (self.root / STATE_ROOT / "audiobook-staging").resolve(strict=False)
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root = base / job_id
+        try:
+            root.mkdir(mode=0o700)
+        except FileExistsError as exc:
+            raise BookServiceError("job_failed", "The import staging directory is already owned.") from exc
+        resolved = root.resolve(strict=True)
+        if resolved.parent != base.resolve(strict=True) or root.is_symlink():
+            raise BookServiceError("permission_denied", "The import staging directory is unsafe.")
+        return resolved, max_bytes, layout.storage.reserve_bytes
+
+    def import_https_hosts(self) -> tuple[str, ...]:
+        _, _, layout = self._enabled_layout()
+        return tuple(layout.storage.import_https_hosts)
+
+    def claim_import_job(self, job_id: str) -> dict[str, Any] | None:
+        state = self._state_required()
+        claimed = state.claim_import_job(job_id)
+        if claimed is not None:
+            self._active_import_jobs.add(job_id)
+            return claimed
+        current = state.import_job(job_id)
+        if current is not None and current["state"] == "cancel_requested":
+            state.finish_import_failure(
+                job_id=job_id, reason="cancelled",
+                message="The import was cancelled before it started.", cancelled=True,
+            )
+        return None
+
+    def finish_staging_failure(
+        self, job_id: str, reason: str, message: str, *, cancelled: bool = False,
+    ) -> None:
+        self._state_required().finish_import_failure(
+            job_id=job_id, reason=reason, message=message, cancelled=cancelled,
+        )
+        self._active_import_jobs.discard(job_id)
+
+    def _cleanup_import_stage(self, job_id: str) -> list[str]:
+        try:
+            canonical_id = str(uuid.UUID(job_id))
+        except (ValueError, TypeError, AttributeError):
+            return [job_id]
+        base = (self.root / STATE_ROOT / "audiobook-staging").resolve(strict=False)
+        exact_root = base / canonical_id
+        leftovers: list[str] = []
+        try:
+            if exact_root.resolve(strict=False).parent != base or exact_root.is_symlink():
+                return [str(exact_root)]
+            if exact_root.exists():
+                allowed = {"source.part", "source.wav.part", "source.canonical.pcm"}
+                for item in exact_root.iterdir():
+                    if (item.name.startswith(".cognita-book-source-") or item.name in allowed):
+                        try:
+                            facts = item.lstat()
+                            if stat.S_ISREG(facts.st_mode) and not stat.S_ISLNK(facts.st_mode):
+                                item.unlink()
+                            else:
+                                leftovers.append(str(item))
+                        except OSError:
+                            leftovers.append(str(item))
+                    else:
+                        leftovers.append(str(item))
+                if not leftovers:
+                    exact_root.rmdir()
+            # Existing project-file jobs used this exact job-derived filename.
+            legacy_part = base / f"{canonical_id}.part"
+            try:
+                facts = legacy_part.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if stat.S_ISREG(facts.st_mode) and not stat.S_ISLNK(facts.st_mode):
+                    legacy_part.unlink()
+                else:
+                    leftovers.append(str(legacy_part))
+        except OSError:
+            leftovers.append(str(exact_root))
+        return leftovers
+
+    def recover_interrupted_import_jobs(self) -> None:
+        """Terminally recover every queued/running/cancel-requested durable row."""
+        state = self.discover_state()
+        if state is None:
+            return
+        self.state = state
+        for job in state.unfinished_import_jobs():
+            job_id = job["job_id"]
+            interrupted_cancel = job["state"] == "cancel_requested"
+            source_kind = job["payload"].get("source_kind")
+            reason = (
+                "cancelled" if interrupted_cancel else
+                "source_unavailable" if source_kind in {"workspace", "https_url"} else
+                "job_failed"
+            )
+            leftovers = self._cleanup_import_stage(job_id)
+            self._discard_unregistered_import_artifacts(job)
+            state.finish_import_failure(
+                job_id=job_id, reason=reason,
+                message="The interrupted import was not resumed after restart.",
+                cancelled=interrupted_cancel,
+            )
+            if leftovers:
+                log.error(
+                    "Interrupted audiobook import staging cleanup left project=%s job=%s paths=%s",
+                    self.project_name, job_id, ",".join(leftovers),
+                )
 
     def import_audio(self, request: dto.ImportAudioRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         """Reserve a durable guarded import; worker execution is separate.
 
-        URL and workspace bytes are intentionally not accepted until their
-        respective guarded transfer boundaries are installed.  In particular,
-        no signed URL is placed into a durable job payload.
+        Transient URL material contributes to the private receipt digest only;
+        the durable job retains source kind and guarded relative identity/hash.
         """
         state, _, layout = self._enabled_layout()
-        if not isinstance(request.source, dto.ProjectAudioSource):
-            raise BookServiceError("source_unavailable", "This installation currently supports authorized project-file audio imports only.")
         raw_format = request.source_format if "source_format" in request.model_fields_set else None
         args_sha256 = canonical_json_sha256({
             "project": request.project, "generation_record_id": request.generation_record_id,
@@ -1643,33 +1806,71 @@ class BookService:
             raise BookServiceError("file_not_found", "The generation record does not exist.")
         if generation["generation_revision"] != request.expected_generation_revision:
             raise BookServiceError("stale_generation", "The generation evidence has changed.")
-        chapter = self._chapter(layout, generation["chapter_id"])
-        # Validate the source guard before creating any durable reservation.
-        source_path = _path(self.root, request.source.filepath)
-        facts = source_path.stat(follow_symlinks=False)
-        if not stat.S_ISREG(facts.st_mode):
-            raise BookServiceError("source_unavailable", "The project-file source is not a regular file.")
+        # Local path/hash preflight is deliberately after receipt lookup. A
+        # replay never touches the source filesystem. Network and Workspace
+        # authority are checked only by their post-reservation staging seams.
+        if isinstance(request.source, dto.ProjectAudioSource):
+            try:
+                source_path = _path(self.root, request.source.filepath)
+                facts = source_path.stat(follow_symlinks=False)
+                if not stat.S_ISREG(facts.st_mode) or stat.S_ISLNK(facts.st_mode):
+                    raise BookServiceError("source_unavailable", "The project-file source is not a regular file.")
+                digest = hashlib.sha256()
+                with source_path.open("rb") as stream:
+                    while block := stream.read(1024 * 1024):
+                        digest.update(block)
+                after = source_path.stat(follow_symlinks=False)
+            except BookServiceError:
+                raise
+            except OSError as exc:
+                raise BookServiceError("source_unavailable", "The project-file source is unavailable.") from exc
+            if (facts.st_dev, facts.st_ino, facts.st_size, facts.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+            ):
+                raise BookServiceError("stale_file", "The project-file source changed during validation.")
+            if digest.hexdigest() != request.source.expected_sha256:
+                raise BookServiceError("media_mismatch", "The project-file source does not match its expected hash.")
+        elif isinstance(request.source, dto.HttpsAudioSource):
+            from urllib.parse import urlsplit
+            parsed = urlsplit(request.source.url)
+            host = (parsed.hostname or "").casefold().rstrip(".")
+            if (parsed.scheme != "https" or not host or parsed.username or parsed.password
+                    or host not in set(layout.storage.import_https_hosts)):
+                raise BookServiceError("source_forbidden", "The source URL is not on the authorized HTTPS import allowlist.")
         stored_scope = generation["scope"]
         scope = json.loads(stored_scope) if isinstance(stored_scope, str) else stored_scope
         if scope.get("kind") == "production" and request.provenance != "native_generation":
             raise BookServiceError("native_pcm_required", "Production imports require verified native-generation PCM.")
         if request.provenance in {"test_mp3", "derived_audio"} and scope.get("kind") != "test":
             raise BookServiceError("permission_denied", "Lossy and derived media are available only in an authorized test namespace.")
+        stored_snapshot = state.snapshot(generation["snapshot_id"])
+        if stored_snapshot is None:
+            raise BookServiceError("snapshot_not_found", "The generation snapshot is unavailable.")
+        self._authorize_snapshot_read(stored_snapshot, generation["chapter_id"])
         if raw_format is not None and not self._metadata_contains(
             generation["provider_response_metadata"], raw_format.provider_format_evidence
         ):
             raise BookServiceError("media_mismatch", "RawFormat provider evidence is not present in saved generation evidence.")
         job_id, take_id = str(uuid.uuid4()), str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
-        # This deliberately contains no source URL and pins only the guarded
-        # project path and immutable generation/request facts needed by worker.
+        # The exact HTTPS URL is represented by the operation digest only and
+        # never enters this durable job payload.
+        source_fields: dict[str, Any] = {"source_kind": request.source.kind}
+        expected_source_hash = (
+            request.source.expected_sha256
+            if "expected_sha256" in request.source.model_fields_set else None
+        )
+        if isinstance(request.source, dto.ProjectAudioSource):
+            source_fields["source_filepath"] = request.source.filepath
+        elif isinstance(request.source, dto.WorkspaceAudioSource):
+            source_fields["workspace_path"] = request.source.path
         pinned = {
             "generation_record_id": generation["generation_record_id"],
             "generation_revision": generation["generation_revision"],
             "chapter_id": generation["chapter_id"], "snapshot_id": generation["snapshot_id"],
             "chunk_id": generation["chunk_id"], "request_sha256": generation["request_sha256"],
-            "source_kind": "project_file", "source_filepath": request.source.filepath,
-            "expected_sha256": request.source.expected_sha256, "provenance": request.provenance,
+            **source_fields, "expected_sha256": expected_source_hash,
+            "provenance": request.provenance,
             "source_format": _data(raw_format) if raw_format is not None else None,
             "take_id": take_id, "created_at": now,
         }
@@ -1721,6 +1922,45 @@ class BookService:
         if digest.hexdigest() != expected_sha256:
             raise BookServiceError("media_mismatch", "The imported bytes do not match expected_sha256.")
 
+    def _adopt_staged_audio(
+        self, staged: StagedAudioSource, staging: Path, staging_root: Path,
+        *, expected_sha256: str | None, job_id: str,
+    ) -> None:
+        root = staging_root.resolve(strict=True)
+        expected_root = (self.root / STATE_ROOT / "audiobook-staging" / job_id).resolve(strict=True)
+        source = staged.staged_path
+        try:
+            before = source.lstat()
+        except OSError as exc:
+            raise BookServiceError("source_unavailable", "The verified audio stage is unavailable.") from exc
+        if (root != expected_root or source.parent.resolve(strict=True) != root
+                or source.is_symlink() or not stat.S_ISREG(before.st_mode)
+                or before.st_size < 1 or before.st_size != staged.size_bytes):
+            raise BookServiceError("source_unavailable", "The verified audio stage is unsafe.")
+        if expected_sha256 is not None and staged.bytes_sha256 != expected_sha256:
+            raise BookServiceError("media_mismatch", "The imported bytes do not match expected_sha256.")
+        digest, copied = hashlib.sha256(), 0
+        try:
+            with source.open("rb") as incoming, staging.open("xb") as outgoing:
+                while block := incoming.read(1024 * 1024):
+                    current = self._state_required().import_job(job_id)
+                    if current is None or current["state"] == "cancel_requested":
+                        raise BookServiceError("cancelled", "The import was cancelled.")
+                    digest.update(block)
+                    copied += len(block)
+                    outgoing.write(block)
+                outgoing.flush()
+                os.fsync(outgoing.fileno())
+        except FileExistsError as exc:
+            raise BookServiceError("job_failed", "The owned import staging file already exists.") from exc
+        after = source.stat(follow_symlinks=False)
+        actual = digest.hexdigest()
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or copied != staged.size_bytes or actual != staged.bytes_sha256
+                or (expected_sha256 is not None and actual != expected_sha256)):
+            raise BookServiceError("media_mismatch", "The verified audio stage changed before adoption.")
+
     def _discard_unregistered_import_artifacts(self, job: dict[str, Any]) -> None:
         """Remove only this job's UUID-owned publication paths after a failed import.
 
@@ -1744,10 +1984,13 @@ class BookService:
     def run_import_job(
         self, job_id: str, *, before_finalize: Callable[[], None] | None = None,
         after_finalize: Callable[[], None] | None = None,
+        claimed_job: dict[str, Any] | None = None,
+        staged_source: StagedAudioSource | None = None,
+        source_staging_root: Path | None = None,
     ) -> None:
         """Run one owned import outside SQLite transactions and finalize atomically."""
         state = self._state_required()
-        claimed = state.claim_import_job(job_id)
+        claimed = claimed_job if claimed_job is not None else state.claim_import_job(job_id)
         if claimed is None:
             pending = state.import_job(job_id)
             if pending is not None and pending["state"] == "cancel_requested":
@@ -1766,16 +2009,32 @@ class BookService:
             if generation is None:
                 raise BookServiceError("job_failed", "The pinned generation record is unavailable.")
             chapter = self._chapter(layout, pinned["chapter_id"])
-            source = _path(self.root, pinned["source_filepath"])
-            source_size = source.stat(follow_symlinks=False).st_size
+            if staged_source is None:
+                if pinned.get("source_kind") != "project_file":
+                    raise BookServiceError("source_unavailable", "The transient audio source was not staged.")
+                source = _path(self.root, pinned["source_filepath"])
+                source_size = source.stat(follow_symlinks=False).st_size
+            else:
+                if (source_staging_root is None
+                        or staged_source.source_kind != ("https" if pinned["source_kind"] == "https_url" else pinned["source_kind"])):
+                    raise BookServiceError("source_unavailable", "The verified audio stage does not match its reservation.")
+                source_size = staged_source.size_bytes
             self._available_import_space(layout, chapter, source_size)
             # The staging object is deliberately independent of its eventual
             # extension; detected facts below choose the immutable take name.
             staging, _, _ = self._import_paths(
                 layout, chapter, job_id, pinned["take_id"], media_kind="raw_pcm"
             )
-            self._stream_project_audio(pinned["source_filepath"], staging, pinned["expected_sha256"],
-                                       source_size=source_size, job_id=job_id)
+            if staged_source is None:
+                self._stream_project_audio(
+                    pinned["source_filepath"], staging, pinned["expected_sha256"],
+                    source_size=source_size, job_id=job_id,
+                )
+            else:
+                self._adopt_staged_audio(
+                    staged_source, staging, source_staging_root,
+                    expected_sha256=pinned.get("expected_sha256"), job_id=job_id,
+                )
             raw_format = pinned.get("source_format")
             probe = None
             with staging.open("rb") as staged_input:
@@ -1837,6 +2096,18 @@ class BookService:
             if before_finalize is not None:
                 before_finalize()
                 finalization_started = True
+            current_generation = state.generation(pinned["generation_record_id"])
+            if (current_generation is None
+                    or current_generation.get("import_job_id") != job_id
+                    or current_generation.get("snapshot_id") != pinned["snapshot_id"]
+                    or current_generation.get("chunk_id") != pinned["chunk_id"]
+                    or current_generation.get("request_sha256") != pinned["request_sha256"]
+                    or current_generation.get("scope") != generation.get("scope")):
+                raise ProjectStateError("import_reservation_lost")
+            authorized_snapshot = state.snapshot(pinned["snapshot_id"])
+            if authorized_snapshot is None:
+                raise BookServiceError("snapshot_not_found", "The generation snapshot is unavailable.")
+            self._authorize_snapshot_read(authorized_snapshot, pinned["chapter_id"])
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             if target.exists() or (wrapper_target is not None and wrapper_target.exists()):
                 raise BookServiceError("job_failed", "The immutable take path already exists.")
@@ -2630,9 +2901,17 @@ class BookService:
                                            message="The unfinished build was interrupted by restart.")
                 job = state.build_job(request.job_id)
             else:
+                interrupted_cancel = job["state"] == "cancel_requested"
+                source_kind = job["payload"].get("source_kind")
+                self._cleanup_import_stage(request.job_id)
                 self._discard_unregistered_import_artifacts(job)
-                state.finish_import_failure(job_id=request.job_id, reason="job_failed",
-                                            message="The unfinished import was interrupted by restart.")
+                state.finish_import_failure(
+                    job_id=request.job_id,
+                    reason=("cancelled" if interrupted_cancel else
+                            "source_unavailable" if source_kind in {"workspace", "https_url"} else "job_failed"),
+                    message="The unfinished import was interrupted by restart.",
+                    cancelled=interrupted_cancel,
+                )
                 job = state.import_job(request.job_id)
             assert job is not None
         phase = "completed" if job["state"] == "succeeded" else (

@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from cognita import __version__
 from cognita.auth_policy import AuthenticationPolicyStore
+from cognita.books.caller_context import CURRENT_BOOK_CALLER
 from cognita.config import CognitaConfig
 from cognita.connectors import PUBLIC_CONTRACT_VERSION, ConnectorStore
 from cognita.gateway import create_gateway_app
@@ -32,6 +33,16 @@ def env(tmp_path, full_mode_workspace_service):
     async def mcp(request: Request):
         message = await request.json()
         message["_connector_header"] = request.headers.get("x-cognita-connector-id")
+        caller = CURRENT_BOOK_CALLER.get()
+        message["_book_caller"] = None if caller is None else {
+            "principal_kind": caller.principal.kind,
+            "principal_key_id": caller.principal.key_id,
+            "project_name": caller.project.name,
+            "documents_dir": str(caller.project.documents_dir.resolve()),
+            "connector_id": caller.connector_id,
+            "has_admission": callable(caller.check_write_admission),
+            "has_workspace_stage": callable(caller.stage_workspace),
+        }
         seen.append(message)
         method = message.get("method")
         if method == "tools/call":
@@ -183,6 +194,29 @@ async def test_exact_project_is_stripped_and_batch_routes_each_element(env):
     assert [item["id"] for item in batch.json()] == [2, 3]
     assert [item["params"]["arguments"]["query"] for item in seen[-2:]] == ["y", "z"]
     assert all("project" not in item["params"]["arguments"] for item in seen[-2:])
+
+
+@pytest.mark.asyncio
+async def test_authenticated_book_caller_context_crosses_actual_asgi_transport(env, tmp_path):
+    app, connector_id, _selected_id, token, seen = env
+    response = await _post(app, connector_id, token, _rpc(
+        "tools/call", {
+            "name": "search_knowledge",
+            "arguments": {"project": "A", "query": "context propagation"},
+        },
+    ))
+
+    assert response.status_code == 200
+    caller = seen[-1]["_book_caller"]
+    assert caller is not None
+    assert caller["principal_kind"] == "static_global"
+    assert caller["principal_key_id"]
+    assert caller["project_name"] == "A"
+    assert caller["documents_dir"] == str(tmp_path.resolve())
+    assert caller["connector_id"] == connector_id
+    assert caller["has_admission"] and caller["has_workspace_stage"]
+    # The scope is reset as soon as the awaited in-process ASGI request returns.
+    assert CURRENT_BOOK_CALLER.get() is None
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 
 import pytest
@@ -17,12 +18,14 @@ def test_stage_file_hash_checks_and_owned_cleanup(tmp_path):
     source.write_bytes(b"\x00\x01\x02\x03")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     root = tmp_path / "staging"
-    staged = stage_verified_file(source, root, expected_sha256=digest, source_kind="workspace")
+    staged = stage_verified_file(source, root, expected_sha256=digest, source_kind="workspace",
+                                 max_bytes=4 * 1024**3)
     assert staged.staged_path.read_bytes() == source.read_bytes()
     discard_staged_audio(staged, root)
     assert not staged.staged_path.exists()
     with pytest.raises(SourceStageError) as invalid:
-        stage_verified_file(source, root, expected_sha256="0" * 64, source_kind="workspace")
+        stage_verified_file(source, root, expected_sha256="0" * 64, source_kind="workspace",
+                            max_bytes=4 * 1024**3)
     assert invalid.value.reason == "source_changed"
 
 
@@ -65,9 +68,15 @@ class _Stream:
     async def __aexit__(self, *args): return False
 
 class _Pool:
-    def __init__(self, responses): self.responses = iter(responses); self.closed = False
-    def stream(self, *args, **kwargs): return _Stream(next(self.responses))
-    async def aclose(self): self.closed = True
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.closed = False
+
+    def stream(self, *args, **kwargs):
+        return _Stream(next(self.responses))
+
+    async def aclose(self):
+        self.closed = True
 
 
 class _RecordingBackend:
@@ -134,7 +143,8 @@ async def test_https_stage_revalidates_redirect_and_total_deadline(tmp_path):
     def resolver(host, port, *_args):
         address = "127.0.0.1" if host == "private.example" else "8.8.8.8"
         return [(None, None, None, None, (address, port))]
-    redirect = lambda _backend, _timeout: _Pool([_Response(302, [(b"location", b"https://private.example/x")])])
+    def redirect(_backend, _timeout):
+        return _Pool([_Response(302, [(b"location", b"https://private.example/x")])])
     with pytest.raises(SourceStageError) as denied:
         await stage_https_audio_source("https://media.example/a", tmp_path, allowed_hosts=["media.example", "private.example"], max_bytes=100, resolver=resolver, _pool_factory=redirect)
     assert denied.value.reason == "source_forbidden"
@@ -142,3 +152,38 @@ async def test_https_stage_revalidates_redirect_and_total_deadline(tmp_path):
     with pytest.raises(SourceStageError) as timed:
         await stage_https_audio_source("https://media.example/a", tmp_path, allowed_hosts=["media.example"], max_bytes=100, resolver=resolver, _pool_factory=lambda *_: _Pool([_Response(200, [], [b"x"])]), timeout_seconds=1, _clock=lambda: next(clock))
     assert timed.value.reason == "source_timeout"
+
+
+@pytest.mark.asyncio
+async def test_https_cancellation_closes_pool_and_removes_owned_stage(tmp_path):
+    from cognita.books.sources import stage_https_audio_source
+
+    started = asyncio.Event()
+
+    class WaitingResponse(_Response):
+        async def aiter_stream(self):
+            started.set()
+            await asyncio.Event().wait()
+            yield b"unreachable"
+
+    pools = []
+
+    def factory(_backend, _timeout):
+        pool = _Pool([WaitingResponse(200)])
+        pools.append(pool)
+        return pool
+
+    def resolver(_host, port, *_args):
+        return [(None, None, None, None, ("8.8.8.8", port))]
+
+    task = asyncio.create_task(stage_https_audio_source(
+        "https://media.example/result?signature=transient", tmp_path,
+        allowed_hosts=["media.example"], max_bytes=1024,
+        resolver=resolver, _pool_factory=factory,
+    ))
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert pools and pools[0].closed
+    assert not list(tmp_path.glob(".cognita-book-source-*"))

@@ -1122,6 +1122,8 @@ class BridgeService:
         *,
         staging_root: str | Path,
         connector_id: str | None = None,
+        max_bytes: int,
+        reserve_bytes: int = 0,
     ) -> StagedAudioSource:
         """Pin one authorized Workspace file into book-owned local staging.
 
@@ -1153,13 +1155,25 @@ class BridgeService:
                 entry = files[0]
                 if entry.sha256 != expected:
                     raise BridgeError("stale_file", "Workspace source no longer matches its expected hash.")
+                if (not isinstance(max_bytes, int) or isinstance(max_bytes, bool)
+                        or max_bytes < 1 or entry.size > min(max_bytes, MAX_TRANSFER_BYTES)):
+                    raise BridgeError("quota_exceeded", "Workspace source exceeds the configured byte quota.")
+                if not isinstance(reserve_bytes, int) or isinstance(reserve_bytes, bool) or reserve_bytes < 0:
+                    raise BridgeError("invalid_arguments", "Workspace source storage reserve is invalid.")
+                Path(staging_root).mkdir(mode=0o700, parents=True, exist_ok=True)
+                for root in (self.staging_root, Path(staging_root)):
+                    try:
+                        if shutil.disk_usage(root).free - reserve_bytes < entry.size:
+                            raise BridgeError("insufficient_storage", "Insufficient free storage for the Workspace source.")
+                    except OSError as exc:
+                        raise BridgeError("source_unavailable", "Workspace source storage is unavailable.") from exc
                 manifest = TransferManifest(transfer_id, workspace_id, "from_workspace", files)
                 stage = self._stage(transfer_id, manifest)
                 try:
                     await self._broker("admit", manifest.wire())
                     await self._stage_from_workspace(stage)
                     await self._broker("commit", transfer_id)
-                except Exception:
+                except BaseException:
                     try:
                         await self._broker("abort", transfer_id)
                     except Exception:
@@ -1169,6 +1183,7 @@ class BridgeService:
                 return stage_verified_file(
                     stage.root / entry.path, Path(staging_root),
                     expected_sha256=expected, source_kind="workspace",
+                    max_bytes=min(max_bytes, MAX_TRANSFER_BYTES), reserve_bytes=reserve_bytes,
                 )
             except SourceStageError as exc:
                 raise BridgeError(exc.reason, str(exc)) from exc

@@ -757,6 +757,7 @@ async def _serve_async(
             config, registry, engine=engine, oauth_client=oauth_client,
             connector_store=connector_store,
             credential_store=credential_store,
+            credential_admission=credential_store.admission_status,
             workspace_connector_store=workspace_connector_store,
             workspace_service=workspace_manager,
             bridge_service=bridge_service,

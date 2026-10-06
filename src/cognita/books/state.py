@@ -717,6 +717,16 @@ class ProjectState:
             "created_at": row["created_at"], "updated_at": row["updated_at"],
         }
 
+    def unfinished_import_jobs(self) -> list[dict]:
+        """List all persisted imports without a terminal state for startup recovery."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT job_id FROM book_import_jobs "
+                "WHERE state IN ('queued','running','cancel_requested') "
+                "ORDER BY created_at,job_id"
+            ).fetchall()
+        return [job for row in rows if (job := self.import_job(row["job_id"])) is not None]
+
     def claim_import_job(self, job_id: str) -> dict | None:
         with self.transaction() as connection:
             row = connection.execute("SELECT * FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()

@@ -706,6 +706,7 @@ async def test_book_workspace_source_is_authorized_pinned_and_staged(setup, tmp_
     staged = await service.stage_book_workspace_source(
         principal, _connector(), project, "exports/take.wav", digest,
         staging_root=tmp_path / "book-stage",
+        max_bytes=4 * 1024**3,
     )
     assert staged.source_kind == "workspace"
     assert staged.bytes_sha256 == digest and staged.size_bytes == len(content)
@@ -719,5 +720,45 @@ async def test_book_workspace_source_is_authorized_pinned_and_staged(setup, tmp_
         await service.stage_book_workspace_source(
             principal, _connector(), project, "exports/take.wav", "0" * 64,
             staging_root=tmp_path / "book-stage",
+            max_bytes=4 * 1024**3,
         )
     assert stale.value.reason == "stale_file"
+
+
+@pytest.mark.asyncio
+async def test_book_workspace_source_cancellation_aborts_and_releases_lease(setup, tmp_path):
+    _docs, project, workspace, _transfers, service, principal = setup
+    content = b"synthetic audio source"
+    digest = hashlib.sha256(content).hexdigest()
+    workspace.rows["exports/take.wav"] = {
+        "type": "file", "size": len(content), "sha256": digest,
+    }
+
+    class BlockingSourceTransfer(_BlockingTransfers):
+        def __init__(self):
+            super().__init__()
+            self.aborted = 0
+
+        def abort_transfer(self, transfer_id):
+            self.aborted += 1
+            return super().abort_transfer(transfer_id)
+
+    transfers = BlockingSourceTransfer()
+    service.transfer_client = transfers
+    leases, released = [], []
+    workspace.metadata = SimpleNamespace(
+        lease=lambda workspace_id, kind, seconds, owner: leases.append(owner) or f"lease:{owner}",
+        release_lease=lambda lease_id: released.append(lease_id),
+    )
+    task = asyncio.create_task(service.stage_book_workspace_source(
+        principal, _connector(), project, "exports/take.wav", digest,
+        staging_root=tmp_path / "book-stage", max_bytes=4 * 1024**3,
+    ))
+    await asyncio.wait_for(transfers.started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert transfers.aborted == 1
+    assert len(leases) == 1 and released == [f"lease:{leases[0]}"]
+    assert not list((tmp_path / "staging").iterdir())
+    assert not list((tmp_path / "book-stage").glob(".cognita-book-source-*"))

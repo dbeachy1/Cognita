@@ -6,11 +6,15 @@ import asyncio
 
 import httpx
 import pytest
+from argon2 import PasswordHasher
 
 from cognita.config import CognitaConfig
 from cognita.engine_local import LocalEngineHost
+from cognita.auth_policy import AuthenticationPolicyStore, CredentialPolicyStore
 from cognita.proxy import _forward_headers
 from cognita.gateway import _suppress_wire_bodies
+from cognita.connectors import ConnectorStore, PUBLIC_CONTRACT_VERSION
+from cognita.gateway import create_gateway_app
 from cognita.registry import Project, Registry
 from cognita.store import SchemaVersionMismatch, Store
 from cognita.tokens import generate_token, hash_token
@@ -105,7 +109,9 @@ async def test_prepare_receipt_is_principal_scoped_and_permission_precedes_repla
             "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
         },
     }))
-    view = json.loads(inspected.json()["result"]["content"][0]["text"])["data"]
+    inspect_payload = json.loads(inspected.json()["result"]["content"][0]["text"])
+    assert inspect_payload["status"] == "success", inspect_payload
+    view = inspect_payload["data"]
     documents = host.registry.get("fixture").documents_dir
     prose = (documents / "Chapters/1/chapter.docx").read_bytes()
     tagged = (documents / "Chapters/1/chapter_audio-tags.docx").read_bytes()
@@ -186,7 +192,10 @@ async def test_read_only_connector_rejects_book_mutations_before_arguments_or_jo
 
 @pytest.mark.asyncio
 async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_job(host):
-    headers = {"x-cognita-principal-id": "alice"}
+    # Direct LocalEngineHost calls without trusted forwarded identity are the
+    # explicit local maintenance path; the authenticated combined-gateway
+    # context has a separate end-to-end source-import proof.
+    headers = None
     inspected = await _post(host, _rpc("tools/call", {
         "name": "audiobook_inspect_chapter", "arguments": {
             "project": "fixture", "chapter_id": "ch1",
@@ -306,6 +315,228 @@ async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_j
     }), headers=headers)
     commit_payload = json.loads(committed_response.json()["result"]["content"][0]["text"])
     assert commit_payload["status"] == "success" and commit_payload["data"]["head_revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_authenticated_workspace_import_reserves_before_controlled_transfer(host, tmp_path):
+    from pathlib import Path
+    from cognita.books.sources import StagedAudioSource
+
+    docs = host.registry.get("fixture").documents_dir
+    connector_store = ConnectorStore(tmp_path / "connectors.yaml")
+    connector_config = connector_store.create(
+        expected_revision=0, name="Book import", project_names=["fixture"],
+    )
+    connector = connector_config.connectors[0]
+    host.connector_store = connector_store
+    auth = AuthenticationPolicyStore(tmp_path / "authentication.yaml", project_names=["fixture"])
+    auth.mutate_global(
+        expected_revision=0, oauth_enabled=False, static_key_action="generate",
+    )
+    credential_store = CredentialPolicyStore(
+        tmp_path / "credentials-v2.json", master_key_dir=tmp_path / "master-keys",
+        admin_password_hash=PasswordHasher().hash("fixture-admin"),
+    )
+    _credential, token = credential_store.add_credential(
+        "combined", connector.id, "Book importer", surface_slug=connector.slug,
+        password="fixture-admin",
+    )
+
+    samples = b"\x00\x00\x01\x00\xff\xff\x02\x00"
+    digest = hashlib.sha256(samples).hexdigest()
+
+    class ControlledBroker:
+        def __init__(self):
+            self.calls = []
+
+        async def stage_book_workspace_source(
+            self, principal, current_connector, project, path, expected_sha256,
+            *, staging_root, connector_id, max_bytes, reserve_bytes,
+        ):
+            state = ProjectState.discover(project.documents_dir)
+            active = state.unfinished_import_jobs()
+            assert len(active) == 1 and active[0]["state"] == "running"
+            assert "url" not in active[0]["payload"]
+            assert principal.kind == "static_credential"
+            assert principal.principal_id == principal.key_id
+            assert current_connector.id == connector.id
+            assert project.name == "fixture" and connector_id == connector.id
+            assert path == "exports/gateway.pcm" and expected_sha256 == digest
+            assert len(samples) <= max_bytes and reserve_bytes >= 0
+            self.calls.append((principal, current_connector, project, path))
+            stage = Path(staging_root) / ".cognita-book-source-controlled"
+            stage.write_bytes(samples)
+            return StagedAudioSource(stage, digest, len(samples), "workspace")
+
+    broker = ControlledBroker()
+    config = CognitaConfig(
+        registry_path=host.registry.path, connectors_path=connector_store.path,
+        data_root=tmp_path, public_base_url="https://cognita.example",
+    )
+    app = create_gateway_app(
+        config, host.registry, engine=host, connector_store=connector_store,
+        authentication_store=auth, workspace_service=object(), bridge_service=broker,
+        credential_store=credential_store,
+        credential_admission=credential_store.admission_status,
+    )
+    app.state.test_connector_slugs = {connector.id: connector.slug}
+
+    async def gateway_post(message):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://t") as client:
+            return await client.post(
+                f"/mcp/connectors/{connector.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
+                json=message, headers={"Authorization": f"Bearer {token}"},
+            )
+
+    inspected = await gateway_post(_rpc("tools/call", {
+        "name": "audiobook_inspect_chapter", "arguments": {
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        },
+    }))
+    inspect_payload = json.loads(inspected.json()["result"]["content"][0]["text"])
+    assert inspect_payload["status"] == "success", inspect_payload
+    view = inspect_payload["data"]
+    prose = (docs / "Chapters/1/chapter.docx").read_bytes()
+    tagged = (docs / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared_response = await gateway_post(_rpc("tools/call", {
+        "name": "audiobook_prepare_chapter", "arguments": {
+            "project": "fixture", "operation_id": "authenticated-workspace-prepare",
+            "chapter_id": "ch1", "document_view_id": view["document_view_id"],
+            "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+            "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+            "expected_manifest_revision": None,
+            "scope": {"kind": "test", "authorization_id": "test-auth"},
+            "speech_selection_confirmed": True,
+            "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+            "expected_settings_sha256": None, "production_target": None,
+            "chunks": [{"chunk_id": "authenticated-workspace", "start": 0,
+                        "end": 5, "request_spec": spec}],
+            "publish_bookmarks_to_working_tagged_docx": False,
+        },
+    }))
+    prepared = json.loads(prepared_response.json()["result"]["content"][0]["text"])["data"]
+    reserved = await gateway_post(_rpc("tools/call", {
+        "name": "audiobook_record_generation", "arguments": {
+            "project": "fixture", "operation_id": "authenticated-workspace-reserve",
+            "change": {"kind": "reserve", "chapter_id": "ch1",
+                "snapshot_id": prepared["snapshot_id"],
+                "chunk_id": "authenticated-workspace",
+                "expected_manifest_revision": prepared["manifest_revision"],
+                "request": {"prompt_sha256": prepared["chunks"][0]["prompt_sha256"], "spec": spec}},
+        },
+    }))
+    generation = json.loads(reserved.json()["result"]["content"][0]["text"])["data"]["generation"]
+    for operation_id, current_state, revision, extra in (
+        ("authenticated-workspace-submit", "submitted", 1, {
+            "provider_ids": {"generation_ids": ["synthetic-broker"]},
+            "provider_response_metadata": {"format": "synthetic raw s16le"},
+        }),
+        ("authenticated-workspace-complete", "completed", 2, {}),
+    ):
+        response = await gateway_post(_rpc("tools/call", {
+            "name": "audiobook_record_generation", "arguments": {
+                "project": "fixture", "operation_id": operation_id,
+                "change": {"kind": "update",
+                    "generation_record_id": generation["generation_record_id"],
+                    "expected_generation_revision": revision,
+                    "state": current_state, **extra},
+            },
+        }))
+        generation = json.loads(response.json()["result"]["content"][0]["text"])["data"]["generation"]
+
+    imported = await gateway_post(_rpc("tools/call", {
+        "name": "audiobook_import_audio", "arguments": {
+            "project": "fixture", "operation_id": "authenticated-workspace-import",
+            "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": generation["generation_revision"],
+            "source": {"kind": "workspace", "path": "exports/gateway.pcm",
+                       "expected_sha256": digest},
+            "provenance": "native_generation",
+            "source_format": {"container": "raw_pcm", "encoding": "signed_integer",
+                "sample_rate_hz": 8000, "channels": 1, "storage_bits": 16,
+                "valid_bits": 16, "endianness": "little", "interleaving": "interleaved",
+                "provider_format_evidence": "synthetic raw s16le"},
+        },
+    }))
+    assert imported.status_code == 200
+    job = json.loads(imported.json()["result"]["content"][0]["text"])["data"]
+    final = None
+    for _ in range(50):
+        read = await gateway_post(_rpc("tools/call", {
+            "name": "audiobook_get_job", "arguments": {
+                "project": "fixture", "job_id": job["job_id"],
+            },
+        }))
+        final = json.loads(read.json()["result"]["content"][0]["text"])["data"]
+        if final["state"] in {"succeeded", "failed", "cancelled"}:
+            break
+        await asyncio.sleep(0.01)
+    assert final is not None and final["state"] == "succeeded", final
+    assert final["result"]["take"]["bytes_sha256"] == digest
+    assert len(broker.calls) == 1
+
+    listed = await gateway_post(_rpc("tools/call", {
+        "name": "list_project_files", "arguments": {
+            "project": "fixture", "path": "Audiobook/Chapters/1/takes",
+        },
+    }))
+    listing = json.loads(listed.json()["result"]["content"][0]["text"])
+    assert listing["status"] == "success"
+    assert any(item["type"] == "directory" for item in listing["data"]["entries"])
+    read = await gateway_post(_rpc("tools/call", {
+        "name": "read_project_file", "arguments": {
+            "project": "fixture", "path": final["result"]["take"]["filepath"],
+            "max_bytes": 1024,
+        },
+    }))
+    read_payload = json.loads(read.json()["result"]["content"][0]["text"])
+    assert read_payload["status"] == "success"
+
+    mismatched_project = await gateway_post(_rpc("tools/call", {
+        "name": "audiobook_inspect_chapter", "arguments": {
+            "project": "other", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        },
+    }))
+    mismatch_payload = json.loads(mismatched_project.json()["result"]["content"][0]["text"])
+    assert mismatch_payload["status"] == "error"
+    assert mismatch_payload["reason"] == "project_unavailable"
+
+    readonly = connector_store.create(
+        expected_revision=connector_config.revision, name="Read only",
+        project_mode="selected", default_access=None,
+        project_access={"fixture": "read"}, project_names=["fixture"],
+    ).connectors[-1]
+    app.state.test_connector_slugs[readonly.id] = readonly.slug
+    _readonly_credential, readonly_token = credential_store.add_credential(
+        "combined", readonly.id, "Read-only client", surface_slug=readonly.slug,
+        password="fixture-admin",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://t",
+    ) as client:
+        denied = await client.post(
+            f"/mcp/connectors/{readonly.slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
+            json=_rpc("tools/call", {
+                "name": "audiobook_import_audio", "arguments": {
+                    "project": "fixture", "operation_id": "readonly-attempt",
+                    "generation_record_id": generation["generation_record_id"],
+                    "expected_generation_revision": generation["generation_revision"],
+                    "source": {"kind": "workspace", "path": "exports/gateway.pcm",
+                               "expected_sha256": digest},
+                    "provenance": "native_generation",
+                },
+            }), headers={"Authorization": f"Bearer {readonly_token}"},
+        )
+    denied_payload = json.loads(denied.json()["result"]["content"][0]["text"])
+    assert denied_payload["status"] == "error" and denied_payload["reason"] == "read_only"
+    assert len(broker.calls) == 1
 
 
 def test_book_wire_capture_suppresses_source_and_malformed_bodies():

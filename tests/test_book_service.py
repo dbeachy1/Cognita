@@ -27,6 +27,7 @@ from cognita.books.models import (
     RecordGenerationRequest,
 )
 from cognita.books.service import BookService, BookServiceError
+from cognita.books.config import BookLayout
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
 from cognita.books.jobs import PacketFact
@@ -563,6 +564,109 @@ def _completed_raw_generation(service: BookService, prose: bytes, tagged: bytes)
     return completed["generation"], raw_format
 
 
+def test_https_import_receipt_binds_url_without_persisting_it(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["storage"]["import_https_hosts"] = ["media.example.test"]
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    url = "https://media.example.test/audio.wav?signature=synthetic-secret"
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "https-transient-receipt",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "https_url", "url": url},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+
+    first, replayed = service.import_audio(request, owner_key="principal:fixture")
+    assert not replayed
+    durable = service.discover_state().import_job(first["job_id"])
+    assert durable["payload"]["source_kind"] == "https_url"
+    assert "url" not in durable["payload"]
+    assert "signature=synthetic-secret" not in json.dumps(durable["payload"])
+
+    second, replayed = service.import_audio(request, owner_key="principal:fixture")
+    assert replayed and second == first
+    changed = request.model_copy(update={
+        "source": request.source.model_copy(update={
+            "url": "https://media.example.test/audio.wav?signature=refreshed",
+        }),
+    })
+    with pytest.raises(BookServiceError) as conflict:
+        service.import_audio(changed, owner_key="principal:fixture")
+    assert conflict.value.reason == "operation_id_conflict"
+
+
+def test_startup_recovery_finishes_unpolled_transient_and_cancel_requested_jobs(tmp_path):
+    service, prose, tagged = _fixture(tmp_path / "transient")
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "unpolled-workspace-import",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "workspace", "path": "exports/audio.pcm",
+                   "expected_sha256": "a" * 64},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+    queued, _ = service.import_audio(request, owner_key="principal:fixture")
+    assert service.discover_state().unfinished_import_jobs()[0]["job_id"] == queued["job_id"]
+    service.recover_interrupted_import_jobs()
+    failed = service.discover_state().import_job(queued["job_id"])
+    assert failed["state"] == "failed"
+    assert failed["error"]["reason"] == "source_unavailable"
+    failed_generation = service.discover_state().generation(generation["generation_record_id"])
+    assert failed_generation["import_job_id"] is None
+
+    cancel_service, cancel_prose, cancel_tagged = _fixture(tmp_path / "cancelled")
+    cancel_generation, cancel_format = _completed_raw_generation(
+        cancel_service, cancel_prose, cancel_tagged,
+    )
+    cancel_job, _ = cancel_service.import_audio(ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "unpolled-cancelled-import",
+        "generation_record_id": cancel_generation["generation_record_id"],
+        "expected_generation_revision": cancel_generation["generation_revision"],
+        "source": {"kind": "workspace", "path": "exports/audio.pcm",
+                   "expected_sha256": "b" * 64},
+        "provenance": "native_generation", "source_format": cancel_format,
+    }), owner_key="principal:fixture")
+    cancel_service.cancel_job(CancelJobRequest(
+        project="fixture", operation_id="request-unpolled-cancel",
+        job_id=cancel_job["job_id"], expected_job_revision=1,
+    ), owner_key="principal:fixture")
+    cancel_service.recover_interrupted_import_jobs()
+    terminal = cancel_service.discover_state().import_job(cancel_job["job_id"])
+    assert terminal["state"] == "cancelled"
+    assert terminal["error"]["reason"] == "cancelled"
+
+
+def test_import_quota_counts_registered_audio_union_once(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    (tmp_path / "Audiobook").mkdir()
+    (tmp_path / "Audiobook/existing.bin").write_bytes(b"1234567890")
+    layout["storage"]["quota_bytes"] = 1_000_010
+    layout["storage"]["reserve_bytes"] = 0
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    current_layout = BookLayout.model_validate(layout, strict=True)
+    assert len(service._registered_audio_roots(current_layout)) == 1
+    service._available_import_space(current_layout, service._chapter(current_layout, "ch1"), 500_000)
+
+    layout["storage"]["quota_bytes"] = 1_000_015
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    sibling_audio = tmp_path / "Audiobook/Other"
+    sibling_audio.mkdir(parents=True)
+    (sibling_audio / "retained.mp3").write_bytes(b"abcdefghij")
+    current_layout = BookLayout.model_validate(layout, strict=True)
+    assert len(service._registered_audio_roots(current_layout)) == 1
+    assert service._retained_audio_bytes(service._registered_audio_roots(current_layout)) == 20
+    with pytest.raises(BookServiceError) as quota:
+        service._available_import_space(current_layout, service._chapter(current_layout, "ch1"), 500_000)
+    assert quota.value.reason == "insufficient_storage"
+
+
 def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
     generation, raw_format = _completed_raw_generation(service, prose, tagged)
@@ -625,6 +729,52 @@ def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
         "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
     }))["generations"][0]
     assert generation_after["media_registered"] is True and generation_after["take_id"] == take["take_id"]
+
+
+def test_import_preserves_provider_evidence_added_after_reservation(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    samples = b"\x00\x00\x01\x00\xfe\xff\x02\x00"
+    source = tmp_path / "Audiobook/Chapters/1/provider-output.pcm"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(samples)
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "import-late-evidence",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.pcm",
+                   "expected_sha256": hashlib.sha256(samples).hexdigest()},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+    queued, replayed = service.import_audio(request, owner_key="principal:fixture")
+    assert not replayed
+
+    def add_late_evidence():
+        latest = service.discover_state().generation(generation["generation_record_id"])
+        updated, replayed = service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": "late-provider-evidence", "change": {
+                "kind": "update", "generation_record_id": generation["generation_record_id"],
+                "expected_generation_revision": latest["generation_revision"], "state": "completed",
+                "provider_ids": {"generation_ids": ["late-generation-id"]},
+                "provider_response_metadata": {"observed_after_import_reservation": True},
+            },
+        }), owner_key="principal:fixture")
+        assert not replayed
+        return updated["generation"]
+
+    late_evidence = {}
+
+    def before_finalize():
+        late_evidence["generation"] = add_late_evidence()
+
+    service.run_import_job(queued["job_id"], before_finalize=before_finalize)
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "succeeded", completed
+    current = service.discover_state().generation(generation["generation_record_id"])
+    assert current["generation_revision"] == late_evidence["generation"]["generation_revision"] + 1
+    assert current["provider_ids"]["generation_ids"] == ["synthetic-complete", "late-generation-id"]
+    assert current["provider_response_metadata"] == {"observed_after_import_reservation": True}
+    assert current["media_registered"] is True and current["take_id"] == completed["result"]["take"]["take_id"]
 
 
 def test_headered_pcm_import_detects_format_rejects_conflicting_rawformat_and_retains_bytes(tmp_path):

@@ -39,18 +39,29 @@ def stage_verified_file(
     *,
     expected_sha256: str,
     source_kind: Literal["workspace", "https"],
+    max_bytes: int,
+    reserve_bytes: int = 0,
 ) -> StagedAudioSource:
     """Copy one regular source file into an owned, hash-verified stage."""
     if len(expected_sha256) != 64 or any(c not in "0123456789abcdef" for c in expected_sha256):
         raise SourceStageError("validation_failed", "An exact lowercase SHA-256 is required.")
     root = Path(staging_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    if (not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes < 1
+            or not isinstance(reserve_bytes, int) or isinstance(reserve_bytes, bool)
+            or reserve_bytes < 0):
+        raise SourceStageError("validation_failed", "The source byte budget is invalid.")
     try:
         source_info = source.stat(follow_symlinks=False)
     except OSError as exc:
         raise SourceStageError("source_unavailable", "The staged source is unavailable.") from exc
     if not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode):
         raise SourceStageError("source_unavailable", "The staged source is not a regular file.")
+    import shutil
+    if source_info.st_size > max_bytes:
+        raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
+    if shutil.disk_usage(root).free - reserve_bytes < source_info.st_size:
+        raise SourceStageError("storage_unavailable", "Insufficient free storage for the audio source.")
     target = root / f"{_STAGE_PREFIX}{uuid.uuid4().hex}"
     digest = hashlib.sha256()
     total = 0
@@ -258,10 +269,16 @@ async def stage_https_audio_source(
                 await pool.aclose()
         raise SourceStageError("source_unavailable", "The audio source redirected too many times.")
     except SourceStageError:
-        try: stage_path.unlink(missing_ok=True)
-        except OSError: pass
+        try:
+            stage_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         raise
-    except Exception as exc:
-        try: stage_path.unlink(missing_ok=True)
-        except OSError: pass
+    except BaseException as exc:
+        try:
+            stage_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise SourceStageError("source_unavailable", "The authorized audio source could not be retrieved.") from exc
