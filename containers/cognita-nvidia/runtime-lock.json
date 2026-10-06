@@ -44,7 +44,7 @@
     },
     "dockerfile_source": {
       "path": "containers/cognita-nvidia/Dockerfile",
-      "sha256": "1f03c9c6be0fcabe23f52ccdb26db437b7bd624294e5cf758a1916d73a81d10c"
+      "sha256": "7c20406258769de8c0c3f5ccf53b4ea2d68a43310e0aa5c192b1d60101e3ce54"
     }
   }
 }

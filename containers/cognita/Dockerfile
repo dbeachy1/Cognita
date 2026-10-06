@@ -50,6 +50,13 @@ RUN mkdir -p /opt/cognita-models \
 # Resolve neither runtime at build time. Application source and release ARGs
 # stay below these layers: even an ARG's implicit RUN environment can invalidate
 # the cache before its first visible interpolation.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y ffmpeg libmp3lame0 \
+    && dpkg-query -W -f='${Package}=${Version}\n' ffmpeg libmp3lame0 \
+    && ffmpeg -version | head -n 1 \
+    && ffprobe -version | head -n 1 \
+    && ffmpeg -hide_banner -encoders | grep -q libmp3lame \
+    && rm -rf /var/lib/apt/lists/*
 COPY containers/build-requirements.lock containers/service-requirements.lock /opt/cognita-locks/
 RUN python -m pip install --no-cache-dir --index-url https://pypi.org/simple --require-hashes --no-deps -r /opt/cognita-locks/build-requirements.lock \
     && python -m pip install --no-cache-dir --index-url https://pypi.org/simple --require-hashes --no-deps -r /opt/cognita-locks/service-requirements.lock \

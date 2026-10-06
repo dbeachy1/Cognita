@@ -88,6 +88,13 @@ COPY scripts/amd_runtime_preflight.py /opt/cognita-runtimes/amd_runtime_prefligh
 # Keep source and release metadata after the expensive, immutable AMD runtime
 # layers.  Ordinary source edits and version bumps can then reuse the ROCm,
 # embedding, OCR, and model layers above.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y ffmpeg libmp3lame0 \
+    && dpkg-query -W -f='${Package}=${Version}\n' ffmpeg libmp3lame0 \
+    && ffmpeg -version | head -n 1 \
+    && ffprobe -version | head -n 1 \
+    && ffmpeg -hide_banner -encoders | grep -q libmp3lame \
+    && rm -rf /var/lib/apt/lists/*
 COPY --chown=cognita:cognita pyproject.toml README.md ./
 # 14.0: the license and third-party notices travel with the image.
 COPY --chown=cognita:cognita LICENSE THIRD_PARTY_NOTICES.md ./

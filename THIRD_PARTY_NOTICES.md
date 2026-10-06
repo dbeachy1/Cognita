@@ -126,3 +126,22 @@ NVSHMEM releases does not replace the terms for this shipped version.
   copyright notices ship in the wheel's `*.dist-info/licenses/License.txt`.
 - NCCL: BSD 3-Clause (https://github.com/NVIDIA/nccl).
 - cuda-bindings, cuda-pathfinder: Apache License 2.0 (https://github.com/NVIDIA/cuda-python).
+
+## Cognita 16 book projection Python dependencies
+
+The service installs `rfc8785` 0.1.4 under the Apache License 2.0 and `regex`
+2026.9.29 under the package's Apache-2.0 and CNRI-Python license terms. Their
+versioned license files remain in the installed wheels' `*.dist-info/licenses/`
+directories. Projects: https://github.com/trailofbits/rfc8785.py and
+https://github.com/mrabarnett/mrab-regex.
+
+## FFmpeg tools and LAME runtime (Linux Cognita images)
+
+The CPU, AMD, and NVIDIA Cognita images install the distribution-provided
+`ffmpeg` package, which supplies both `ffmpeg` and `ffprobe`, and
+`libmp3lame0` for MP3 encoding. FFmpeg's enabled components carry the LGPL or
+GPL terms applicable to that distribution build; LAME carries its own license
+terms. Keep each image's distribution copyright and license files, including
+`/usr/share/doc/ffmpeg/copyright` and `/usr/share/doc/libmp3lame0/copyright`,
+with the package versions recorded by release build evidence. Upstream:
+https://ffmpeg.org/ and https://lame.sourceforge.io/.

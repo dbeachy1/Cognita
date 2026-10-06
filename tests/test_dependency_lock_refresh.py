@@ -33,6 +33,25 @@ def test_roles_are_rejected_before_acquisition(tmp_path, roles):
         refresh._validate_request(refresh.RefreshRequest(tmp_path, tmp_path / "evidence", "https://pypi.org/simple", roles=roles))
 
 
+def test_existing_lock_seed_preserves_hash_locked_pins_and_cli_is_opt_in(tmp_path):
+    source = tmp_path / "containers" / refresh.LOCK_FILES["service"]
+    source.parent.mkdir(parents=True)
+    lock = "demo==1.0 --hash=sha256:" + "a" * 64 + "\n"
+    source.write_text(lock, encoding="utf-8")
+    output = tmp_path / "scratch" / "service.lock"
+    seed_hash = refresh._seed_existing_lock(tmp_path, "service", output)
+    assert output.read_text(encoding="utf-8") == lock
+    assert seed_hash == hashlib.sha256(source.read_bytes()).hexdigest()
+    args = refresh._parser().parse_args([
+        "--evidence-root", str(tmp_path / "evidence"),
+        "--index-url", "https://pypi.org/simple",
+        "--roles", "service",
+        "--preserve-existing-pins",
+    ])
+    assert args.preserve_existing_pins is True
+    assert refresh.RefreshRequest(tmp_path, tmp_path / "evidence", "https://pypi.org/simple").preserve_existing_pins is False
+
+
 def test_cpu_lock_follows_source_authority_and_rejects_unhashed_input(tmp_path):
     root = Path(__file__).parents[1]
     declaration = tmp_path / "runtime.json"

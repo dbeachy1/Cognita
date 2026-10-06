@@ -126,6 +126,7 @@ class RefreshRequest:
     docker: Path = Path("docker")
     timeout: float = 1800
     roles: tuple[str, ...] = LOCK_ROLES
+    preserve_existing_pins: bool = False
 
 
 @dataclass(frozen=True)
@@ -502,6 +503,8 @@ def _validate_request(request: RefreshRequest) -> None:
     evidence_files_for(request.roles)
     if not 0 < request.timeout <= 1800:
         raise RefreshError("refresh timeout must be within the 1800-second maintenance budget")
+    if type(request.preserve_existing_pins) is not bool:
+        raise RefreshError("preserve_existing_pins must be a boolean")
     if platform.system() != "Linux":
         raise RefreshError("dependency refresh is Linux/KEI-only")
     root = request.source_root.resolve()
@@ -562,6 +565,17 @@ def _clean_environment(temp_root: Path) -> dict[str, str]:
         }
     )
     return env
+
+
+def _seed_existing_lock(root: Path, role: str, output: Path) -> str:
+    """Seed pip-compile output with an existing role lock to retain compatible pins."""
+    source = root / "containers" / LOCK_FILES[role]
+    if source.is_symlink() or not source.is_file():
+        raise RefreshError(f"cannot preserve pins from a missing or linked lock: {source}")
+    parse_hash_locked_requirements(source.read_text(encoding="utf-8"), role=role)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, output)
+    return _sha256(source)
 
 
 def _verify_owned_scratch(root: Path) -> None:
@@ -841,6 +855,7 @@ def refresh(
             return budget
         staged: dict[str, Path] = {}
         records: dict[str, Any] = {}
+        preserved_pin_seeds: dict[str, str] = {}
         for directory in ("home", "cache", "pip-cache"):
             (scratch / directory).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / "containers/resolver-tooling.lock", scratch / "resolver-tooling.lock")
@@ -891,6 +906,8 @@ def refresh(
                     vendor_subdir=f"{role}-vendor",
                 )
             output = scratch / f"{role}.lock"
+            if request.preserve_existing_pins:
+                preserved_pin_seeds[role] = _seed_existing_lock(root, role, output)
             command: tuple[object, ...] = (
                 request.docker,
                 "run",
@@ -942,6 +959,8 @@ def refresh(
                 "input_sha256": _sha256(scratch / f"{role}.in"),
                 "lock_sha256": _sha256(output),
                 "packages": len(parsed),
+                "preserve_existing_pins": request.preserve_existing_pins,
+                "preserved_pin_seed_sha256": preserved_pin_seeds.get(role),
                 "resolver": {
                     "image": spec.image,
                     "python": spec.python,
@@ -962,7 +981,14 @@ def refresh(
             if target.exists() and target.is_symlink():
                 raise RefreshError(f"refusing to replace linked lock: {target}")
             targets[role] = target
-        if source_identity(root) != source or any(_sha256(Path(name)) != digest for name, digest in input_hashes.items()):
+        if (
+            source_identity(root) != source
+            or any(_sha256(Path(name)) != digest for name, digest in input_hashes.items())
+            or any(
+                _sha256(root / "containers" / LOCK_FILES[role]) != digest
+                for role, digest in preserved_pin_seeds.items()
+            )
+        ):
             raise RefreshError("dependency source inputs changed during maintenance")
         evidence.mkdir(parents=True, exist_ok=True)
         evidence_payload = {
@@ -970,6 +996,13 @@ def refresh(
             "operation": "dependency-refresh",
             "source": source.as_dict(),
             "selected_roles": list(request.roles),
+            "preserve_existing_pins": request.preserve_existing_pins,
+            # Provenance only. The refresh replaces each seeded lock at this
+            # path, so its hash is not a current-input hash after publication.
+            "preserved_pin_seeds": {
+                role: {"path": f"containers/{LOCK_FILES[role]}", "sha256": digest}
+                for role, digest in preserved_pin_seeds.items()
+            },
             "source_root": str(root),
             "maintenance_evidence": str(evidence / "dependency-refresh-evidence.json"),
             "consumed_source_sha256": input_hashes,
@@ -1062,6 +1095,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--index-url", required=True)
     parser.add_argument("--roles", default=",".join(LOCK_ROLES), help="Comma-separated source-owned roles to refresh")
+    parser.add_argument("--preserve-existing-pins", action="store_true", help="Seed each selected resolver output with its current lock to retain compatible pins")
     parser.add_argument("--docker", default="docker", help="Docker executable (normally the code-owned Docker Engine CLI)")
     return parser
 
@@ -1076,6 +1110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 index_url=args.index_url,
                 docker=Path(args.docker),
                 roles=tuple(args.roles.split(",")),
+                preserve_existing_pins=args.preserve_existing_pins,
             )
         )
     except (RefreshError, OSError, DependencyLockError) as exc:

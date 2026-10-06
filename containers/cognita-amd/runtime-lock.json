@@ -61,7 +61,7 @@
     },
     "dockerfile_source": {
       "path": "containers/cognita-amd/Dockerfile",
-      "sha256": "e1024283949835011f01a479b50f45c23d6e938c3b0324aa74fe3a7cb13e1bc8"
+      "sha256": "f0e093d8c0fc46010cdd18db6320ba166eac4fbbf90355931e77ba4b3b24d83d"
     }
   }
 }

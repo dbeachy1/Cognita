@@ -1,6 +1,6 @@
 """Book services, projection primitives, strict wire contracts, and helpers."""
 
-from . import models as _models
+from . import models as _models  # noqa: F401
 from .models import *  # noqa: F403
 from .models import __all__ as _model_exports
 from .models import (
@@ -34,6 +34,8 @@ from .config import (
     validate_production_settings,
 )
 from .policy import BookMutationPolicy, EffectiveIndexPolicy, IndexDecision, MutationDecision
+from .media import MediaInspection, MediaValidationError, inspect_media, inspect_media_file
+from .jobs import ProcessResult, ProcessRunnerError, ffprobe_json, run_process
 from .schemas import (
     ALL_ADDITIVE_MUTATING_TOOLS,
     ALL_ADDITIVE_TOOL_NAMES,
@@ -104,6 +106,8 @@ __all__ = [
     "parse_book_layout",
     "BookMutationPolicy", "EffectiveIndexPolicy", "IndexDecision", "MutationDecision",
     "book_tool_definitions", "project_storage_tool_definitions", "FINGERPRINT_VERSION",
+    "MediaInspection", "MediaValidationError", "ProcessResult", "ProcessRunnerError",
+    "inspect_media", "inspect_media_file", "ffprobe_json", "run_process",
     "canonical_json_sha256", "grapheme_boundaries", "grapheme_spans",
     "is_grapheme_boundary", "request_fingerprint", "sha256_text",
     "validate_grapheme_boundary",
