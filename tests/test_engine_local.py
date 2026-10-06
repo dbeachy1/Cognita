@@ -720,6 +720,126 @@ async def test_write_documents_enforces_aggregate_base64_limit(env, monkeypatch)
     assert not (docs / "aggregate").exists()
 
 
+async def test_managed_book_write_publishes_source_and_blocks_invalid_annotation_indexing(tmp_path):
+    """A saved registered source keeps its bytes when its derived index is invalid.
+
+    This exercises the actual managed source-write wrapper and captured book
+    extraction, rather than mapping a synthetic error through
+    ``_managed_index_state``.  The durable receipt must retain the exact
+    annotation property location so ``book_get_index_status`` can explain why
+    no derived row was accepted.
+    """
+    from cognita.books.state import ProjectState
+    from test_book_service import _docx, _fixture
+    from test_retrieval_reconciliation import ReconcileStore
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    _fixture(docs, bound=True)
+    first_original = (docs / "Chapters/1/chapter.docx").read_bytes()
+    ProjectState.initialize(docs)
+    name = "managed-invalid-annotation"
+    registry = make_registry(tmp_path, docs, name)
+    store = ReconcileStore()
+    core = RetrievalCore(store, HashEmbedder(DIMS), OverlapReranker())
+    async def no_existing_document(_project, _source):
+        return None
+    store.get_document = no_existing_document
+    host = LocalEngineHost(CognitaConfig(), registry, core)
+    project = registry.get(name)
+    assert project is not None
+
+    chapter_state_path = docs / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    chapter_state["index_annotations"] = {
+        "source_raw_sha256": "0" * 64,
+        "extraction_version": "cognita-docx-v1",
+        "spans": [],
+    }
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+    published = _docx("published source survives blocked derived indexing")
+
+    result = await host._write_documents(project, {
+        "documents": [{
+            "filepath": "Chapters/1/chapter.docx",
+            "content": base64.b64encode(published).decode("ascii"),
+            "content_encoding": "base64",
+        }],
+    })
+
+    assert result["status"] == "success"
+    assert (docs / "Chapters/1/chapter.docx").read_bytes() == published
+    receipt = result["receipts"][0]["indexing"]
+    assert receipt["state"] == "blocked"
+    assert receipt["error"]["code"] == "validation_failed"
+    assert "index_annotations.source_raw_sha256" in receipt["error"]["message"]
+    service = host.book_service_for(project)
+    status = service.get_managed_write_status(project, "Chapters/1/chapter.docx")
+    assert status is not None
+    assert status["state"] == "blocked"
+    assert status["error"] == receipt["error"]
+    state = ProjectState.discover(docs)
+    assert state is not None
+    assert state.indexed_role_provenance("Chapters/1/chapter.docx") is None
+    assert store.replacements == []
+    original_path = docs / service.original_filepath_for(project, "ch1")
+    assert original_path.read_bytes() == first_original
+
+    later = _docx("later source still leaves the immutable original intact")
+    second = await host._write_documents(project, {
+        "documents": [{
+            "filepath": "Chapters/1/chapter.docx",
+            "content": base64.b64encode(later).decode("ascii"),
+            "content_encoding": "base64",
+        }],
+    })
+    assert second["status"] == "success"
+    assert (docs / "Chapters/1/chapter.docx").read_bytes() == later
+    assert original_path.read_bytes() == first_original
+
+
+async def test_managed_book_write_blocks_when_provenance_recorder_is_unavailable(tmp_path, monkeypatch):
+    """A provenance persistence failure never produces an indexed receipt."""
+    from cognita.books.state import ProjectState
+    from test_book_service import _fixture
+    from test_retrieval_reconciliation import ReconcileStore
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    _fixture(docs, bound=True)
+    ProjectState.initialize(docs)
+    name = "managed-unavailable-recorder"
+    registry = make_registry(tmp_path, docs, name)
+    store = ReconcileStore()
+    core = RetrievalCore(store, HashEmbedder(DIMS), OverlapReranker())
+    async def no_existing_document(_project, _source):
+        return None
+    store.get_document = no_existing_document
+    host = LocalEngineHost(CognitaConfig(), registry, core)
+    project = registry.get(name)
+    assert project is not None
+    monkeypatch.setattr(host, "record_book_index_provenance_for", lambda _project, _record: None)
+
+    result = await host._write_documents(project, {
+        "documents": [{"filepath": "Project Files/ref.md", "content": "new reference bytes"}],
+    })
+
+    assert result["status"] == "success"
+    assert (docs / "Project Files/ref.md").read_text(encoding="utf-8") == "new reference bytes"
+    receipt = result["receipts"][0]["indexing"]
+    assert receipt["state"] == "blocked"
+    assert receipt["error"] == {
+        "code": "provenance_unavailable",
+        "message": "Book index provenance could not be persisted.",
+    }
+    service = host.book_service_for(project)
+    status = service.get_managed_write_status(project, "Project Files/ref.md")
+    assert status is not None and status["state"] == "blocked"
+    state = ProjectState.discover(docs)
+    assert state is not None
+    assert state.indexed_role_provenance("Project Files/ref.md") is None
+
+
 @pg
 async def test_remove_documents_continue_and_stop_preserve_order_and_receipts(env):
     host, project, docs = env

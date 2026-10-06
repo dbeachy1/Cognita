@@ -209,7 +209,11 @@ class EngineDocumentOperations:
             project, chapter_id, source_bytes,
             hashlib.sha256(source_bytes).hexdigest(),
         )
-        return {"filepath": receipt.filepath, "bytes_sha256": receipt.bytes_sha256}
+        # BookService returns the durable original receipt as a mapping.  Keep
+        # this adapter deliberately narrow so the first guarded source write
+        # can publish its source bytes even when its derived indexing is later
+        # blocked.
+        return {"filepath": receipt["filepath"], "bytes_sha256": receipt["bytes_sha256"]}
 
     def _reject_backups_write(self, project: Project, target: Path) -> dict | None:
         """None unless `target` is inside `backups/` — the recovery tree.

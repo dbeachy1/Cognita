@@ -2150,7 +2150,11 @@ class RetrievalCore:
         if inspect.isawaitable(persisted):
             persisted = await persisted
         if persisted is None:
-            raise CapturedIndexPublicationError("source_provenance_changed")
+            # The source/configuration still matched the captured facts; the
+            # durable provenance write itself was unavailable.  Reporting this
+            # as stale would falsely tell the caller that a new source version
+            # superseded the published document.
+            raise CapturedIndexPublicationError("provenance_unavailable")
 
     async def _index_parsed(
         self, project: str, doc: ParsedDocument, *, before_publish: Callable[[], None] | None = None,
