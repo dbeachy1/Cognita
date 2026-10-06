@@ -38,6 +38,10 @@ from .assembly import (AssemblyError, Mp3Source, PcmSource, assemble_pcm_stream,
 from .jobs import ProcessRunnerError, ffprobe_json, ffprobe_packet_facts, run_process
 from .mp3_validation import verify_chapter_mp3_decoder
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
+from .docx import (
+    BookmarkLocation, BookmarkPlacement, FileLockedError, add_bookmarks,
+    parse_docx, require_unlocked,
+)
 from .read_helpers import (
     ReadCursorError, paired_text_page, parse_read_cursor, read_cursor, spoken_interval, text_page,
 )
@@ -753,6 +757,97 @@ class BookService:
             return False, "master_unavailable"
         return True, "eligible"
 
+    def recover_bookmark_publications(self) -> None:
+        """Recover/finalize guarded tagged-DOCX prepare publications under the project lock."""
+        state = self.discover_state()
+        if state is None:
+            return
+        publications = state.publications("chapter_bookmark_prepare")
+        if not publications:
+            return
+        config = load_book_config(self.root, state)
+        if config.config_state != "enabled" or config.layout is None:
+            raise BookServiceError("publication_conflict", "A pending bookmark publication has no enabled registered layout.")
+        layout = config.layout
+
+        def owned_path(relative: str, expected_sha256: str | None) -> Path:
+            path = _path(self.root, relative, allow_missing=True)
+            if path.exists():
+                if not path.is_file() or path.is_symlink():
+                    raise BookServiceError("publication_conflict", "An owned bookmark publication path changed type.")
+                if expected_sha256 is not None and _file_sha256(path) != expected_sha256:
+                    raise BookServiceError("publication_conflict", "An owned bookmark publication artifact changed.")
+            return path
+
+        for entry in publications:
+            payload = entry["payload"]
+            try:
+                chapter = self._chapter(layout, payload["chapter_id"])
+                target_relative = payload["target_filepath"]
+                if (payload["book_id"] != layout.book_id or chapter.tagged_filepath != target_relative
+                        or payload["kind"] != "chapter_bookmark_prepare"):
+                    raise ValueError("registration binding mismatch")
+                target = _path(self.root, target_relative)
+                old_hash, new_hash = payload["old_sha256"], payload["new_sha256"]
+                backup = owned_path(payload["backup_filepath"], old_hash)
+                stage = owned_path(payload["stage_filepath"], new_hash)
+                snapshot_tagged = owned_path(payload["snapshot_tagged_filepath"], new_hash)
+                input_tagged = owned_path(payload["input_tagged_filepath"], old_hash)
+                restore_stage = owned_path(payload["restore_stage_filepath"], old_hash)
+                if entry["phase"] == "committed":
+                    snapshot = state.snapshot(payload["snapshot_id"])
+                    receipt = state.receipt(
+                        owner_key=payload["owner_key"], project=payload["project"],
+                        tool=payload["tool"], operation_id=payload["operation_id"],
+                    )
+                    if (snapshot is None or snapshot["chapter_id"] != chapter.chapter_id
+                            or snapshot["scope_key"] != payload["scope_key"]
+                            or receipt is None or receipt[0] != payload["args_sha256"]
+                            or snapshot["payload"].get("result", {}).get("snapshot_id") != payload["snapshot_id"]):
+                        raise ValueError("committed snapshot/receipt binding mismatch")
+                    for path, expected in ((backup, old_hash), (stage, new_hash), (restore_stage, old_hash)):
+                        if path.exists():
+                            if _file_sha256(path) != expected:
+                                raise ValueError("owned finalization artifact changed")
+                            path.unlink()
+                    state.delete_publication(entry["journal_id"])
+                    continue
+
+                current_hash = _file_sha256(target)
+                if current_hash == new_hash:
+                    if not backup.exists() or _file_sha256(backup) != old_hash:
+                        raise ValueError("original backup is unavailable or changed")
+                    require_unlocked(target)
+                    if restore_stage.exists():
+                        if _file_sha256(restore_stage) != old_hash:
+                            raise ValueError("restore stage changed")
+                    else:
+                        with backup.open("rb") as source, restore_stage.open("xb") as output:
+                            shutil.copyfileobj(source, output)
+                            output.flush()
+                            os.fsync(output.fileno())
+                    if _file_sha256(target) != new_hash:
+                        raise BookServiceError("publication_conflict", "The working DOCX changed during bookmark recovery.")
+                    os.replace(restore_stage, target)
+                elif current_hash != old_hash:
+                    raise BookServiceError("publication_conflict", "The working DOCX changed outside this bookmark publication.")
+                # Remove only hash-verified files owned by this uncommitted operation.
+                prose_snapshot = owned_path(payload["snapshot_prose_filepath"], payload["prose_sha256"])
+                for path, expected in (
+                    (backup, old_hash), (stage, new_hash), (snapshot_tagged, new_hash),
+                    (input_tagged, old_hash), (restore_stage, old_hash),
+                    (prose_snapshot, payload["prose_sha256"]),
+                ):
+                    if path.exists():
+                        if _file_sha256(path) != expected:
+                            raise BookServiceError("publication_conflict", "An uncommitted snapshot artifact changed.")
+                        path.unlink()
+                state.delete_publication(entry["journal_id"])
+            except BookServiceError:
+                raise
+            except (KeyError, OSError, ValueError) as exc:
+                raise BookServiceError("publication_conflict", "A bookmark publication could not be recovered safely.") from exc
+
     def _first_original_path(self, chapter) -> str:
         return f"{chapter.originals_root}/{chapter.chapter_id}/first-original.docx"
 
@@ -952,6 +1047,15 @@ class BookService:
         # Mutation is the only path that creates state. The caller owns the
         # per-project write lock and permission check.
         state = self.discover_state()
+        args_sha = canonical_json_sha256(request.model_dump(mode="json", exclude_unset=True))
+        if state is not None:
+            self.recover_bookmark_publications()
+            prior = state.receipt(owner_key=owner_key, project=self.project_name,
+                                  tool="audiobook_prepare_chapter", operation_id=request.operation_id)
+            if prior is not None:
+                if prior[0] != args_sha:
+                    raise BookServiceError("operation_id_conflict", "This operation ID was used for different content.")
+                return prior[1], True
         pending_view = self._pending_views.get(request.document_view_id) if state is None else None
         config = load_book_config(self.root, state)
         if config.config_state != "enabled" or config.layout is None:
@@ -968,14 +1072,6 @@ class BookService:
         projected_data = payload["projection"]
         if payload["layout_revision"] != layout.layout_revision:
             raise BookServiceError("stale_configuration", "The book layout changed after inspection.")
-        args_sha = canonical_json_sha256(request.model_dump(mode="json", exclude_unset=True))
-        prior = (state.receipt(owner_key=owner_key, project=self.project_name,
-                               tool="audiobook_prepare_chapter", operation_id=request.operation_id)
-                 if state is not None else None)
-        if prior is not None:
-            if prior[0] != args_sha:
-                raise BookServiceError("operation_id_conflict", "This operation ID was used for different content.")
-            return prior[1], True
         prose_bytes = _read_bytes(self.root, chapter.working_filepath)
         tagged_bytes = _read_bytes(self.root, chapter.tagged_filepath)
         if (hashlib.sha256(prose_bytes).hexdigest() != request.expected_prose_sha256
@@ -1055,6 +1151,9 @@ class BookService:
             selected_ordinals = {p.source_ordinal for p in projected.paragraphs if p.speech_start is not None}
             if not selected_ordinals.issubset(set(auth.allowed_paragraph_ordinals)):
                 raise BookServiceError("test_scope_not_authorized", "The selected paragraphs exceed the test authorization.")
+        requested_chunks = {item.chunk_id: item for item in request.chunks}
+        if len(requested_chunks) != len(request.chunks):
+            raise BookServiceError("duplicate_or_recycled_chunk_id", "Chunk IDs must be unique in a prepared plan.")
         ranges, coverage = validate_chunk_ranges(
             projected, request.chunks,
             limit=request.request_limit.value, unit=request.request_limit.unit,
@@ -1068,9 +1167,6 @@ class BookService:
         previous_by_id = {value["chunk_id"]: value for value in previous_chunks}
         current_lineage = ({value["chunk_id"]: value for value in state.chunk_lineage(
             chapter_id=chapter.chapter_id, scope_key=scope_key)} if state is not None else {})
-        requested_chunks = {item.chunk_id: item for item in request.chunks}
-        if len(requested_chunks) != len(request.chunks):
-            raise BookServiceError("duplicate_or_recycled_chunk_id", "Chunk IDs must be unique in a prepared plan.")
         lineage_rows: list[dict[str, Any]] = []
         predecessor_to_successors: dict[str, list[str]] = {}
         for item in request.chunks:
@@ -1137,7 +1233,60 @@ class BookService:
         _mkdir_safe(self.root, snapshot_dir.relative_to(self.root).as_posix())
         prose_path = snapshot_dir / f"{snapshot_id}-prose.docx"
         tagged_path = snapshot_dir / f"{snapshot_id}-tagged.docx"
-        for path, content in ((prose_path, prose_bytes), (tagged_path, tagged_bytes)):
+        input_tagged_path = snapshot_dir / f"{snapshot_id}-tagged-input.docx"
+
+        # Freeze a separate navigation bookmark for every source segment. This
+        # keeps a chunk split around excluded prose from becoming one enclosing
+        # Word range that accidentally includes the excluded paragraph.
+        input_tagged_projection = parse_docx(tagged_bytes)
+        paragraph_by_id = {paragraph.paragraph_id: paragraph for paragraph in projected.paragraphs}
+        placements: list[BookmarkPlacement] = []
+        bookmark_names: dict[str, list[str]] = {}
+        for chunk_range in ranges:
+            names: list[str] = []
+            for segment_index, segment in enumerate(chunk_range.source_segments):
+                paragraph = paragraph_by_id[segment.paragraph_id]
+                source_paragraph_id = input_tagged_projection.paragraphs[paragraph.source_ordinal].paragraph_id
+                name = "cog_" + hashlib.sha256(
+                    f"{snapshot_id}:{chunk_range.chunk_id}:{segment_index}".encode("utf-8")
+                ).hexdigest()[:24]
+                placements.append(BookmarkPlacement(
+                    name,
+                    BookmarkLocation(source_paragraph_id, segment.start),
+                    BookmarkLocation(source_paragraph_id, segment.end),
+                ))
+                names.append(name)
+            bookmark_names[chunk_range.chunk_id] = names
+        tagged_snapshot_bytes = add_bookmarks(tagged_bytes, input_tagged_projection, placements)
+
+        # Bookmark insertion changes raw pair-bound paragraph IDs, so remap the
+        # exact selected/excluded paragraphs and explicit tag spans by ordinal.
+        prebookmark_ordinal = {paragraph_id: index for index, paragraph_id in enumerate(projected.paragraph_ids)}
+        bookmarked_pair = project_docx_pair(prose_bytes, tagged_snapshot_bytes)
+        bookmarked_ids = bookmarked_pair.paragraph_ids
+        selected_ids = [bookmarked_ids[prebookmark_ordinal[value]] for value in payload["speech_paragraph_ids"]]
+        excluded_values = [
+            {"paragraph_id": bookmarked_ids[prebookmark_ordinal[item["paragraph_id"]]], "reason": item["reason"]}
+            for item in payload["excluded_paragraphs"]
+        ]
+        explicit_values = [
+            {**item, "paragraph_id": bookmarked_ids[prebookmark_ordinal[item["paragraph_id"]]]}
+            for item in payload["explicit_tag_spans"]
+        ]
+        projected = project_docx_pair(
+            prose_bytes, tagged_snapshot_bytes,
+            speech_paragraph_ids=selected_ids,
+            excluded_paragraphs=excluded_values,
+            explicit_tag_spans=explicit_values,
+        )
+        ranges, coverage = validate_chunk_ranges(
+            projected, request.chunks,
+            limit=request.request_limit.value, unit=request.request_limit.unit,
+        )
+        require_unlocked(_path(self.root, chapter.tagged_filepath)) if request.publish_bookmarks_to_working_tagged_docx else None
+
+        for path, content in ((prose_path, prose_bytes), (tagged_path, tagged_snapshot_bytes),
+                              (input_tagged_path, tagged_bytes)):
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(fd, "wb") as stream:
@@ -1168,8 +1317,13 @@ class BookService:
             )
             chunk = {
                 "chunk_id": item.chunk_id, "snapshot_id": snapshot_id, "order": order,
-                "start": item.start, "end": item.end, "bookmark": f"cognita_{item.chunk_id}",
-                "source_segments": _data(item.source_segments),
+                "start": item.start, "end": item.end,
+                "bookmark": (bookmark_names[item.chunk_id][0] if bookmark_names[item.chunk_id] else "cog_empty"),
+                "source_segments": [
+                    {"paragraph_id": segment.paragraph_id, "start": segment.start, "end": segment.end,
+                     "bookmark": bookmark_names[item.chunk_id][segment_index]}
+                    for segment_index, segment in enumerate(item.source_segments)
+                ],
                 "codepoint_count": item.codepoint_count, "limit_count": item.limit_count,
                 "prompt_sha256": item.prompt_sha256,
                 "spoken_text_sha256": hashlib.sha256(spoken_text.encode("utf-8")).hexdigest(),
@@ -1230,8 +1384,9 @@ class BookService:
                         chunk["accepted_take_id"] = take_id
         plan_sha = canonical_json_sha256({
             "chunks": plan_rows,
-            "selection": {"speech_paragraph_ids": payload["speech_paragraph_ids"],
-                          "excluded_paragraphs": payload["excluded_paragraphs"]},
+            "selection": {"speech_paragraph_ids": selected_ids,
+                          "excluded_paragraphs": excluded_values,
+                          "projection_version": projected.projection_version},
             "request_limit": _data(request.request_limit),
             "production_settings_sha256": (
                 canonical_json_sha256(validate_production_settings(
@@ -1244,7 +1399,7 @@ class BookService:
         result = {
             "snapshot_id": snapshot_id,
             "manifest_revision": 1,
-            "input_tagged_sha256": projected.tagged_sha256,
+            "input_tagged_sha256": hashlib.sha256(tagged_bytes).hexdigest(),
             "snapshot_tagged_sha256": projected.tagged_sha256,
             "snapshot_prose_sha256": projected.prose_sha256,
             "prose_projection_sha256": projected.prose_projection_sha256,
@@ -1252,13 +1407,15 @@ class BookService:
             "request_plan_sha256": plan_sha,
             "snapshot_filepath": prose_path.relative_to(self.root).as_posix(),
             "working_tagged_filepath": chapter.tagged_filepath,
-            "working_tagged_updated": False,
+            "working_tagged_updated": request.publish_bookmarks_to_working_tagged_docx,
             "chunks": chunks, "retired_chunk_ids": retired_chunk_ids,
             "coverage": _data(coverage), "current_outputs_stale": True,
         }
         snapshot_payload = {
             "result": result, "prose_filepath": prose_path.relative_to(self.root).as_posix(),
             "tagged_filepath": tagged_path.relative_to(self.root).as_posix(),
+            "input_tagged_filepath": input_tagged_path.relative_to(self.root).as_posix(),
+            "input_tagged_sha256": result["input_tagged_sha256"],
             "speech_text": projected.speech_text,
             "spoken_projection": projected.spoken_projection,
             "tag_deletion_spans": tag_deletion_spans,
@@ -1271,6 +1428,10 @@ class BookService:
                 if isinstance(request.scope, dto.ProductionScope) else None
             ),
             "production_target": prepared_production_target,
+            "speech_paragraph_ids": selected_ids,
+            "excluded_paragraphs": excluded_values,
+            "explicit_tag_spans": explicit_values,
+            "projection_version": projected.projection_version,
         }
         if isinstance(request.scope, dto.ProductionScope):
             approval = chapter_state.approval_provenance
@@ -1286,6 +1447,50 @@ class BookService:
                 "observed_raw_sha256": production_settings_sha256,
                 "canonical_relevant_sha256": snapshot_payload["production_settings_digest_sha256"],
             }
+        journal_id: str | None = None
+        if request.publish_bookmarks_to_working_tagged_docx:
+            target = _path(self.root, chapter.tagged_filepath)
+            old_hash = hashlib.sha256(tagged_bytes).hexdigest()
+            new_hash = hashlib.sha256(tagged_snapshot_bytes).hexdigest()
+            if _file_sha256(target) != old_hash:
+                raise BookServiceError("stale_source", "The registered tagged DOCX changed before bookmark publication.")
+            require_unlocked(target)
+            backup_path = snapshot_dir / f"{snapshot_id}-working-tagged-backup.docx"
+            stage_path = target.with_name(f".{target.name}.{snapshot_id}.stage")
+            restore_path = target.with_name(f".{target.name}.{snapshot_id}.restore")
+            try:
+                for path, content in ((backup_path, tagged_bytes), (stage_path, tagged_snapshot_bytes)):
+                    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+            except OSError as exc:
+                raise BookServiceError("publication_failed", "The guarded tagged-DOCX publication could not be staged.") from exc
+            journal_id = str(uuid.uuid4())
+            journal_payload = {
+                "kind": "chapter_bookmark_prepare", "book_id": layout.book_id,
+                "chapter_id": chapter.chapter_id, "scope_key": scope_key,
+                "target_filepath": chapter.tagged_filepath,
+                "old_sha256": old_hash, "new_sha256": new_hash,
+                "backup_filepath": backup_path.relative_to(self.root).as_posix(),
+                "stage_filepath": stage_path.relative_to(self.root).as_posix(),
+                "restore_stage_filepath": restore_path.relative_to(self.root).as_posix(),
+                "snapshot_id": snapshot_id,
+                "snapshot_prose_filepath": prose_path.relative_to(self.root).as_posix(),
+                "snapshot_tagged_filepath": tagged_path.relative_to(self.root).as_posix(),
+                "input_tagged_filepath": input_tagged_path.relative_to(self.root).as_posix(),
+                "prose_sha256": hashlib.sha256(prose_bytes).hexdigest(),
+                "owner_key": owner_key, "project": self.project_name,
+                "tool": "audiobook_prepare_chapter", "operation_id": request.operation_id,
+                "args_sha256": args_sha,
+            }
+            state.begin_publication(journal_id, "chapter_bookmark_prepare", journal_payload)
+            if _file_sha256(target) != old_hash:
+                raise BookServiceError("stale_source", "The registered tagged DOCX changed before bookmark publication.")
+            require_unlocked(target)
+            os.replace(stage_path, target)
+            state.advance_publication(journal_id, "published")
         try:
             status, revision, committed = state.commit_snapshot(
                 snapshot_id=snapshot_id, chapter_id=request.chapter_id,
@@ -1296,14 +1501,23 @@ class BookService:
                 tool="audiobook_prepare_chapter", operation_id=request.operation_id,
                 args_sha256=args_sha, result=result,
                 chunk_lineage=lineage_rows,
+                journal_id=journal_id,
             )
         except ProjectStateError as exc:
+            if journal_id is not None:
+                self.recover_bookmark_publications()
             reason = "duplicate_or_recycled_chunk_id" if "duplicate_or_recycled_chunk_id" in str(exc) else (
                 "stale_manifest" if "stale_manifest" in str(exc) else "state_unavailable")
             raise BookServiceError(reason,
                                    "Snapshot publication could not be committed.") from exc
+        except Exception:
+            if journal_id is not None:
+                self.recover_bookmark_publications()
+            raise
         if status == "replay":
             return committed, True
+        if journal_id is not None:
+            self.recover_bookmark_publications()
         self._pending_views.pop(request.document_view_id, None)
         result = committed
         result["manifest_revision"] = revision
@@ -2866,12 +3080,20 @@ class BookService:
                 "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media,
             }
             outputs = [output_data]
+            encoder_argv = None
+            tool_versions: dict[str, Any] = {}
             if pinned.get("emit_mp3"):
                 ffmpeg, ffprobe = self._registered_media_executables()
+                tool_versions = {
+                    "ffmpeg": {"executable": str(ffmpeg), "version": asyncio.run(_media_tool_version(ffmpeg))},
+                    "ffprobe": {"executable": str(ffprobe), "version": asyncio.run(_media_tool_version(ffprobe))},
+                }
                 mp3 = build_dir / "listening.mp3"
-                argv = production_mp3_argv(ffmpeg, pcm, mp3, target,
-                                           dto.BuildMetadata.model_validate(pinned["metadata"], strict=True))
-                process = asyncio.run(run_process(argv, timeout_seconds=1800.0, cwd=build_dir))
+                encoder_argv = production_mp3_argv(
+                    ffmpeg, pcm, mp3, target,
+                    dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
+                )
+                process = asyncio.run(run_process(encoder_argv, timeout_seconds=1800.0, cwd=build_dir))
                 if process.cancelled:
                     raise BookServiceError("cancelled", "The MP3 encoder was cancelled.")
                 if process.timed_out:
@@ -2887,18 +3109,37 @@ class BookService:
                     "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
                     "media": encoded.media.model_dump(mode="json"),
                 })
-            recipe = canonical_json_sha256({"pinned": pinned, "timeline": timeline_value})
+            recipe = {
+                "recipe_version": 1, "scope": "chapter", "mode": "production_pcm_mp3" if encoder_argv else "production_pcm",
+                "inputs": [
+                    {"chunk_id": source.source_id, "take_id": take["take_id"],
+                     "filepath": str(source.filepath.relative_to(self.root)),
+                     "bytes_sha256": source.inspection.bytes_sha256,
+                     "media": source.inspection.media.model_dump(mode="json")}
+                    for source, take in zip(sources, takes, strict=True)
+                ],
+                "settings": {"target": _data(target), "gaps": pinned["gaps"],
+                             "metadata": pinned["metadata"], "emit_mp3": bool(pinned.get("emit_mp3"))},
+                "assembler": "cognita.books.assembly.assemble_pcm_stream",
+                "tools": tool_versions, "processing_argv": encoder_argv,
+                "timeline": timeline_value,
+                "outputs": [
+                    {"kind": item["kind"], "filepath": item["filepath"],
+                     "bytes_sha256": item["bytes_sha256"], "media": item["media"]}
+                    for item in outputs
+                ],
+            }
             result = dto.BuildResult.model_validate({
                 "kind": "build", "build_id": build_id, "scope": "chapter",
                 "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]],
                 "input_take_ids": pinned["take_ids"], "chapter_dependencies": [],
                 "request_plan_sha256": pinned["request_plan_sha256"], "outputs": outputs,
-                "timeline_filepath": f"{build_relative}/timeline.json", "recipe_sha256": recipe,
+                "timeline_filepath": f"{build_relative}/timeline.json", "recipe_sha256": canonical_json_sha256(recipe),
                 "validation": {"complete": True, "media_integrity": True, "coverage": True,
                                "sample_or_packet_verification": True, "errors": []},
                 "needs_listening_review": True,
             }, strict=True).model_dump(mode="json", exclude_unset=True)
-            _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result})
+            _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
             state.finish_build_success(job_id=job_id, build={
                 "scope": "chapter", "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
                 "snapshot_id": pinned["snapshot_id"], "request_plan_sha256": pinned["request_plan_sha256"],
@@ -2993,10 +3234,16 @@ class BookService:
         outputs = [{"kind": "pcm_master", "filepath": f"{root_relative}/master.pcm",
                     "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media}]
         ffmpeg, ffprobe = self._registered_media_executables()
+        tool_versions = {
+            "ffmpeg": {"executable": str(ffmpeg), "version": asyncio.run(_media_tool_version(ffmpeg))},
+            "ffprobe": {"executable": str(ffprobe), "version": asyncio.run(_media_tool_version(ffprobe))},
+        }
         mp3 = build_dir / "listening.mp3"
+        encoder_argv = production_mp3_argv(
+            ffmpeg, pcm, mp3, target, dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
+        )
         process = asyncio.run(run_process(
-            production_mp3_argv(ffmpeg, pcm, mp3, target,
-                                dto.BuildMetadata.model_validate(pinned["metadata"], strict=True)),
+            encoder_argv,
             timeout_seconds=1800.0, cwd=build_dir,
         ))
         if process.cancelled or process.timed_out or process.returncode != 0:
@@ -3007,17 +3254,34 @@ class BookService:
         outputs.append({"kind": "mp3_download", "filepath": f"{root_relative}/listening.mp3",
                         "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
                         "media": encoded.media.model_dump(mode="json")})
-        recipe = canonical_json_sha256({"pinned": pinned, "timeline": timeline_value})
+        recipe = {
+            "recipe_version": 1, "scope": "book", "mode": "production_pcm_mp3",
+            "chapter_inputs": [
+                {"dependency": entry["dependency"], "filepath": entry["output"]["filepath"],
+                 "bytes_sha256": entry["output"]["bytes_sha256"],
+                 "media": entry["output"]["media"]}
+                for entry in pinned["chapters"]
+            ],
+            "settings": {"target": _data(target), "gaps": pinned["gaps"], "metadata": pinned["metadata"]},
+            "assembler": "cognita.books.assembly.assemble_pcm_stream",
+            "tools": tool_versions, "processing_argv": encoder_argv,
+            "timeline": timeline_value,
+            "outputs": [
+                {"kind": item["kind"], "filepath": item["filepath"],
+                 "bytes_sha256": item["bytes_sha256"], "media": item["media"]}
+                for item in outputs
+            ],
+        }
         result = dto.BuildResult.model_validate({
             "kind": "build", "build_id": build_id, "scope": "book", "namespace": {"kind": "production"},
             "source_snapshot_ids": source_snapshots, "input_take_ids": input_take_ids,
             "chapter_dependencies": dependencies, "request_plan_sha256": None, "outputs": outputs,
-            "timeline_filepath": f"{root_relative}/timeline.json", "recipe_sha256": recipe,
+            "timeline_filepath": f"{root_relative}/timeline.json", "recipe_sha256": canonical_json_sha256(recipe),
             "validation": {"complete": True, "media_integrity": True, "coverage": True,
                            "sample_or_packet_verification": True, "errors": []},
             "needs_listening_review": True,
         }, strict=True).model_dump(mode="json", exclude_unset=True)
-        _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result})
+        _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
         state.finish_build_success(job_id=job_id, build={
             "scope": "book", "build_id": build_id, "book_id": layout.book_id,
             "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,

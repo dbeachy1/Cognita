@@ -30,6 +30,7 @@ from cognita.books.service import BookService, BookServiceError
 from cognita.books.config import BookLayout
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
+from cognita.books.docx import parse_docx
 from cognita.books.jobs import PacketFact
 import cognita.books.service as service_module
 
@@ -149,7 +150,7 @@ def _inspect(service: BookService) -> dict:
     return service.inspect(request)
 
 
-def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks):
+def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks, *, publish=False):
     inspected = _inspect(service)
     request = PrepareRequest.model_validate({
         "project": "fixture", "operation_id": operation_id, "chapter_id": "ch1",
@@ -161,7 +162,7 @@ def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, 
         "speech_selection_confirmed": True,
         "request_limit": {"value": 100, "unit": "unicode_codepoints"},
         "expected_settings_sha256": None, "production_target": None,
-        "chunks": chunks, "publish_bookmarks_to_working_tagged_docx": False,
+        "chunks": chunks, "publish_bookmarks_to_working_tagged_docx": publish,
     })
     return service.prepare(request, owner_key="principal:fixture")[0]
 
@@ -206,6 +207,108 @@ def test_chunk_lineage_split_merge_keeps_later_ids_and_permanently_retires_ids(t
             {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
         ])
     assert recycled.value.reason == "duplicate_or_recycled_chunk_id"
+
+
+def test_prepare_bookmarks_snapshot_and_guarded_working_publication(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    result = _prepare_test_plan(service, "bookmark-prepare", prose, tagged, None, [
+        {"chunk_id": "part", "start": 0, "end": 5, "request_spec": None},
+    ], publish=True)
+    working = (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    assert result["working_tagged_updated"] is True
+    assert result["input_tagged_sha256"] == hashlib.sha256(tagged).hexdigest()
+    assert result["snapshot_tagged_sha256"] == hashlib.sha256(working).hexdigest()
+    assert result["snapshot_tagged_sha256"] != result["input_tagged_sha256"]
+    assert len(parse_docx(working).bookmarks) == 1
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(result["snapshot_id"])
+    assert snapshot is not None
+    assert (tmp_path / snapshot["payload"]["input_tagged_filepath"]).read_bytes() == tagged
+    assert state.publications("chapter_bookmark_prepare") == []
+
+
+def test_prepare_bookmark_false_keeps_working_bytes_unchanged(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    before = (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    result = _prepare_test_plan(service, "bookmark-no-publish", prose, tagged, None, [
+        {"chunk_id": "part", "start": 0, "end": 5, "request_spec": None},
+    ])
+    assert result["working_tagged_updated"] is False
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == before
+    assert result["snapshot_tagged_sha256"] != result["input_tagged_sha256"]
+
+
+def test_bookmark_publication_restart_restores_uncommitted_owned_bytes(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    initial = _prepare_test_plan(service, "bookmark-before", prose, tagged, None, [
+        {"chunk_id": "part", "start": 0, "end": 5, "request_spec": None},
+    ])
+    inspect_before = _inspect(service)
+    original_commit = service._state_required().commit_snapshot
+
+    def fail_commit(**_kwargs):
+        raise ProjectStateError("stale_manifest")
+
+    monkeypatch.setattr(service._state_required(), "commit_snapshot", fail_commit)
+    monkeypatch.setattr(service, "recover_bookmark_publications", lambda: None)
+    request = PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "bookmark-interrupted", "chapter_id": "ch1",
+        "document_view_id": inspect_before["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": initial["manifest_revision"],
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True, "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "part", "start": 0, "end": 5, "request_spec": None}],
+        "publish_bookmarks_to_working_tagged_docx": True,
+    })
+    with pytest.raises(BookServiceError):
+        service.prepare(request, owner_key="principal:fixture")
+    published = (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    assert hashlib.sha256(published).hexdigest() != hashlib.sha256(tagged).hexdigest()
+    restarted = BookService(tmp_path, "fixture")
+    restarted.recover_bookmark_publications()
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == tagged
+    assert ProjectState.discover(tmp_path).publications("chapter_bookmark_prepare") == []
+    monkeypatch.setattr(service._state_required(), "commit_snapshot", original_commit)
+
+
+def test_bookmark_recovery_preserves_external_third_hash(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    initial = _prepare_test_plan(service, "bookmark-conflict-before", prose, tagged, None, [
+        {"chunk_id": "part", "start": 0, "end": 5, "request_spec": None},
+    ])
+    inspected = _inspect(service)
+    outside = _docx("other")
+
+    def external_edit_then_fail(**_kwargs):
+        (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(outside)
+        raise ProjectStateError("stale_manifest")
+
+    monkeypatch.setattr(service._state_required(), "commit_snapshot", external_edit_then_fail)
+    monkeypatch.setattr(service, "recover_bookmark_publications", lambda: None)
+    request = PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "bookmark-external-conflict", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": initial["manifest_revision"],
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True, "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "part", "start": 0, "end": 5, "request_spec": None}],
+        "publish_bookmarks_to_working_tagged_docx": True,
+    })
+    with pytest.raises(BookServiceError):
+        service.prepare(request, owner_key="principal:fixture")
+    restarted = BookService(tmp_path, "fixture")
+    with pytest.raises(BookServiceError) as conflict:
+        restarted.recover_bookmark_publications()
+    assert conflict.value.reason == "publication_conflict"
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == outside
+    assert ProjectState.discover(tmp_path).publications("chapter_bookmark_prepare")
 
 
 def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):

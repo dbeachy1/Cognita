@@ -1331,6 +1331,19 @@ class ProjectState:
             for row in rows
         ]
 
+    def publications(self, kind: str) -> list[dict]:
+        """Return every owned publication, including committed rows to finalize."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT journal_id,phase,payload_json FROM publication_journal "
+                "WHERE kind=? ORDER BY updated_at,journal_id", (kind,),
+            ).fetchall()
+        return [
+            {"journal_id": row["journal_id"], "phase": row["phase"],
+             "payload": json.loads(row["payload_json"])}
+            for row in rows
+        ]
+
     def delete_publication(self, journal_id: str) -> None:
         """Retire a recovered publication only after its owned facts are restored."""
         with self.transaction() as connection:
