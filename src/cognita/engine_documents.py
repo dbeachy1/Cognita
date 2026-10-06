@@ -86,6 +86,11 @@ class EngineDocumentOperations:
     @staticmethod
     def _managed_index_state(*, outcome=None, error: BaseException | None = None) -> tuple[str, dict | None]:
         if error is not None:
+            reason = getattr(error, "reason", None)
+            if reason in {"stale_file", "source_provenance_changed"}:
+                return "stale", {"code": reason, "message": str(error)}
+            if reason in {"validation_failed", "unsupported_docx_structure", "provenance_unavailable"}:
+                return "blocked", {"code": reason, "message": str(error)}
             name = type(error).__name__.casefold()
             module = type(error).__module__.casefold()
             blocked = (
@@ -104,6 +109,11 @@ class EngineDocumentOperations:
             return "failed", {"code": "empty_extraction",
                                "message": "The published file contains no indexable text."}
         if not getattr(outcome, "indexed", True):
+            reason = getattr(outcome, "exclusion_reason", None)
+            if reason in {"source_provenance_changed", "source_changed_during_indexing"}:
+                return "stale", {"code": reason, "message": "The source or its captured book facts changed during indexing."}
+            if reason == "provenance_unavailable":
+                return "blocked", {"code": reason, "message": "Book index provenance could not be persisted."}
             return "excluded", None
         if getattr(outcome, "provenance_current", None) is False:
             return "stale", {"code": "source_provenance_changed",

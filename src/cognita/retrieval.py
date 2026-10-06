@@ -152,6 +152,12 @@ class IndexFileOutcome:
         return self.indexed
 
 
+class CapturedIndexPublicationError(RuntimeError):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class QueryCache:
     """3.x-parity search cache: TTL-LRU, invalidated on every write to the
     project. Entries are deep-copied on put AND get — the tool layer mutates
@@ -843,7 +849,11 @@ class RetrievalCore:
                             self._root_is_safe(project, documents_dir, root_identity)
                             if not source_is_current():
                                 raise RuntimeError("source_unavailable")
-                            await self._index_parsed(project, doc)
+                            def final_source_guard():
+                                self._root_is_safe(project, documents_dir, root_identity)
+                                if not source_is_current():
+                                    raise RuntimeError("source_unavailable")
+                            await self._index_parsed(project, doc, before_publish=final_source_guard)
                             summary["indexed"] += 1
                             changed = True
                         except FileNotFoundError:
@@ -1986,7 +1996,10 @@ class RetrievalCore:
                 existing = await self.store.get_document(project, doc.source)
                 if existing is not None:
                     doc.category = existing.category
-            chunks = await self._index_parsed(project, doc)
+            try:
+                chunks = await self._index_parsed(project, doc)
+            except CapturedIndexPublicationError as exc:
+                return IndexFileOutcome(None, 0, False, exc.reason, doc.content_hash, False)
             # An explicit write re-admits the path (5.7). Not optional: the walk
             # skips suppressed sources, so a row indexed here for a still-listed
             # path would be swept away by the next index_project — a write that
@@ -2111,10 +2124,18 @@ class RetrievalCore:
         provider = self._book_index_currentness_provider
         return bool(provider(project, record)) if provider is not None else True
 
-    async def _replace_captured_document(self, project: str, doc: ParsedDocument, records: list[ChunkRecord]) -> None:
+    async def _replace_captured_document(
+        self, project: str, doc: ParsedDocument, records: list[ChunkRecord],
+        *, before_publish: Callable[[], None] | None = None,
+    ) -> None:
         record = doc.book_index_record
+        policy = self.effective_index_policy_for(project)
+        if policy is not None and not policy.decision(doc.source, globally_eligible=True).indexed:
+            raise CapturedIndexPublicationError("policy_excluded")
         if record is not None and not self._book_index_currentness(project, record):
-            raise RuntimeError("captured_book_index_facts_stale")
+            raise CapturedIndexPublicationError("source_provenance_changed")
+        if before_publish is not None:
+            before_publish()
         await self.store.replace_document(
             project, self._document_record(doc, content=doc.content if doc.is_registered else None), records,
         )
@@ -2122,14 +2143,16 @@ class RetrievalCore:
             return
         recorder = self._book_index_provenance_recorder
         if recorder is None:
-            raise RuntimeError("captured_book_index_recorder_unavailable")
+            raise CapturedIndexPublicationError("provenance_unavailable")
         persisted = recorder(project, record)
         if inspect.isawaitable(persisted):
             persisted = await persisted
         if persisted is None:
-            raise RuntimeError("captured_book_index_facts_stale")
+            raise CapturedIndexPublicationError("source_provenance_changed")
 
-    async def _index_parsed(self, project: str, doc: ParsedDocument) -> int:
+    async def _index_parsed(
+        self, project: str, doc: ParsedDocument, *, before_publish: Callable[[], None] | None = None,
+    ) -> int:
         """Embed + transactionally store one parsed document. Returns chunk count.
 
         Registered documents short-circuit BEFORE the embedder is touched — the
@@ -2137,7 +2160,7 @@ class RetrievalCore:
         filesystem plus one INSERT.
         """
         if doc.is_registered:
-            await self._replace_captured_document(project, doc, [])
+            await self._replace_captured_document(project, doc, [], before_publish=before_publish)
             return 0
         text_chunks = doc.chunks(self.chunk_size, self.chunk_overlap)
         if not text_chunks:
@@ -2184,7 +2207,7 @@ class RetrievalCore:
         if vectors is None:
             vectors = await asyncio.to_thread(self.embedder.embed, texts)
         records = self._chunk_records(doc, text_chunks, vectors)
-        await self._replace_captured_document(project, doc, records)
+        await self._replace_captured_document(project, doc, records, before_publish=before_publish)
         return len(records)
 
     @asynccontextmanager
