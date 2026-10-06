@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from cognita.books import jobs as book_jobs
 from cognita.books.jobs import ProcessResult, ProcessRunnerError, ffprobe_json, run_process
 
 
@@ -57,6 +58,109 @@ async def test_run_process_cancel_event_awaits_owned_child() -> None:
     assert result.cancelled
     assert not result.timed_out
     assert result.returncode is not None
+
+
+@pytest.mark.parametrize("pipes_close_on_stop", [True, False])
+@pytest.mark.asyncio
+async def test_exited_leader_pipe_timeout_returns_result_and_awaits_drains(
+    monkeypatch: pytest.MonkeyPatch, pipes_close_on_stop: bool,
+) -> None:
+    class ExitedProcess:
+        returncode = 0
+        pid = -1
+        stdout = asyncio.StreamReader()
+        stderr = asyncio.StreamReader()
+
+        async def wait(self):
+            return self.returncode
+
+    process = ExitedProcess()
+    process.stdout.feed_data(b"stdout before leader exit")
+    process.stderr.feed_data(b"stderr before leader exit")
+    stopped = []
+    drains = []
+    original_drain = book_jobs._drain_limited
+
+    async def create_process(*args, **kwargs):
+        return process
+
+    async def stop_process(owned):
+        assert owned is process
+        stopped.append(owned)
+        if pipes_close_on_stop:
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+        await process.wait()
+
+    async def drain(reader, limit):
+        drains.append(asyncio.current_task())
+        return await original_drain(reader, limit)
+
+    monkeypatch.setattr(book_jobs.asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(book_jobs, "_stop_owned_process", stop_process)
+    monkeypatch.setattr(book_jobs, "_drain_limited", drain)
+    result = await asyncio.wait_for(run_process([_python()], timeout_seconds=0.025), timeout=2)
+    assert result.returncode == 0
+    assert result.timed_out and not result.cancelled
+    assert stopped == [process]
+    assert len(drains) == 2 and all(task.done() for task in drains)
+    assert result.elapsed_seconds < 1
+    if pipes_close_on_stop:
+        assert result.stdout == b"stdout before leader exit"
+        assert result.stderr == b"stderr before leader exit"
+        assert not result.stdout_truncated and not result.stderr_truncated
+    else:
+        assert result.stdout_truncated and result.stderr_truncated
+
+
+@pytest.mark.parametrize("pipes_close_on_stop", [True, False])
+@pytest.mark.asyncio
+async def test_caller_task_cancellation_propagates_after_bounded_pipe_cleanup(
+    monkeypatch: pytest.MonkeyPatch, pipes_close_on_stop: bool,
+) -> None:
+    class ExitedProcess:
+        returncode = 0
+        pid = -1
+        stdout = asyncio.StreamReader()
+        stderr = asyncio.StreamReader()
+
+        async def wait(self):
+            return self.returncode
+
+    process = ExitedProcess()
+    started = asyncio.Event()
+    stopped = []
+    drains = []
+    original_drain = book_jobs._drain_limited
+
+    async def create_process(*args, **kwargs):
+        return process
+
+    async def stop_process(owned):
+        assert owned is process
+        stopped.append(owned)
+        if pipes_close_on_stop:
+            process.stdout.feed_eof()
+            process.stderr.feed_eof()
+        await process.wait()
+
+    async def drain(reader, limit):
+        drains.append(asyncio.current_task())
+        if len(drains) == 2:
+            started.set()
+        return await original_drain(reader, limit)
+
+    monkeypatch.setattr(book_jobs.asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(book_jobs, "_stop_owned_process", stop_process)
+    monkeypatch.setattr(book_jobs, "_drain_limited", drain)
+    task = asyncio.create_task(run_process([_python()], timeout_seconds=5))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert stopped == [process]
+    assert task.cancelled()
+    assert len(drains) == 2 and all(drain.done() for drain in drains)
 
 
 @pytest.mark.asyncio

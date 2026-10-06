@@ -135,6 +135,16 @@ async def run_process(
     deadline = started + timeout_seconds
     timed_out = False
     cancelled = False
+    pipe_tasks = {stdout_task, stderr_task}
+
+    async def finish_stopped_drains() -> None:
+        # Killing the owned group normally closes its pipes. Bound cleanup as
+        # well if a pipe remains open, then await every cancelled drain task.
+        _, pending = await asyncio.wait(pipe_tasks, timeout=0.4)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pipe_tasks, return_exceptions=True)
+
     try:
         waiters: set[asyncio.Task[object]] = {wait_task}  # type: ignore[arg-type]
         if cancel_task is not None:
@@ -151,14 +161,15 @@ async def run_process(
         # Some descendants can retain inherited pipes after the leader exits.
         # Bound that wait by the same task deadline, then stop the owned group.
         remaining = max(0.0, deadline - time.monotonic())
-        try:
-            stdout_result, stderr_result = await asyncio.wait_for(
-                asyncio.gather(stdout_task, stderr_task), timeout=remaining
-            )
-        except asyncio.TimeoutError:
-            timed_out = True
+        _, pending = await asyncio.wait(pipe_tasks, timeout=remaining)
+        if pending:
+            timed_out = not cancelled
             await _stop_owned_process(process)
-            stdout_result, stderr_result = await asyncio.gather(stdout_task, stderr_task)
+            await finish_stopped_drains()
+        # A drain abandoned after bounded cleanup has incomplete output, not a
+        # task cancellation of this runner. Keep timeout/cancel-event facts.
+        stdout_result = (b"", True) if stdout_task.cancelled() else stdout_task.result()
+        stderr_result = (b"", True) if stderr_task.cancelled() else stderr_task.result()
         return ProcessResult(
             returncode=process.returncode if process.returncode is not None else -1,
             stdout=stdout_result[0],
@@ -172,7 +183,7 @@ async def run_process(
     except asyncio.CancelledError:
         cancelled = True
         await _stop_owned_process(process)
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await finish_stopped_drains()
         raise
     finally:
         if cancel_task is not None:

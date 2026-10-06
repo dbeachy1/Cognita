@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import struct
+from pathlib import Path
 
 import pytest
 
+from cognita.books import media as book_media
 from cognita.books.media import MediaValidationError, inspect_media, inspect_media_file
 from cognita.books.models import RawFormat
 
@@ -191,3 +193,78 @@ def test_raw_pcm_file_requires_exact_evidence_and_streams_hash(tmp_path) -> None
     )
     assert inspected.sample_spans == ((0, len(data)),)
     assert inspected.media.canonical_sample_sha256 == hashlib.sha256(struct.pack("<hh", 1, -2)).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("encoding", "bits", "valid_bits", "channels", "message"),
+    [
+        ("signed_integer", 16, 16, 524_289, "sample frame exceeds"),
+        ("float", 64, 64, 131_073, "sample frame exceeds"),
+    ],
+)
+def test_streamed_raw_pcm_rejects_unsupported_formats_before_sample_hashing(
+    tmp_path, monkeypatch, encoding, bits, valid_bits, channels, message,
+) -> None:
+    source_format = RawFormat.model_validate({
+        "container": "raw_pcm", "encoding": encoding, "sample_rate_hz": 8000,
+        "channels": channels, "storage_bits": bits, "valid_bits": valid_bits,
+        "endianness": "little", "interleaving": "interleaved",
+        "provider_format_evidence": "saved exact format",
+    }, strict=True)
+    path = tmp_path / "unsupported.pcm"
+    path.write_bytes(b"\x00" * (channels * bits // 8))
+
+    def unexpected_hash(*args):
+        pytest.fail("Unsupported PCM reached sample hashing")
+
+    # Keep the oversized-frame regression bounded even against the old code.
+    monkeypatch.setattr(book_media, "_hash_sample_spans", unexpected_hash)
+    with pytest.raises(MediaValidationError, match=message) as error:
+        inspect_media_file(
+            path, raw_format=source_format, provider_format_evidence="saved exact format",
+        )
+    assert error.value.code == "unsupported_media"
+
+
+def test_sample_span_hashing_refuses_a_nonprogressing_partial_frame(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "partial.pcm"
+    path.write_bytes(b"\x00")
+    fmt = book_media._PcmFormat("signed_integer", 8000, 1, 16, 16, "little")
+    original_open = Path.open
+
+    class GuardedRead:
+        def __enter__(self):
+            self.source = original_open(path, "rb")
+            return self
+
+        def __exit__(self, *args):
+            self.source.close()
+
+        def seek(self, offset):
+            return self.source.seek(offset)
+
+        def read(self, size):
+            assert size > 0, "Hashing attempted a nonprogressing read"
+            return self.source.read(size)
+
+    # A regression must fail promptly rather than leaving an infinite worker.
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: GuardedRead())
+    with pytest.raises(MediaValidationError, match="partial sample frame"):
+        book_media._hash_sample_spans(path, ((0, 1),), fmt)
+
+
+def test_streamed_raw_pcm_supports_a_frame_at_the_block_limit(tmp_path) -> None:
+    source_format = RawFormat.model_validate({
+        "container": "raw_pcm", "encoding": "signed_integer", "sample_rate_hz": 8000,
+        "channels": 524_288, "storage_bits": 16, "valid_bits": 16,
+        "endianness": "little", "interleaving": "interleaved",
+        "provider_format_evidence": "saved exact format",
+    }, strict=True)
+    data = b"\x00" * (1024 * 1024)
+    path = tmp_path / "one-frame.pcm"
+    path.write_bytes(data)
+    inspected = inspect_media_file(
+        path, raw_format=source_format, provider_format_evidence="saved exact format",
+    )
+    assert inspected.media.frame_count == "1"
+    assert inspected.media.canonical_sample_sha256 == hashlib.sha256(data).hexdigest()

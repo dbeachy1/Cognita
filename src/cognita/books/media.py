@@ -479,6 +479,8 @@ def _hash_sample_spans(path: Path, spans: tuple[tuple[int, int], ...], fmt: _Pcm
             while remaining:
                 count = min(1024 * 1024, remaining)
                 count -= count % frame_bytes
+                if count <= 0:
+                    raise MediaValidationError("invalid_audio", "PCM payload ends with a partial sample frame")
                 block = source.read(count)
                 if len(block) != count:
                     raise MediaValidationError("invalid_audio", "WAVE sample data changed or was truncated during inspection")
@@ -548,6 +550,7 @@ def inspect_media_file(
             if ffprobe is not None and _parse_probe(ffprobe).encoding == "compressed":
                 raise MediaValidationError("media_mismatch", "Raw PCM metadata cannot override detected compressed media")
             raw = _raw_pcm_format(raw_format)
+            _validate_pcm_format(raw)
             values = _format_values(raw_format)
             if values.get("provider_format_evidence") != provider_format_evidence:
                 raise MediaValidationError("media_mismatch", "RawFormat evidence differs from the saved provider evidence")
