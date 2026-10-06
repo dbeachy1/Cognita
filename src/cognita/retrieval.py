@@ -1132,6 +1132,15 @@ class RetrievalCore:
                 iter_document_files, documents_dir, self.exclude_patterns, policy
             )
             walk_found_files = bool(files)
+            # Preserve the established legacy metric even when the newer
+            # effective policy removes the same paths first.  A caller's
+            # explicit per-file suppression remains distinguishable from a
+            # folder/book/global exclusion in reindex receipts.
+            suppressed = self.deindexed_paths(project)
+            deindexed_skipped = sum(
+                filepath.relative_to(documents_dir).as_posix() in suppressed
+                for filepath in files
+            )
             effective_policy = self.effective_index_policy_for(project)
             policy_excluded = 0
             if effective_policy is not None:
@@ -1140,7 +1149,7 @@ class RetrievalCore:
                     source = filepath.relative_to(documents_dir).as_posix()
                     if self._policy_allows_source(effective_policy, source):
                         eligible_files.append(filepath)
-                    else:
+                    elif source not in suppressed:
                         policy_excluded += 1
                 files = eligible_files
             # 5.0 §10: drop cloud-sync conflict copies BEFORE anything indexes
@@ -1167,13 +1176,13 @@ class RetrievalCore:
             # they are not re-indexed, and any row left over from before the
             # suppression is swept away by delete_documents_not_in, exactly as
             # if the file had been deleted from disk.
-            suppressed = self.deindexed_paths(project)
-            deindexed_skipped = 0
             if suppressed:
                 kept = []
                 for filepath in files:
                     if filepath.relative_to(documents_dir).as_posix() in suppressed:
-                        deindexed_skipped += 1
+                        # Counted before effective-policy filtering so a
+                        # composed policy cannot erase the legacy receipt fact.
+                        pass
                     else:
                         kept.append(filepath)
                 if deindexed_skipped:

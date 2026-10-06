@@ -949,7 +949,10 @@ class BookService:
         }
 
     def list_files(self, path: str, *, recursive: bool = False, cursor: str | None = None,
-                   limit: int = 100, effective_index=None) -> dict[str, Any]:
+                   limit: int = 100, effective_index=None,
+                   effective_read_only: Callable[[str], bool] | None = None,
+                   index_state: Callable[[str], tuple[str, dict[str, str] | None]] | None = None,
+                   ) -> dict[str, Any]:
         state = self.discover_state()
         rules = state.folder_policy() if state else None
         return list_project_files(
@@ -960,6 +963,8 @@ class BookService:
                 (decision := effective_index.decision(rel)).indexed,
                 None if decision.indexed else f"{decision.reason}:{decision.matched_path or ''}",
             )) if effective_index is not None else None,
+            effective_read_only=effective_read_only,
+            index_state=index_state,
         )
 
     def read_file(self, path: str, *, offset: int = 0, max_bytes: int = 262144,

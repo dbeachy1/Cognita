@@ -667,6 +667,13 @@ class Store:
         )
         return self._doc_from_row(row) if row else None
 
+    async def indexed_source_paths(self, project: str) -> set[str]:
+        """Current derived-document identities for source inventory status."""
+        rows = await self.pool.fetch(
+            f"SELECT source FROM {_quoted_schema(project)}.documents"
+        )
+        return {str(row["source"]) for row in rows}
+
     # Every column except `content` — a listing must not drag the full text of
     # every registered document out of the database.
     _DOC_COLUMNS = """doc_id, source, category, format, keywords, content_hash,

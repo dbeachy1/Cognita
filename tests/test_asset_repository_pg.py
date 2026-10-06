@@ -1,6 +1,7 @@
 """Real PostgreSQL transaction coverage for the 7.1 asset catalog."""
 
 import hashlib
+import json
 import os
 import uuid
 from datetime import UTC, datetime
@@ -201,7 +202,7 @@ async def test_deindex_searchable_paths_keeps_catalog_identity_and_ocr_cache(rep
     catalog = await repository.get(item.filepath)
     assert catalog is not None
     assert catalog["asset_id"] == item.asset_id
-    assert catalog["metadata"] == item.metadata
+    assert json.loads(catalog["metadata"]) == item.metadata
     assert await repository.get_ocr_result(item.final_sha256, "f" * 64, "en") is not None
     assert await repository.get_ocr_source(item.filepath) is None
     assert not await repository.search_hybrid("CATALOG_EXCLUSION_TOKEN", None, 10, None, None, 0)

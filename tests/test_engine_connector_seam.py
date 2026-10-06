@@ -208,6 +208,53 @@ async def test_list_documents_actual_engine_payload_passes_result_contract(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_project_file_listing_reports_actual_index_and_blocked_outage(tmp_path):
+    """Storage listing distinguishes a derived fact from a missing index row."""
+    host, project, core = _host(tmp_path)
+    (project.documents_dir / "note.md").write_text("fixture", encoding="utf-8")
+
+    class IndexedStore:
+        async def indexed_source_paths(self, _project):
+            return {"note.md"}
+
+    host.store = core.store = IndexedStore()
+    service = host.book_service_for(project)
+    direct = service.list_files(
+        "", recursive=True, effective_index=host.effective_index_policy_for(project),
+        effective_read_only=lambda rel: host._listing_read_only_for(project, rel, None, None),
+        index_state=host._listing_index_state_for(project, service, {"note.md"}),
+    )
+    assert direct["entries"]
+    from cognita.books.schemas import success_envelope
+    success_envelope("list_project_files", direct)
+    indexed = await _post(host, project.name, "list_project_files", {
+        "project": project.name, "path": "", "recursive": True,
+    })
+    note = next(entry for entry in indexed["data"]["entries"] if entry["path"] == "note.md")
+    assert note["index_state"] == "indexed"
+    assert note["effective_read_only"] is False
+
+    class UnavailableStore:
+        async def indexed_source_paths(self, _project):
+            raise RuntimeError("database unavailable")
+
+    host.store = core.store = UnavailableStore()
+    blocked = await _post(host, project.name, "list_project_files", {
+        "project": project.name, "path": "", "recursive": True,
+    })
+    note = next(entry for entry in blocked["data"]["entries"] if entry["path"] == "note.md")
+    assert note["index_state"] == "blocked"
+    assert note["error"] == {"code": "index_unavailable", "message": "derived index is unavailable"}
+
+    project.writable = False
+    readonly = await _post(host, project.name, "list_project_files", {
+        "project": project.name, "path": "", "recursive": True,
+    })
+    note = next(entry for entry in readonly["data"]["entries"] if entry["path"] == "note.md")
+    assert note["effective_read_only"] is True
+
+
+@pytest.mark.asyncio
 async def test_remove_document_actual_engine_payload_passes_result_contract(tmp_path):
     """A successful delete with ghost forensics survives result validation."""
     host, project, core = _host(tmp_path)

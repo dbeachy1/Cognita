@@ -751,6 +751,53 @@ class LocalEngineHost(
             return {}
         return self.book_service_for(project).index_admitted_doc_ids(sources, retrieval_profile)
 
+    def _listing_read_only_for(
+        self, project: Project, relative: str, connector_id: str | None,
+        project_key_grant: str | None,
+    ) -> bool:
+        if not project.writable or self.config.remote_readonly:
+            return True
+        if connector_id is not None:
+            try:
+                access = self.connector_store.effective_access(
+                    connector_id, project.name, self.registry.projects,
+                    project_key_grant=project_key_grant,
+                )
+            except ConnectorPolicyError:
+                return True
+            if access is None or access.access != "write":
+                return True
+        target = Path(project.documents_dir) / relative
+        if not os.access(target, os.W_OK):
+            return True
+        decision = self.book_mutation_policy_for(project).decide(
+            relative, operation="write", source_exists=target.is_file(),
+        )
+        return not decision.allowed
+
+    def _listing_index_state_for(
+        self, project: Project, service: BookService,
+        indexed_sources: set[str] | None,
+    ):
+        state = service.discover_state()
+        pending = state.pending_policy_jobs() if state is not None else []
+
+        def callback(relative: str) -> tuple[str, dict[str, str] | None]:
+            for job in pending:
+                path = job["details"].get("path")
+                if isinstance(path, str) and (not path or relative == path or relative.startswith(path + "/")):
+                    return "pending", {"code": "index_cleanup_pending", "message": "derived index cleanup is pending"}
+            if indexed_sources is None:
+                return "blocked", {"code": "index_unavailable", "message": "derived index is unavailable"}
+            record = state.indexed_role_provenance(relative) if state is not None else None
+            if record is not None:
+                if not service.index_provenance_is_current(record):
+                    return "stale", {"code": "source_changed", "message": "indexed source facts are no longer current"}
+                return ("indexed", None) if relative in indexed_sources else ("not_indexed", None)
+            return ("indexed", None) if relative in indexed_sources else ("not_indexed", None)
+
+        return callback
+
     async def _dispatch_book_tool(
         self, project: Project, tool: str, args: dict, *,
         trusted_connector_id: str | None,
@@ -843,12 +890,26 @@ class LocalEngineHost(
                 elif tool == "audiobook_get_generations":
                     data = service.get_generations(request_model)
                 elif tool == "list_project_files":
+                    indexed_sources = None
+                    source_paths = getattr(self.store, "indexed_source_paths", None)
+                    if source_paths is not None:
+                        try:
+                            indexed_sources = await source_paths(project.name)
+                        except Exception:
+                            # Project files remain browsable during a disposable
+                            # store outage; eligible entries report the blocked
+                            # derived fact rather than an invented not-indexed state.
+                            indexed_sources = None
                     data = service.list_files(
                         request_model.path,
                         recursive=request_model.recursive if "recursive" in request_model.model_fields_set else False,
                         cursor=request_model.cursor if "cursor" in request_model.model_fields_set else None,
                         limit=request_model.limit if "limit" in request_model.model_fields_set else 100,
                         effective_index=self.effective_index_policy_for(project),
+                        effective_read_only=lambda rel: self._listing_read_only_for(
+                            project, rel, trusted_connector_id, trusted_project_key_project,
+                        ),
+                        index_state=self._listing_index_state_for(project, service, indexed_sources),
                     )
                 elif tool == "read_project_file":
                     data = service.read_file(
