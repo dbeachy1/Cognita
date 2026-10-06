@@ -703,22 +703,76 @@ class BookService:
             return
         authorization_id = scope.get("authorization_id") if scope.get("kind") == "test" else None
         config = self.config()
-        authorization = next((item for item in (config.layout.test_authorizations if config.layout else [])
-                              if item.authorization_id == authorization_id and item.chapter_id == chapter_id), None)
-        if authorization is None or authorization.revoked:
-            raise BookServiceError("not_authorized", "The requested test snapshot is no longer authorized.")
-        try:
-            expires_at = datetime.fromisoformat(str(authorization.expires_at).replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise BookServiceError("state_unavailable", "The test authorization expiry is malformed.") from exc
-        if expires_at <= datetime.now(timezone.utc):
-            raise BookServiceError("not_authorized", "The requested test snapshot is no longer authorized.")
+        layout = config.layout
+        chapter = self._chapter(layout, chapter_id) if layout is not None else None
+        payload = stored.get("payload", {})
+        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        if chapter is None or not isinstance(result, dict):
+            raise BookServiceError("state_unavailable", "The stored test snapshot is malformed.")
+        prose_filepath, tagged_filepath = self._snapshot_working_pair(payload, chapter)
+        expected_raw_sha256 = result.get("snapshot_prose_sha256")
+        self._active_test_authorization_for_hash(
+            layout, chapter, authorization_id=authorization_id,
+            prose_filepath=prose_filepath, tagged_filepath=tagged_filepath,
+            prose_sha256=expected_raw_sha256,
+            selected_ordinals=payload.get("selected_source_ordinals"),
+            failure_reason="not_authorized",
+        )
 
     def _chapter(self, layout: BookLayout, chapter_id: str):
         for chapter in layout.chapters:
             if chapter.chapter_id == chapter_id:
                 return chapter
         raise BookServiceError("chapter_not_found", "The requested chapter is not registered.")
+
+    def _active_test_authorization(
+        self, layout: BookLayout, chapter, *, authorization_id: str | None,
+        prose_filepath: str, tagged_filepath: str, prose_bytes: bytes,
+        selected_ordinals: list[int] | None = None,
+    ):
+        """Resolve one currently active test authorization for its exact source pair."""
+        return self._active_test_authorization_for_hash(
+            layout, chapter, authorization_id=authorization_id,
+            prose_filepath=prose_filepath, tagged_filepath=tagged_filepath,
+            prose_sha256=hashlib.sha256(prose_bytes).hexdigest(),
+            selected_ordinals=selected_ordinals,
+        )
+
+    @staticmethod
+    def _active_test_authorization_for_hash(
+        layout: BookLayout, chapter, *, authorization_id: str | None,
+        prose_filepath: str, tagged_filepath: str, prose_sha256: str | None,
+        selected_ordinals: list[int] | None = None, failure_reason: str = "test_scope_not_authorized",
+    ):
+        """Resolve current authorization against captured or live raw identity."""
+        now = datetime.now(timezone.utc)
+        for authorization in layout.test_authorizations:
+            if (authorization_id is not None and authorization.authorization_id != authorization_id) or (
+                authorization.chapter_id != chapter.chapter_id
+                or authorization.prose_filepath != prose_filepath
+                or authorization.tagged_filepath != tagged_filepath
+                or authorization.revoked
+                or authorization.source_raw_sha256 != prose_sha256
+            ):
+                continue
+            try:
+                authorized_at = datetime.fromisoformat(authorization.authorized_at.replace("Z", "+00:00"))
+                expires_at = datetime.fromisoformat(authorization.expires_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if (authorized_at <= now < expires_at
+                    and (selected_ordinals is None
+                         or set(selected_ordinals).issubset(set(authorization.allowed_paragraph_ordinals)))):
+                return authorization
+        raise BookServiceError(failure_reason, "The test authorization is not active for this exact source pair.")
+
+    @staticmethod
+    def _snapshot_working_pair(snapshot_payload: dict[str, Any], chapter) -> tuple[str, str]:
+        """Keep selected live files distinct from immutable snapshot artifact paths."""
+        return (
+            snapshot_payload.get("working_prose_filepath", chapter.working_filepath),
+            snapshot_payload.get("working_tagged_filepath", chapter.tagged_filepath),
+        )
 
     def _production_facts(self, layout: BookLayout, chapter, *, require_authorization: bool = True):
         """Resolve live approval, source and canonical production settings once."""
@@ -894,9 +948,22 @@ class BookService:
             try:
                 chapter = self._chapter(layout, payload["chapter_id"])
                 target_relative = payload["target_filepath"]
-                if (payload["book_id"] != layout.book_id or chapter.tagged_filepath != target_relative
-                        or payload["kind"] != "chapter_bookmark_prepare"):
+                if payload["book_id"] != layout.book_id or payload["kind"] != "chapter_bookmark_prepare":
                     raise ValueError("registration binding mismatch")
+                if target_relative != chapter.tagged_filepath:
+                    scope = json.loads(payload["scope_key"])
+                    if scope.get("kind") != "test":
+                        raise ValueError("alternate bookmark target lacks test scope")
+                    prose_relative = payload["working_prose_filepath"]
+                    snapshot = state.snapshot(payload["snapshot_id"])
+                    if snapshot is None:
+                        raise ValueError("alternate bookmark snapshot is unavailable")
+                    self._active_test_authorization(
+                        layout, chapter, authorization_id=scope.get("authorization_id"),
+                        prose_filepath=prose_relative, tagged_filepath=target_relative,
+                        prose_bytes=_read_bytes(self.root, prose_relative),
+                        selected_ordinals=snapshot["payload"].get("selected_source_ordinals"),
+                    )
                 target = _path(self.root, target_relative)
                 old_hash, new_hash = payload["old_sha256"], payload["new_sha256"]
                 backup = owned_path(payload["backup_filepath"], old_hash)
@@ -1173,6 +1240,22 @@ class BookService:
             if (payload.get("document_view_id") != view_id
                     or payload.get("projection", {}).get("document_view_id") != projected.document_view_id):
                 raise BookServiceError("invalid_cursor", "The text cursor is invalid or stale.")
+            config = load_book_config(self.root, state)
+            if config.layout is None:
+                raise BookServiceError("configuration_conflict", "Book configuration is not valid for inspection.")
+            chapter = self._chapter(config.layout, request.chapter_id)
+            if (request.prose_filepath, request.tagged_filepath) != (
+                chapter.working_filepath, chapter.tagged_filepath
+            ):
+                self._active_test_authorization_for_hash(
+                    config.layout, chapter, authorization_id=None,
+                    prose_filepath=request.prose_filepath, tagged_filepath=request.tagged_filepath,
+                    prose_sha256=payload.get("projection", {}).get("prose_sha256"),
+                    selected_ordinals=[
+                        item.source_ordinal for item in projected.paragraphs
+                        if item.speech_start is not None
+                    ],
+                )
             return self._inspect_page(projected, view_id=view_id, offset=offset, page_size=page_size)
 
         config = load_book_config(self.root, state)
@@ -1182,8 +1265,16 @@ class BookService:
         if config.config_state not in {"enabled", "bootstrap_pending"} or config.layout is None:
             raise BookServiceError("configuration_conflict", "Book configuration is not valid for inspection.")
         chapter = self._chapter(config.layout, request.chapter_id)
-        if (request.prose_filepath, request.tagged_filepath) != (chapter.working_filepath, chapter.tagged_filepath):
-            raise BookServiceError("permission_denied", "Inspection paths must match the registered chapter sources.")
+        selected_authorization = None
+        registered_pair = (chapter.working_filepath, chapter.tagged_filepath)
+        requested_pair = (request.prose_filepath, request.tagged_filepath)
+        if requested_pair != registered_pair:
+            prose_for_admission = _read_bytes(self.root, request.prose_filepath)
+            selected_authorization = self._active_test_authorization(
+                config.layout, chapter, authorization_id=None,
+                prose_filepath=request.prose_filepath, tagged_filepath=request.tagged_filepath,
+                prose_bytes=prose_for_admission,
+            )
         refinement_fields = {"speech_paragraph_ids", "excluded_paragraphs", "explicit_tag_spans"}
         refining = bool(refinement_fields & request.model_fields_set)
         if refining and "base_document_view_id" not in request.model_fields_set:
@@ -1202,14 +1293,14 @@ class BookService:
                     or base_payload.get("tagged_filepath") != request.tagged_filepath):
                 raise BookServiceError("view_not_found", "The base document view does not match this chapter and source pair.")
             prose_bytes, tagged_bytes = self._pinned_view_bytes(base_payload)
-            current_prose = _read_bytes(self.root, chapter.working_filepath)
-            current_tagged = _read_bytes(self.root, chapter.tagged_filepath)
+            current_prose = _read_bytes(self.root, request.prose_filepath)
+            current_tagged = _read_bytes(self.root, request.tagged_filepath)
             if (hashlib.sha256(current_prose).hexdigest() != base_payload["projection"]["prose_sha256"]
                     or hashlib.sha256(current_tagged).hexdigest() != base_payload["projection"]["tagged_sha256"]):
                 raise BookServiceError("stale_file", "The registered source changed after the base view was captured.")
         else:
-            prose_bytes = _read_bytes(self.root, chapter.working_filepath)
-            tagged_bytes = _read_bytes(self.root, chapter.tagged_filepath)
+            prose_bytes = _read_bytes(self.root, request.prose_filepath)
+            tagged_bytes = _read_bytes(self.root, request.tagged_filepath)
 
         speech_ids = (
             list(request.speech_paragraph_ids) if "speech_paragraph_ids" in request.model_fields_set
@@ -1232,16 +1323,22 @@ class BookService:
             )
         except ProjectionError as exc:
             raise BookServiceError(exc.code, str(exc)) from exc
+        if selected_authorization is not None:
+            selected_ordinals = {
+                item.source_ordinal for item in projected.paragraphs if item.speech_start is not None
+            }
+            if not selected_ordinals.issubset(set(selected_authorization.allowed_paragraph_ordinals)):
+                raise BookServiceError("test_scope_not_authorized", "The selected paragraphs exceed the active test authorization.")
         view_id = _bound_document_view_id(
             projected.document_view_id, chapter_id=chapter.chapter_id,
-            prose_filepath=chapter.working_filepath, tagged_filepath=chapter.tagged_filepath,
+            prose_filepath=request.prose_filepath, tagged_filepath=request.tagged_filepath,
             layout_revision=config.layout.layout_revision,
         )
         view_payload = {
             "document_view_id": view_id,
             "projection": _data(projected),
-            "prose_filepath": chapter.working_filepath,
-            "tagged_filepath": chapter.tagged_filepath,
+            "prose_filepath": request.prose_filepath,
+            "tagged_filepath": request.tagged_filepath,
             "chapter_id": chapter.chapter_id,
             "layout_revision": config.layout.layout_revision,
             "speech_paragraph_ids": list(projected.paragraph_ids) if speech_ids is None else speech_ids,
@@ -1314,10 +1411,14 @@ class BookService:
             raise BookServiceError("view_expired", "The pinned document view has expired.")
         payload = view_row["payload"]
         projected_data = payload["projection"]
+        working_prose_filepath = payload.get("prose_filepath")
+        working_tagged_filepath = payload.get("tagged_filepath")
+        if not isinstance(working_prose_filepath, str) or not isinstance(working_tagged_filepath, str):
+            raise BookServiceError("view_not_found", "The document view must be recreated before preparation.")
         if payload["layout_revision"] != layout.layout_revision:
             raise BookServiceError("stale_configuration", "The book layout changed after inspection.")
-        prose_bytes = _read_bytes(self.root, chapter.working_filepath)
-        tagged_bytes = _read_bytes(self.root, chapter.tagged_filepath)
+        prose_bytes = _read_bytes(self.root, working_prose_filepath)
+        tagged_bytes = _read_bytes(self.root, working_tagged_filepath)
         if (hashlib.sha256(prose_bytes).hexdigest() != request.expected_prose_sha256
                 or hashlib.sha256(tagged_bytes).hexdigest() != request.expected_tagged_sha256
                 or request.expected_prose_sha256 != projected_data["prose_sha256"]
@@ -1331,7 +1432,7 @@ class BookService:
         )
         expected_view_id = _bound_document_view_id(
             projected.document_view_id, chapter_id=chapter.chapter_id,
-            prose_filepath=chapter.working_filepath, tagged_filepath=chapter.tagged_filepath,
+            prose_filepath=working_prose_filepath, tagged_filepath=working_tagged_filepath,
             layout_revision=layout.layout_revision,
         )
         if (request.document_view_id != expected_view_id
@@ -1350,6 +1451,8 @@ class BookService:
         production_settings_sha256: str | None = None
         prepared_production_target: dict[str, Any] | None = None
         if isinstance(request.scope, dto.ProductionScope):
+            if (working_prose_filepath, working_tagged_filepath) != (chapter.working_filepath, chapter.tagged_filepath):
+                raise BookServiceError("production_not_authorized", "Production uses the registered chapter source pair only.")
             if projected.unsupported:
                 raise BookServiceError(
                     "unsupported_docx_structure",
@@ -1391,16 +1494,11 @@ class BookService:
             production_settings_sha256 = settings_sha
             prepared_production_target = _data(settings.production_target)
         else:
-            auth = next((item for item in layout.test_authorizations
-                         if item.authorization_id == request.scope.authorization_id), None)
-            now = datetime.now(timezone.utc)
-            if (auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id
-                    or auth.prose_filepath != chapter.working_filepath
-                    or auth.tagged_filepath != chapter.tagged_filepath
-                    or auth.source_raw_sha256 != projected.prose_sha256
-                    or now < datetime.fromisoformat(auth.authorized_at.replace("Z", "+00:00"))
-                    or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00"))):
-                raise BookServiceError("test_scope_not_authorized", "The test authorization is absent, stale, revoked, or expired.")
+            auth = self._active_test_authorization(
+                layout, chapter, authorization_id=request.scope.authorization_id,
+                prose_filepath=working_prose_filepath, tagged_filepath=working_tagged_filepath,
+                prose_bytes=prose_bytes,
+            )
             selected_ordinals = {p.source_ordinal for p in projected.paragraphs if p.speech_start is not None}
             if not selected_ordinals.issubset(set(auth.allowed_paragraph_ordinals)):
                 raise BookServiceError("test_scope_not_authorized", "The selected paragraphs exceed the test authorization.")
@@ -1536,7 +1634,7 @@ class BookService:
             limit=request.request_limit.value, unit=request.request_limit.unit,
         )
         if request.publish_bookmarks_to_working_tagged_docx:
-            _require_unlocked(_path(self.root, chapter.tagged_filepath))
+            _require_unlocked(_path(self.root, working_tagged_filepath))
 
         _mkdir_safe(self.root, snapshot_dir.relative_to(self.root).as_posix())
         for path, content in ((prose_path, prose_bytes), (tagged_path, tagged_snapshot_bytes),
@@ -1660,7 +1758,7 @@ class BookService:
             "spoken_projection_sha256": projected.spoken_projection_sha256,
             "request_plan_sha256": plan_sha,
             "snapshot_filepath": prose_path.relative_to(self.root).as_posix(),
-            "working_tagged_filepath": chapter.tagged_filepath,
+            "working_tagged_filepath": working_tagged_filepath,
             "working_tagged_updated": request.publish_bookmarks_to_working_tagged_docx,
             "chunks": chunks, "retired_chunk_ids": retired_chunk_ids,
             "coverage": _data(coverage), "current_outputs_stale": True,
@@ -1683,9 +1781,15 @@ class BookService:
             ),
             "production_target": prepared_production_target,
             "speech_paragraph_ids": selected_ids,
+            "selected_source_ordinals": [
+                paragraph.source_ordinal for paragraph in projected.paragraphs
+                if paragraph.paragraph_id in set(selected_ids)
+            ],
             "excluded_paragraphs": excluded_values,
             "explicit_tag_spans": explicit_values,
             "projection_version": projected.projection_version,
+            "working_prose_filepath": working_prose_filepath,
+            "working_tagged_filepath": working_tagged_filepath,
         }
         if isinstance(request.scope, dto.ProductionScope):
             approval = chapter_state.approval_provenance
@@ -1703,7 +1807,7 @@ class BookService:
             }
         journal_id: str | None = None
         if request.publish_bookmarks_to_working_tagged_docx:
-            target = _path(self.root, chapter.tagged_filepath)
+            target = _path(self.root, working_tagged_filepath)
             old_hash = hashlib.sha256(tagged_bytes).hexdigest()
             new_hash = hashlib.sha256(tagged_snapshot_bytes).hexdigest()
             if _file_sha256(target) != old_hash:
@@ -1725,7 +1829,8 @@ class BookService:
             journal_payload = {
                 "kind": "chapter_bookmark_prepare", "book_id": layout.book_id,
                 "chapter_id": chapter.chapter_id, "scope_key": scope_key,
-                "target_filepath": chapter.tagged_filepath,
+                "working_prose_filepath": working_prose_filepath,
+                "target_filepath": working_tagged_filepath,
                 "old_sha256": old_hash, "new_sha256": new_hash,
                 "backup_filepath": backup_path.relative_to(self.root).as_posix(),
                 "stage_filepath": stage_path.relative_to(self.root).as_posix(),
@@ -1806,6 +1911,8 @@ class BookService:
         stored = state.snapshot(snapshot_id) if snapshot_id else None
         if stored is not None and (stored["chapter_id"] != chapter.chapter_id or stored["scope_key"] != scope_key):
             raise BookServiceError("snapshot_not_found", "The snapshot does not belong to this chapter.")
+        if stored is not None:
+            self._authorize_snapshot_read(stored, chapter.chapter_id)
         snap = stored["payload"] if stored else {}
         result_data = snap.get("result", {})
         chunks = [dict(item) for item in result_data.get("chunks", [])]
@@ -1832,8 +1939,14 @@ class BookService:
                         "changed" if reason == "source_changed" else "unapproved"
                     )
                 else:
-                    current_raw = hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
-                    source_status = "eligible" if current_raw == result_data.get("snapshot_prose_sha256") else "changed"
+                    working_prose, working_tagged = self._snapshot_working_pair(snap, chapter)
+                    current = _read_bytes(self.root, working_prose)
+                    self._active_test_authorization(
+                        layout, chapter, authorization_id=scope.authorization_id,
+                        prose_filepath=working_prose, tagged_filepath=working_tagged, prose_bytes=current,
+                        selected_ordinals=snap.get("selected_source_ordinals"),
+                    )
+                    source_status = "eligible" if hashlib.sha256(current).hexdigest() == result_data.get("snapshot_prose_sha256") else "changed"
             except (BookServiceError, ValueError):
                 source_status = "blocked"
         metadata: list[tuple[str, Any]] = [
@@ -3000,14 +3113,13 @@ class BookService:
                     or namespace.get("current_plan_sha256") != item.request_plan_sha256):
                 raise BookServiceError("stale_dependency", f"The production chapter plan is no longer eligible ({reason}).")
         else:
-            auth = next((entry for entry in layout.test_authorizations
-                         if entry.authorization_id == scope.get("authorization_id")), None)
-            now = datetime.now(timezone.utc)
-            if (auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id
-                    or auth.source_raw_sha256 != hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
-                    or now < datetime.fromisoformat(auth.authorized_at.replace("Z", "+00:00"))
-                    or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00"))):
-                raise BookServiceError("test_scope_not_authorized", "The test authorization is no longer active for the current source.")
+            working_prose, working_tagged = self._snapshot_working_pair(snapshot, chapter)
+            self._active_test_authorization(
+                layout, chapter, authorization_id=scope.get("authorization_id"),
+                prose_filepath=working_prose, tagged_filepath=working_tagged,
+                prose_bytes=_read_bytes(self.root, working_prose),
+                selected_ordinals=stored["payload"].get("selected_source_ordinals"),
+            )
         if [value.chunk_id for value in item.takes] != [value.get("chunk_id") for value in chunks]:
             raise BookServiceError("coverage_incomplete", "Build takes must cover frozen chunks exactly once in frozen order.")
         source_take_ids: list[str] = []
@@ -3093,6 +3205,14 @@ class BookService:
         scope = json.loads(stored["scope_key"])
         if scope.get("kind") != "test":
             raise BookServiceError("permission_denied", "MP3 stream-copy is available only in an authorized test namespace.")
+        chapter = self._chapter(layout, item.chapter_id)
+        working_prose, working_tagged = self._snapshot_working_pair(stored["payload"], chapter)
+        self._active_test_authorization(
+            layout, chapter, authorization_id=scope.get("authorization_id"),
+            prose_filepath=working_prose, tagged_filepath=working_tagged,
+            prose_bytes=_read_bytes(self.root, working_prose),
+            selected_ordinals=stored["payload"].get("selected_source_ordinals"),
+        )
         namespace = state.namespace(item.chapter_id, stored["scope_key"])
         if namespace is None or namespace.get("head_revision") != request.expected_head_revision:
             raise BookServiceError("stale_head", "The chapter head changed before build admission.")
@@ -3604,19 +3724,20 @@ class BookService:
         # equals current registered prose; it never rewrites working documents.
         scope = json.loads(build["scope_key"])
         if scope.get("kind") == "test":
-            prose = _read_bytes(self.root, chapter.working_filepath)
-            tagged = _read_bytes(self.root, chapter.tagged_filepath)
+            working_prose, working_tagged = self._snapshot_working_pair(stored["payload"], chapter)
+            prose = _read_bytes(self.root, working_prose)
+            tagged = _read_bytes(self.root, working_tagged)
             projected = project_docx_pair(prose, tagged)
             if projected.prose_projection_sha256 != snap_result.get("prose_projection_sha256"):
                 raise BookServiceError("stale_source", "The current test prose differs from this frozen build.")
             if (request.intent == "rollback"
                     and projected.spoken_projection_sha256 != snap_result.get("spoken_projection_sha256")):
                 raise BookServiceError("stale_source", "Test rollback requires the same currently authorized spoken projection.")
-            auth = next((entry for entry in layout.test_authorizations
-                         if entry.authorization_id == scope.get("authorization_id")), None)
-            now = datetime.now(timezone.utc)
-            if auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id or auth.source_raw_sha256 != hashlib.sha256(prose).hexdigest() or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00")):
-                raise BookServiceError("test_scope_not_authorized", "The test authorization is no longer active for this source.")
+            self._active_test_authorization(
+                layout, chapter, authorization_id=scope.get("authorization_id"),
+                prose_filepath=working_prose, tagged_filepath=working_tagged, prose_bytes=prose,
+                selected_ordinals=stored["payload"].get("selected_source_ordinals"),
+            )
         elif scope.get("kind") == "production":
             eligible, reason = self._production_snapshot_eligible(
                 state, layout, chapter, stored,

@@ -184,6 +184,64 @@ def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, 
     return service.prepare(request, owner_key="principal:fixture")[0]
 
 
+def _authorized_alternate_pair(root: Path, *, authorization_id: str = "alternate-auth") -> tuple[bytes, bytes]:
+    """Register a test-only pair without changing the production chapter paths."""
+    prose = _docx("alternate prose")
+    tagged = _docx("alternate prose")
+    alternate = root / "Chapters/1/Test"
+    alternate.mkdir(parents=True)
+    (alternate / "chapter.docx").write_bytes(prose)
+    (alternate / "chapter_audio-tags.docx").write_bytes(tagged)
+    layout_path = root / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    now = datetime.now(timezone.utc)
+    layout["test_authorizations"].append({
+        "authorization_id": authorization_id, "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/Test/chapter.docx",
+        "tagged_filepath": "Chapters/1/Test/chapter_audio-tags.docx",
+        "allowed_paragraph_ordinals": [0],
+        "source_raw_sha256": hashlib.sha256(prose).hexdigest(),
+        "actor": "fixture", "authorized_at": (now - timedelta(minutes=1)).isoformat(),
+        "expires_at": (now + timedelta(hours=1)).isoformat(), "revoked": False,
+    })
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    return prose, tagged
+
+
+def _prepare_alternate_test_plan(
+    service: BookService, prose: bytes, tagged: bytes, *, operation_id: str, publish: bool = False,
+):
+    initial = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/Test/chapter.docx",
+        "tagged_filepath": "Chapters/1/Test/chapter_audio-tags.docx",
+    }))
+    refined = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/Test/chapter.docx",
+        "tagged_filepath": "Chapters/1/Test/chapter_audio-tags.docx",
+        "base_document_view_id": initial["document_view_id"],
+        "speech_paragraph_ids": [initial["paragraphs"][0]["paragraph_id"]],
+    }))
+    return service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": operation_id, "chapter_id": "ch1",
+        "document_view_id": refined["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None,
+        "scope": {"kind": "test", "authorization_id": "alternate-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "alternate", "start": 0, "end": len(refined["speech_text"]),
+                    "request_spec": {
+                        "provider": "synthetic", "route": "fixture", "model_id": "model",
+                        "voice_id": "alternate", "parameters": {}, "context_fields": {"language": "en"},
+                    }}],
+        "publish_bookmarks_to_working_tagged_docx": publish,
+    }), owner_key="principal:fixture")[0]
+
+
 def _import_native_take(service, prepared, chunk_id, *, operation_prefix):
     chunk = next(item for item in prepared["chunks"] if item["chunk_id"] == chunk_id)
     spec = chunk["request_spec"]
@@ -2762,6 +2820,136 @@ def test_native_generation_mp3_is_retained_but_production_pcm_build_rejects_it(t
             "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
         }), owner_key="principal:fixture")
     assert rejected.value.reason == "native_pcm_required"
+
+
+def test_authorized_alternate_pair_drives_test_prepare_import_build_and_commit(tmp_path):
+    service, production_prose, production_tagged = _fixture(tmp_path)
+    alternate_prose, alternate_tagged = _authorized_alternate_pair(tmp_path)
+    prepared = _prepare_alternate_test_plan(
+        service, alternate_prose, alternate_tagged, operation_id="alternate-prepare",
+    )
+    assert prepared["working_tagged_filepath"] == "Chapters/1/Test/chapter_audio-tags.docx"
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(prepared["snapshot_id"])
+    assert snapshot is not None
+    assert snapshot["payload"]["working_prose_filepath"] == "Chapters/1/Test/chapter.docx"
+    assert snapshot["payload"]["working_tagged_filepath"] == "Chapters/1/Test/chapter_audio-tags.docx"
+
+    chapter = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "scope": {"kind": "test", "authorization_id": "alternate-auth"},
+        "snapshot_id": prepared["snapshot_id"],
+    }))
+    assert chapter["source_status"] == "eligible"
+    take = _import_native_take(service, prepared, "alternate", operation_prefix="alternate-take")
+    build_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "alternate-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": "alternate", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, replayed = service.build(build_request, owner_key="principal:fixture")
+    assert not replayed
+    service.run_build_job(queued["job_id"])
+    candidate = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert candidate["state"] == "succeeded", candidate
+    committed, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "alternate-commit",
+        "build_id": candidate["result"]["build_id"], "expected_head_revision": None,
+        "intent": "accept_candidate", "acceptance": {
+            "actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+            "listening_review": "passed", "notes": ["alternate pair"],
+        },
+    }), owner_key="principal:fixture")
+    assert committed["head_revision"] == 1
+    assert (tmp_path / "Chapters/1/chapter.docx").read_bytes() == production_prose
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == production_tagged
+
+
+def test_alternate_bookmark_publication_targets_only_authorized_tagged_copy(tmp_path):
+    service, _production_prose, production_tagged = _fixture(tmp_path)
+    alternate_prose, alternate_tagged = _authorized_alternate_pair(tmp_path)
+    prepared = _prepare_alternate_test_plan(
+        service, alternate_prose, alternate_tagged,
+        operation_id="alternate-bookmark-prepare", publish=True,
+    )
+    assert prepared["working_tagged_updated"] is True
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == production_tagged
+    assert (tmp_path / "Chapters/1/Test/chapter_audio-tags.docx").read_bytes() != alternate_tagged
+
+
+@pytest.mark.parametrize("change", ["revoked", "expired", "not_yet_active", "hash", "ordinals"])
+def test_alternate_pair_authorization_denials_are_checked_before_prepare(tmp_path, change):
+    service, _prose, _tagged = _fixture(tmp_path)
+    alternate_prose, alternate_tagged = _authorized_alternate_pair(tmp_path)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    authorization = next(item for item in layout["test_authorizations"] if item["authorization_id"] == "alternate-auth")
+    now = datetime.now(timezone.utc)
+    if change == "revoked":
+        authorization["revoked"] = True
+    elif change == "expired":
+        authorization["expires_at"] = (now - timedelta(seconds=1)).isoformat()
+    elif change == "not_yet_active":
+        authorization["authorized_at"] = (now + timedelta(minutes=1)).isoformat()
+    elif change == "hash":
+        authorization["source_raw_sha256"] = "0" * 64
+    else:
+        authorization["allowed_paragraph_ordinals"] = [1]
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    with pytest.raises(BookServiceError) as denied:
+        _prepare_alternate_test_plan(service, alternate_prose, alternate_tagged, operation_id=f"alternate-denied-{change}")
+    assert denied.value.reason == "test_scope_not_authorized"
+
+
+def test_alternate_cursor_and_historical_snapshot_keep_distinct_authorization_boundaries(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path)
+    alternate_prose, alternate_tagged = _authorized_alternate_pair(tmp_path)
+    initial = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/Test/chapter.docx",
+        "tagged_filepath": "Chapters/1/Test/chapter_audio-tags.docx",
+        "max_characters": 1,
+    }))
+    assert initial["next_cursor"]
+    prepared = _prepare_alternate_test_plan(
+        service, alternate_prose, alternate_tagged, operation_id="alternate-historical-prepare",
+    )
+    # Current eligibility observes a changed alternate source, but frozen history
+    # stays readable while its authorization still binds the captured raw bytes.
+    changed = _docx("alternate prose changed")
+    (tmp_path / "Chapters/1/Test/chapter.docx").write_bytes(changed)
+    chapter = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "scope": {"kind": "test", "authorization_id": "alternate-auth"},
+        "snapshot_id": prepared["snapshot_id"],
+    }))
+    assert chapter["source_status"] == "blocked"
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    authorization = next(item for item in layout["test_authorizations"] if item["authorization_id"] == "alternate-auth")
+    authorization["revoked"] = True
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    with pytest.raises(BookServiceError) as cursor_denied:
+        service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/Test/chapter.docx",
+            "tagged_filepath": "Chapters/1/Test/chapter_audio-tags.docx",
+            "cursor": initial["next_cursor"], "max_characters": 1,
+        }))
+    assert cursor_denied.value.reason == "test_scope_not_authorized"
+    with pytest.raises(BookServiceError) as historical_denied:
+        service.get_chapter(GetChapterRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "scope": {"kind": "test", "authorization_id": "alternate-auth"},
+            "snapshot_id": prepared["snapshot_id"],
+        }))
+    assert historical_denied.value.reason == "not_authorized"
 
 
 def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path, monkeypatch):
