@@ -31,7 +31,9 @@ from cognita.books.config import BookLayout
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
 from cognita.books.docx import parse_docx
+from cognita.books.projection import project_docx_pair
 from cognita.books.jobs import PacketFact
+from cognita.books.fingerprint import canonical_json_sha256
 import cognita.books.service as service_module
 
 
@@ -150,7 +152,7 @@ def _inspect(service: BookService) -> dict:
     return service.inspect(request)
 
 
-def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks, *, publish=False):
+def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks, *, publish=False, authorization_id="test-auth"):
     inspected = _inspect(service)
     request = PrepareRequest.model_validate({
         "project": "fixture", "operation_id": operation_id, "chapter_id": "ch1",
@@ -158,13 +160,60 @@ def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, 
         "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
         "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
         "expected_manifest_revision": expected_revision,
-        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "scope": {"kind": "test", "authorization_id": authorization_id},
         "speech_selection_confirmed": True,
         "request_limit": {"value": 100, "unit": "unicode_codepoints"},
         "expected_settings_sha256": None, "production_target": None,
         "chunks": chunks, "publish_bookmarks_to_working_tagged_docx": publish,
     })
     return service.prepare(request, owner_key="principal:fixture")[0]
+
+
+def _import_native_take(service, prepared, chunk_id, *, operation_prefix):
+    chunk = next(item for item in prepared["chunks"] if item["chunk_id"] == chunk_id)
+    spec = chunk["request_spec"]
+    reserved, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-reserve", "change": {
+            "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+            "chunk_id": chunk_id, "expected_manifest_revision": prepared["manifest_revision"],
+            "request": {"prompt_sha256": chunk["prompt_sha256"], "spec": spec},
+        },
+    }), owner_key="principal:fixture")
+    generation_id = reserved["generation"]["generation_record_id"]
+    submitted, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-submit", "change": {
+            "kind": "update", "generation_record_id": generation_id, "expected_generation_revision": 1,
+            "state": "submitted", "provider_ids": {"generation_ids": [f"{operation_prefix}-provider"]},
+            "provider_response_metadata": {"format": "synthetic local fixture"},
+        },
+    }), owner_key="principal:fixture")
+    service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-complete", "change": {
+            "kind": "update", "generation_record_id": generation_id,
+            "expected_generation_revision": submitted["generation"]["generation_revision"],
+            "state": "completed", "provider_ids": {"generation_ids": [f"{operation_prefix}-provider"]},
+        },
+    }), owner_key="principal:fixture")
+    samples = b"\x00\x00\x01\x00\xff\xff\x02\x00"
+    relative = f"Audiobook/Chapters/1/{operation_prefix}.pcm"
+    source = service.root / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(samples)
+    imported, _ = service.import_audio(ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-import",
+        "generation_record_id": generation_id,
+        "expected_generation_revision": submitted["generation"]["generation_revision"] + 1,
+        "source": {"kind": "project_file", "filepath": relative,
+                   "expected_sha256": hashlib.sha256(samples).hexdigest()},
+        "provenance": "native_generation",
+        "source_format": {
+            "container": "raw_pcm", "encoding": "signed_integer", "sample_rate_hz": 8000,
+            "channels": 1, "storage_bits": 16, "valid_bits": 16, "endianness": "little",
+            "interleaving": "interleaved", "provider_format_evidence": "synthetic local fixture",
+        },
+    }), owner_key="principal:fixture")
+    service.run_import_job(imported["job_id"])
+    return service.get_job(GetJobRequest(project="fixture", job_id=imported["job_id"]))["result"]["take"]
 
 
 def test_chunk_lineage_split_merge_keeps_later_ids_and_permanently_retires_ids(tmp_path):
@@ -207,6 +256,60 @@ def test_chunk_lineage_split_merge_keeps_later_ids_and_permanently_retires_ids(t
             {"chunk_id": "d", "start": 4, "end": 5, "request_spec": None},
         ])
     assert recycled.value.reason == "duplicate_or_recycled_chunk_id"
+
+
+def test_one_chunk_retakes_while_exact_unchanged_chunk_reuses_take_after_tagged_refresh(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    voice_a = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+               "voice_id": "voice-a", "parameters": {}, "context_fields": {"language": "en"}}
+    voice_b = {**voice_a, "voice_id": "voice-b"}
+    first = _prepare_test_plan(service, "retake-first", prose, tagged, None, [
+        {"chunk_id": "opening", "start": 0, "end": 2, "request_spec": voice_a},
+        {"chunk_id": "ending", "start": 2, "end": 5, "request_spec": voice_a},
+    ])
+    take = _import_native_take(service, first, "ending", operation_prefix="ending-take")
+    tagged_refresh = tagged.replace(b"<w:p>", b'<w:p w:rsidR="00000001">')
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged_refresh)
+    second = _prepare_test_plan(service, "retake-second", prose, tagged_refresh,
+                                first["manifest_revision"], [
+        {"chunk_id": "opening", "start": 0, "end": 2, "request_spec": voice_b},
+        {"chunk_id": "ending", "start": 2, "end": 5, "request_spec": voice_a},
+    ])
+    chunks = {item["chunk_id"]: item for item in second["chunks"]}
+    assert chunks["opening"]["reuse_status"] == "changed"
+    assert chunks["opening"]["reusable_take_ids"] == []
+    assert chunks["ending"]["reuse_status"] == "reusable"
+    assert chunks["ending"]["reusable_take_ids"] == [take["take_id"]]
+    assert chunks["ending"]["accepted_take_id"] is None
+
+
+def test_duplicate_and_cross_namespace_chunk_take_reuse_are_rejected(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    duplicate = [
+        {"chunk_id": "same", "start": 0, "end": 2, "request_spec": None},
+        {"chunk_id": "same", "start": 2, "end": 5, "request_spec": None},
+    ]
+    with pytest.raises(BookServiceError) as duplicate_error:
+        _prepare_test_plan(service, "duplicate-chunks", prose, tagged, None, duplicate)
+    assert duplicate_error.value.reason == "duplicate_or_recycled_chunk_id"
+
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    first = _prepare_test_plan(service, "namespace-first", prose, tagged, None, [
+        {"chunk_id": "shared-name", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    take = _import_native_take(service, first, "shared-name", operation_prefix="namespace-take")
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"].append({
+        **layout["test_authorizations"][0], "authorization_id": "test-auth-second",
+    })
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    second = _prepare_test_plan(service, "namespace-second", prose, tagged, None, [
+        {"chunk_id": "shared-name", "start": 0, "end": 5, "request_spec": spec},
+    ], authorization_id="test-auth-second")
+    assert second["chunks"][0]["reusable_take_ids"] == []
+    assert take["namespace"] == {"kind": "test", "authorization_id": "test-auth"}
 
 
 def test_prepare_bookmarks_snapshot_and_guarded_working_publication(tmp_path):
@@ -309,6 +412,149 @@ def test_bookmark_recovery_preserves_external_third_hash(tmp_path, monkeypatch):
     assert conflict.value.reason == "publication_conflict"
     assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == outside
     assert ProjectState.discover(tmp_path).publications("chapter_bookmark_prepare")
+
+
+def _production_prepared_fixture(root):
+    service, prose, tagged = _fixture(root)
+    projected = project_docx_pair(prose, tagged)
+    chapter_state_path = root / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    source_sha = hashlib.sha256(prose).hexdigest()
+    chapter_state.update({
+        "editorial_status": "approved", "approved_source_raw_sha256": source_sha,
+        "approved_prose_projection_sha256": projected.prose_projection_sha256,
+        "approval_projection_version": projected.projection_version,
+        "approval_provenance": {
+            "actor": "fixture", "approved_at": datetime.now(timezone.utc).isoformat(),
+            "source_raw_sha256": source_sha,
+            "prose_projection_sha256": projected.prose_projection_sha256,
+            "projection_version": projected.projection_version,
+        },
+    })
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+    layout_path = root / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["production_authorization"] = {
+        "authorization_id": "production-auth", "actor": "fixture",
+        "authorized_at": datetime.now(timezone.utc).isoformat(),
+        "completed_book": True, "revoked": False,
+    }
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    settings = {
+        "schema_version": 1, "target_codepoints": 100,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints", "evidence": "fixture"},
+        "request_spec": {
+            "provider": "fixture-provider", "route": "fixture-route", "model_id": "model-a",
+            "voice_id": "voice-a", "parameters": {"stability": 0.4},
+            "context_fields": {"language": "en"},
+        },
+        "production_target": {
+            "sample_rate_hz": 8000, "channels": 1, "encoding": "signed_integer",
+            "storage_bits": 16, "valid_bits": 16, "mp3_bitrate_kbps": 192,
+        },
+        "native_format_evidence": "synthetic local fixture",
+    }
+    settings_path = root / "Project Files/production-settings.json"
+    settings_path.write_text(json.dumps(settings, separators=(",", ":")), encoding="utf-8")
+    inspected = _inspect(service)
+    request = PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "production-prepare", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None,
+        "scope": {"kind": "production"}, "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": hashlib.sha256(settings_path.read_bytes()).hexdigest(),
+        "production_target": settings["production_target"],
+        "chunks": [{"chunk_id": "main", "start": 0, "end": 5,
+                    "request_spec": settings["request_spec"]}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    })
+    prepared, _ = service.prepare(request, owner_key="principal:fixture")
+    state = ProjectState.discover(root)
+    assert state is not None
+    stored = state.snapshot(prepared["snapshot_id"])
+    assert stored is not None
+    return service, state, stored, settings_path, layout_path, chapter_state_path, prose, tagged, settings
+
+
+def test_production_eligibility_keeps_formatting_equivalence_and_rejects_changed_facts(tmp_path):
+    service, state, stored, settings_path, layout_path, _chapter_state_path, prose, _tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    original_raw = hashlib.sha256(prose).hexdigest()
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(
+        prose.replace(b"<w:p>", b'<w:p w:rsidR="00000001">')
+    )
+    settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    layout = service._enabled_layout()[2]
+    chapter = service._chapter(layout, "ch1")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert eligible, reason
+    audit = stored["payload"]["approval_equivalence"]
+    assert audit["approval_source_raw_sha256"] == original_raw
+    assert audit["observed_prose_raw_sha256"] == original_raw
+    assert audit["equivalent"] is True
+
+    changed_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    changed_settings["request_spec"]["voice_id"] = "voice-b"
+    settings_path.write_text(json.dumps(changed_settings), encoding="utf-8")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert not eligible and reason == "plan_ineligible"
+
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    changed_settings = json.loads(json.dumps(settings))
+    changed_settings["request_spec"]["context_fields"]["language"] = "fr"
+    settings_path.write_text(json.dumps(changed_settings), encoding="utf-8")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert not eligible and reason == "plan_ineligible"
+
+    changed_settings["request_spec"]["context_fields"] = {}
+    settings_path.write_text(json.dumps(changed_settings), encoding="utf-8")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert not eligible and reason == "plan_ineligible"
+
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    changed_settings = dict(settings)
+    changed_settings["production_target"] = {**settings["production_target"], "sample_rate_hz": 16000}
+    settings_path.write_text(json.dumps(changed_settings), encoding="utf-8")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert not eligible and reason == "target_changed"
+
+    layout_data = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout_data["production_authorization"]["revoked"] = True
+    layout_path.write_text(json.dumps(layout_data), encoding="utf-8")
+    revoked_layout = service._enabled_layout()[2]
+    eligible, reason = service._production_snapshot_eligible(
+        state, revoked_layout, service._chapter(revoked_layout, "ch1"), stored,
+    )
+    assert not eligible and reason == "production_not_authorized"
+
+
+def test_production_eligibility_rejects_changed_approved_prose(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_state_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    changed = _docx("world")
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(changed)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(changed)
+    layout = service._enabled_layout()[2]
+    chapter = service._chapter(layout, "ch1")
+    eligible, reason = service._production_snapshot_eligible(state, layout, chapter, stored)
+    assert not eligible and reason == "chapter_not_approved"
+    chunk = stored["payload"]["result"]["chunks"][0]
+    with pytest.raises(BookServiceError) as denied:
+        service.build(BuildRequest.model_validate({
+            "project": "fixture", "operation_id": "changed-prose-build", "expected_head_revision": None,
+            "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": stored["payload"]["result"]["snapshot_id"],
+                      "expected_manifest_revision": stored["manifest_revision"],
+                      "request_plan_sha256": stored["payload"]["result"]["request_plan_sha256"],
+                      "takes": [{"chunk_id": "main", "take_id": "unavailable", "request_sha256": chunk["request_sha256"]}]},
+            "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+            "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+        }), owner_key="principal:fixture")
+    assert denied.value.reason == "stale_dependency"
 
 
 def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
@@ -1200,6 +1446,14 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert built["state"] == "succeeded", built
     candidate = built["result"]
     assert (tmp_path / candidate["outputs"][0]["filepath"]).read_bytes() == samples
+    build_directory = (tmp_path / candidate["timeline_filepath"]).parent
+    durable_build = json.loads((build_directory / "build.json").read_text(encoding="utf-8"))
+    recipe = durable_build["recipe"]
+    assert recipe["scope"] == "chapter" and recipe["mode"] == "production_pcm"
+    assert recipe["processing_argv"] is None and recipe["tools"] == {}
+    assert recipe["inputs"][0]["bytes_sha256"] == take["bytes_sha256"]
+    assert recipe["timeline"] == json.loads((tmp_path / candidate["timeline_filepath"]).read_text(encoding="utf-8"))
+    assert candidate["recipe_sha256"] == canonical_json_sha256(recipe)
     assert state.chapter_head("ch1", snapshot["scope_key"]) is None
     accepted_at = datetime.now(timezone.utc).isoformat()
     committed, replayed = service.commit_build(CommitBuildRequest.model_validate({

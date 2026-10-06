@@ -674,8 +674,7 @@ class BookService:
                 if any(getattr(request_spec, name) != getattr(registered, name)
                        for name in ("provider", "route", "model_id", "voice_id", "parameters")):
                     return False
-                if any(request_spec.context_fields.get(key) != value
-                       for key, value in registered.context_fields.items()):
+                if request_spec.context_fields != registered.context_fields:
                     return False
         return bool(result.get("chunks"))
 
@@ -697,13 +696,13 @@ class BookService:
             payload, facts["settings"], require_registered_match=not allow_historical_plan,
         ):
             return False, "plan_ineligible"
-        if (not allow_historical_plan
-                and payload.get("production_settings_digest_sha256") != facts["settings_digest_sha256"]):
-            return False, "settings_changed"
         if (payload.get("production_target") is None
                 or (not allow_historical_plan
                     and payload.get("production_target") != _data(facts["settings"].production_target))):
             return False, "target_changed"
+        if (not allow_historical_plan
+                and payload.get("production_settings_digest_sha256") != facts["settings_digest_sha256"]):
+            return False, "settings_changed"
         return True, "eligible"
 
     def _accepted_chapter_build_eligible(
@@ -1132,8 +1131,7 @@ class BookService:
                 registered = settings.request_spec
                 if (any(getattr(spec, name) != getattr(registered, name)
                         for name in ("provider", "route", "model_id", "voice_id", "parameters"))
-                        or any(spec.context_fields.get(key) != value
-                               for key, value in registered.context_fields.items())):
+                        or spec.context_fields != registered.context_fields):
                     raise BookServiceError("settings_mismatch", "A production chunk request differs from the registered provider settings.")
             production_settings_sha256 = settings_sha
             prepared_production_target = _data(settings.production_target)
