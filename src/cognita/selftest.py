@@ -1290,6 +1290,60 @@ coordinator-unavailable client actions as PENDING.
      scores them, writing nothing."""
 
 
+_BOOK_READ_CHECKS = """
+AUDIOBOOK AND PROJECT STORAGE CHECKS (16.0). Use only project=Self-Test. These
+checks never read chapter prose or create audiobook state. A missing or disabled
+book configuration is a bounded SKIPPED outcome, not a reason to create a book.
+
+AB1. PROJECT FILES: call list_project_files with path="", recursive=false,
+    limit=50. Record the bounded file count and policy_revision. If the exact
+    'Project Files/Book_Layout.json' entry is present, read only that file with
+    read_project_file and its returned expected_bytes_sha256; inspect only
+    book_id, chapter_order, and registered chapter IDs/paths. Do not quote or
+    read any working prose, tagged prose, production settings, or unrelated
+    project file.
+
+    Call book_get_index_status with project="Self-Test". If it returns
+    reason='configuration_conflict' because no enabled book layout is
+    registered, report SKIPPED: book_fixture_not_configured and stop this
+    subsection without creating state or editing configuration. Otherwise
+    require a successful bounded page whose chapter/file identities match the
+    registered layout. This reports indexing/readiness metadata only.
+
+    With an enabled layout, call audiobook_get_book for its book_id and
+    audiobook_get_chapter for one registered chapter_id with include_text=false.
+    Do not include user prose in the report. Call audiobook_get_generations for
+    that chapter with limit=1 and omit include_prompt. Call audiobook_get_job
+    only when a job_id is already supplied by an explicitly provisioned
+    synthetic Self-Test fixture; otherwise report that lookup SKIPPED because
+    no synthetic job ID is provisioned. These calls are read-only.
+
+    audiobook_inspect_chapter and audiobook_find_chunk can expose or search
+    spoken text. Call them only when the operator's existing Self-Test fixture
+    record explicitly identifies that registered chapter as synthetic; use
+    the bounded inspect response and a quote copied only from that synthetic
+    fixture. Otherwise report SKIPPED: book_fixture_not_configured. Do not
+    inspect, search, copy, or quote any other chapter's content.
+"""
+
+_BOOK_WRITE_GATE = """
+
+SYNTHETIC AUDIOBOOK MUTATION GATE (16.0).
+AB2. MUTATION SAFETY GATE (writable plan only). The ordinary Self-Test does not
+    create or alter Book_Layout, chapter JSON, production settings, approval,
+    DOCX, generation, take, import, build, export, or folder-indexing state.
+    Therefore audiobook_prepare_chapter, audiobook_record_generation,
+    audiobook_import_audio, audiobook_build, audiobook_commit_build,
+    audiobook_cancel_job, and set_folder_indexing are NOT CALLED by this plan.
+    Report these as SKIPPED: book_fixture_not_configured unless the operator has
+    separately provisioned and explicitly identified a disposable synthetic
+    book plus its expected source/take hashes and acceptance procedure. In
+    that case, use only that external fixture-specific acceptance procedure;
+    this plan still does not create fixtures or change its registration.
+    Never invoke a paid TTS provider or use real/user audio. Absence of this
+    separately provisioned fixture is not a Self-Test failure.
+"""
+
 _OCR_SELF_TEST = """
 
 OCR CHECKS (10.1). Use only the persistent, synthetic Self-Test project and the
@@ -1400,6 +1454,9 @@ _NAMED_PLAN_CATALOG = (
     _section("D4", "Re-admit de-indexed path", group="D", prerequisites=("D3",), scope="writable"),
     _section("E", "Error envelope checks", prerequisites=("list_projects",), scope="writable"),
     _section("E1", "Stable error reasons", group="E", prerequisites=("E",), scope="writable"),
+    _section("AB", "Audiobook and project storage checks", prerequisites=("list_projects",), scope="both"),
+    _section("AB1", "Read-only audiobook and storage inventory", group="AB", prerequisites=("AB",), scope="both"),
+    _section("AB2", "Explicit synthetic audiobook mutation gate", group="AB", prerequisites=("AB1",), scope="writable"),
     _section("GL", "Glob semantics checks", prerequisites=("list_projects",), scope="writable"),
     *tuple(
         _section(f"GL{step}", f"Glob semantics step {step}", group="GL",
@@ -1562,6 +1619,10 @@ _INTRO_BLOCKS: tuple[_Intro, ...] = (
            tuple(f"A{step}" for step in range(1, 13)), "A"),
     _Intro("ASSET READ CHECKS (7.1)", _READONLY,
            tuple(f"R-A{step}" for step in range(1, 6)), "R-A"),
+    _Intro("AUDIOBOOK AND PROJECT STORAGE CHECKS (16.0).", _BOTH_MODES,
+           ("AB1",), "AB"),
+    _Intro("SYNTHETIC AUDIOBOOK MUTATION GATE (16.0).", _WRITABLE,
+           ("AB2",), "AB"),
     _Intro("OCR CHECKS (10.1)", _BOTH_MODES,
            tuple(f"O{step}" for step in range(1, 6)), "O"),
 )
@@ -1691,7 +1752,7 @@ R-A5. get_asset with the filepath and R-A2 expected_sha256. Require exactly one
       image; size and SHA-256 must equal R-A2.
       Repeat with 64 zeroes as expected_sha256; require reason='stale_file' and
       no image block. No read-only step mutates or reindexes an asset.
-""" + _OCR_SELF_TEST
+""" + _BOOK_READ_CHECKS + _OCR_SELF_TEST
     def indent(text: str) -> str:
         return "\n".join("    " + line for line in text.split("\n"))
 
@@ -1832,4 +1893,4 @@ A12. CLEAN UP THIS RUN. For A, B, and '{ASSET_REMOVE_DISPOSABLE}' only, inspect
 
 Score A1-A12 separately. A skipped asset step fails on a writable 10.1 project.
 The historical '{ASSET_TEST_A}' and '{ASSET_TEST_B}' paths must remain untouched.
-""" + _OCR_SELF_TEST
+""" + _BOOK_READ_CHECKS + _BOOK_WRITE_GATE + _OCR_SELF_TEST

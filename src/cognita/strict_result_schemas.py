@@ -962,6 +962,21 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
                ("result_key", "on_error", "results", "succeeded", "failed", "skipped", "omitted"))
         for status in ("success", "partial_failure")])
 
+    # Child payload schemas retain their canonical ``#/$defs/...`` refs when
+    # embedded below the batch result. Those refs resolve against the batch
+    # output document, so hoist the original definitions to that one root. The
+    # constituent registries intentionally share Pydantic definitions; a name
+    # collision with different content would be a schema-authority error.
+    batch_definitions: dict[str, Any] = {}
+    for child_schema in (*schemas.values(), *adapter_schemas.values()):
+        for name, definition in child_schema.get("$defs", {}).items():
+            previous = batch_definitions.get(name)
+            if previous is not None and previous != definition:
+                raise RuntimeError(f"conflicting structured-result definition: {name}")
+            batch_definitions[name] = copy.deepcopy(definition)
+    if batch_definitions:
+        schemas["batch"]["$defs"] = batch_definitions
+
     for name in mutating_tools:
         schemas[name] = _with_replay(schemas[name])
     return schemas

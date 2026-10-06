@@ -1359,7 +1359,7 @@ class EngineDocumentOperations:
             if (folded == old_folded or folded.startswith(old_folded + "/")
                     or folded == new_folded or folded.startswith(new_folded + "/")):
                 return {
-                    "status": "error", "reason": "protected",
+                    "status": "error", "reason": "registered_document",
                     "message": "General directory moves cannot relocate registered book paths.",
                     "filepath": old_rel,
                 }

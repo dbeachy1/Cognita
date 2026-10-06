@@ -36,7 +36,9 @@ KNOWN_REASONS = {
     "too_large", "too_many_files", "unindexable_extension", "unknown_argument",
     "unreadable", "unsupported_format", "out_of_range", "would_empty_file",
     # Connector, policy, and replay reason codes.
-    "operation_conflict", "policy_unavailable", "project_unavailable",
+    "operation_conflict", "operation_id_conflict", "policy_conflict",
+    "stale_policy_revision", "state_unavailable", "policy_unavailable",
+    "project_unavailable",
     "content_too_large", "duplicate_path", "lossy_edit_unsupported", "unknown_section",
     "batch_too_large", "nested_batch_not_allowed", "tool_not_batchable", "invalid_batch",
     "child_no_response", "child_invalid_response", "child_error", "result_too_large",

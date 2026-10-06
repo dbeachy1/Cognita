@@ -260,6 +260,35 @@ def test_readonly_plan_names_every_read_tool_it_can_reach():
     assert missing == {"get_reindex_status", "get_self_test_plan"}
 
 
+def test_book_and_storage_plan_coverage_is_read_only_and_fixture_gated():
+    from cognita.readonly import READONLY_TOOLS
+
+    readonly = build_self_test_plan("x.y.z", readonly=True)
+    writable = build_self_test_plan("x.y.z", readonly=False)
+    book_reads = {
+        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk",
+        "audiobook_get_job", "audiobook_get_generations", "audiobook_get_book",
+        "book_get_index_status", "list_project_files", "read_project_file",
+    }
+    book_writes = {
+        "audiobook_prepare_chapter", "audiobook_record_generation", "audiobook_import_audio",
+        "audiobook_build", "audiobook_commit_build", "audiobook_cancel_job",
+        "set_folder_indexing",
+    }
+    assert book_reads <= READONLY_TOOLS
+    assert all(tool in readonly and tool in writable for tool in book_reads)
+    assert all(tool in writable for tool in book_writes)
+    assert all(tool not in readonly for tool in book_writes)
+    for plan in (readonly, writable):
+        assert "book_fixture_not_configured" in plan
+        assert "configuration_conflict" in plan
+    assert "does not" in writable and "create or alter Book_Layout" in writable
+    assert "Never invoke a paid TTS provider" in writable
+    assert "include_text=false" in readonly
+    assert "omit include_prompt" in readonly
+    assert "chapter prose" in readonly
+
+
 def test_tool_description_admits_what_it_does_not_cover():
     """The description used to claim it exercised EVERY tool while missing
     seven. An overclaiming canary is worse than none — it converts a real gap

@@ -851,6 +851,19 @@ class LocalEngineHost(
         mutating = tool in ALL_ADDITIVE_MUTATING_TOOLS
         correlation_id = uuid.uuid4().hex
         try:
+            # Refuse a read-only remote mutation before parsing its private DTO
+            # or inspecting import source context. The policy is rechecked
+            # under the project write lock below, so this early result only
+            # establishes denial precedence and does not authorize a later write.
+            if mutating and trusted_connector_id is not None:
+                denial = self._connector_write_denial(
+                    project, trusted_connector_id, trusted_project_key_project,
+                )
+                if denial:
+                    raise BookServiceError(
+                        denial.get("reason", "permission_denied"),
+                        denial.get("message", "Write access is required."),
+                    )
             # The combined gateway removes the caller-supplied `project` before
             # proxying and carries the resolved project in this engine route.
             # Rebind the private book DTO to that authenticated route; keep an

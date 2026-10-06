@@ -24,7 +24,8 @@ operations that did not change data.
 `batch_aborted`, `batch_too_large`, `busy`, `content_too_large`,
 `duplicate_path`, `file_changed_during_read`, `invalid`, `invalid_batch`,
 `lossy_edit_unsupported`, `no_change`, `nested_batch_not_allowed`,
-`operation_conflict`, `previous_error`, `result_too_large`, `stale_file`,
+`operation_conflict`, `operation_id_conflict`, `policy_conflict`,
+`stale_policy_revision`, `previous_error`, `result_too_large`, `stale_file`,
 `too_large`, `too_many_files`, `tool_not_batchable`, `unknown_section`,
 `would_empty_file`
 
@@ -36,6 +37,7 @@ errors while reading, writing, copying, deleting, or retrieving data.
 `backup_failed`, `child_error`, `child_invalid_response`, `child_no_response`,
 `copy_failed`, `delete_failed`, `error`, `fetch_failed`, `index_unavailable`,
 `internal_error`, `policy_unavailable`, `project_unavailable`, `read_only`,
+`state_unavailable`,
 `runtime_unavailable`, `source_unavailable`, `unknown_tool`,
 `upgrade_required`, `workspace_unavailable`
 
