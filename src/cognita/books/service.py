@@ -2510,13 +2510,15 @@ class BookService:
             frame_count = self._timeline_frame(timeline["frame_count"], field="frame_count")
             entries = timeline["entries"]
             media = output["media"]
+            media_frame_count = self._timeline_frame(media["frame_count"], field="media frame_count")
         except (BookServiceError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             raise BookServiceError("state_unavailable", "A pinned chapter timeline could not be read.") from exc
         if (not isinstance(entries, list) or rate != target.sample_rate_hz or channels != target.channels
                 or encoding != target.encoding or bits != target.storage_bits
+                or media_frame_count != frame_count
                 or any(media.get(key) != value for key, value in (
                     ("sample_rate_hz", rate), ("channels", channels),
-                    ("encoding", encoding), ("storage_bits", bits), ("frame_count", frame_count),
+                    ("encoding", encoding), ("storage_bits", bits),
                 ))):
             raise BookServiceError("state_unavailable", "Pinned chapter media facts do not match its immutable timeline.")
         if expected_frames is not None and frame_count != expected_frames:

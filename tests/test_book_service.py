@@ -1164,6 +1164,121 @@ def test_book_timestamp_uses_pinned_child_identity_and_old_dependency_fallback(t
         assert match["current_take_ids"] == [take["take_id"]]
 
 
+def test_whole_book_pins_serialized_chapter_frame_count_with_internal_silence(tmp_path, monkeypatch):
+    service, _state, stored, settings_path, _layout_path, _chapter_path, prose, tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    inspected = _inspect(service)
+    prepared, replayed = service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "book-gap-prepare", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": stored["manifest_revision"],
+        "scope": {"kind": "production"}, "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": hashlib.sha256(settings_path.read_bytes()).hexdigest(),
+        "production_target": settings["production_target"],
+        "chunks": [
+            {"chunk_id": "left", "start": 0, "end": 2, "request_spec": settings["request_spec"]},
+            {"chunk_id": "right", "start": 2, "end": 5, "request_spec": settings["request_spec"]},
+        ],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }), owner_key="principal:fixture")
+    assert not replayed
+    left = _import_native_take(service, prepared, "left", operation_prefix="book-gap-left")
+    right = _import_native_take(service, prepared, "right", operation_prefix="book-gap-right")
+
+    ffmpeg = tmp_path / "synthetic-ffmpeg"
+    ffprobe = tmp_path / "synthetic-ffprobe"
+    ffmpeg.write_bytes(b"synthetic executable placeholder")
+    ffprobe.write_bytes(b"synthetic executable placeholder")
+    monkeypatch.setattr(service, "_registered_media_executables", lambda: (ffmpeg, ffprobe))
+
+    async def fake_tool_version(_executable):
+        return "synthetic-fixture"
+
+    async def fake_probe(_executable, _filepath, **_kwargs):
+        return {
+            "streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "8000",
+                         "channels": 1, "duration": "0.01", "bit_rate": "96000", "nb_frames": "1"}],
+            "format": {"format_name": "mp3", "duration": "0.01", "bit_rate": "96000"},
+        }
+
+    async def fake_encode(argv, **_kwargs):
+        Path(argv[-1]).write_bytes(b"ID3\x04\x00\x00synthetic-mp3")
+        return SimpleNamespace(cancelled=False, timed_out=False, returncode=0)
+
+    monkeypatch.setattr(service_module, "_media_tool_version", fake_tool_version)
+    monkeypatch.setattr(service_module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(service_module, "production_mp3_argv",
+                        lambda _exe, _pcm, destination, _target, _metadata: [str(ffmpeg), str(destination)])
+    monkeypatch.setattr(service_module, "run_process", fake_encode)
+
+    chapter_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "book-gap-chapter-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [
+                      {"chunk_id": "left", "take_id": left["take_id"], "request_sha256": left["request_sha256"]},
+                      {"chunk_id": "right", "take_id": right["take_id"], "request_sha256": right["request_sha256"]},
+                  ]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [{"before_id": "right", "sample_frames": "73"}],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    chapter_job, _ = service.build(chapter_request, owner_key="principal:fixture")
+    service.run_build_job(chapter_job["job_id"])
+    chapter_result = service.get_job(GetJobRequest(project="fixture", job_id=chapter_job["job_id"]))
+    assert chapter_result["state"] == "succeeded", chapter_result
+    chapter_build = chapter_result["result"]
+    chapter_media = next(item["media"] for item in chapter_build["outputs"] if item["kind"] == "pcm_master")
+    assert isinstance(chapter_media["frame_count"], str)
+    chapter_timeline = json.loads((tmp_path / chapter_build["timeline_filepath"]).read_text(encoding="utf-8"))
+    assert chapter_timeline["frame_count"] == chapter_media["frame_count"] == "81"
+    accepted, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "book-gap-chapter-accept",
+        "build_id": chapter_build["build_id"], "expected_head_revision": None,
+        "intent": "accept_candidate",
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["synthetic local PCM fixture"]},
+    }), owner_key="principal:fixture")
+
+    book = service.get_book(GetBookRequest.model_validate({"project": "fixture", "book_id": "fixture-book"}))
+    assert book["chapters_not_ready"] == []
+    book_job, _ = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "book-gap-whole-book-build", "expected_head_revision": None,
+        "input": {"kind": "book", "book_id": book["book_id"],
+                  "expected_layout_revision": book["layout_revision"],
+                  "chapters": book["current_chapter_dependencies"]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [], "metadata": {"title": "Fixture Book", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    service.run_build_job(book_job["job_id"])
+    book_result = service.get_job(GetJobRequest(project="fixture", job_id=book_job["job_id"]))
+    assert book_result["state"] == "succeeded", book_result
+    nested_book_timeline = json.loads(
+        (tmp_path / book_result["result"]["timeline_filepath"]).read_text(encoding="utf-8")
+    )
+    child = nested_book_timeline["entries"][0]
+    assert child["chapter_build_id"] == accepted["accepted_build_id"]
+    assert [(entry["kind"], entry["start_frame"], entry["end_frame"])
+            for entry in child["child_entries"]] == [
+                ("audio", "0", "4"), ("silence", "4", "77"), ("audio", "77", "81"),
+            ]
+    found = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture",
+        "query": {"kind": "timestamp", "build_id": book_result["result"]["build_id"],
+                  "seconds": 4 / 8000},
+    }))
+    assert [(match["chunk_ids"], match["matched_take_ids"], match["segment_kind"])
+            for match in found["matches"]] == [
+                (["left"], [left["take_id"]], "silence"),
+                (["right"], [right["take_id"]], "silence"),
+            ]
+
+
 def test_old_book_timeline_fails_without_pinned_chapter_facts_and_keeps_history_unchanged(tmp_path):
     service, state, stored, _settings_path, _layout_path, _chapter_path, _prose, _tagged, _settings = (
         _production_prepared_fixture(tmp_path)
