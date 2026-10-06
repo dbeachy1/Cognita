@@ -36,6 +36,7 @@ def _fixture(root, *, bound: bool = False) -> tuple[BookService, bytes, bytes]:
     (root / "Chapters/1").mkdir(parents=True)
     (root / "Project Files/Source").mkdir(parents=True)
     (root / "Project Files/Source/Version1.docx").write_bytes(prose)
+    (root / "Project Files/ref.md").write_text("Reference facts", encoding="utf-8")
     (root / "Chapters/1/chapter.docx").write_bytes(prose)
     (root / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
     chapter_state = {
@@ -67,7 +68,8 @@ def _fixture(root, *, bound: bool = False) -> tuple[BookService, bytes, bytes]:
             "summary_filepath": None, "originals_root": "Chapters/1/Originals",
             "audio_root": "Audiobook/Chapters/1",
         }],
-        "indexed_references": [], "indexed_instructions": [], "indexed_workflow_documents": [],
+        "indexed_references": [{"filepath": "Project Files/ref.md", "role": "reference"}],
+        "indexed_instructions": [], "indexed_workflow_documents": [],
         "index_policy": {
             "default_unknown": "exclude", "tagged_copies": "exclude", "archives": "exclude",
             "media": "exclude", "duplicate_prose": "single_active_source",
@@ -207,3 +209,29 @@ def test_managed_indexing_receipt_is_durable_and_operation_bound(tmp_path):
     reopened = ProjectState.discover(tmp_path)
     assert reopened is not None
     assert reopened.managed_write_status("Chapters/1/chapter.docx")["state"] == "blocked"
+
+
+def test_registered_index_provenance_is_persisted_and_revalidated(tmp_path):
+    from cognita.parsing import compute_doc_id, parse_file
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    path = "Project Files/ref.md"
+    source = tmp_path / path
+    parsed = parse_file(source, tmp_path)
+    assert parsed is not None
+    raw_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert parsed.doc_id == compute_doc_id(path, parsed.content_hash)
+    record = service.record_index_provenance(
+        path, parsed.doc_id, parsed.content_hash, raw_sha, "fixture-extraction-v1",
+    )
+    assert record is not None and record.role == "reference"
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    assert state.indexed_role_provenance(path) == record
+    from types import SimpleNamespace
+    candidate = SimpleNamespace(source=path, doc_id=parsed.doc_id, content_hash=parsed.content_hash)
+    assert service.index_admitted_doc_ids([candidate]) == frozenset({parsed.doc_id})
+
+    source.write_text("Reference changed", encoding="utf-8")
+    assert service.index_admitted_doc_ids([candidate]) == frozenset()

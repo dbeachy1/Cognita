@@ -245,6 +245,25 @@ class BookService:
         )
         return current == record
 
+    def record_index_provenance(
+        self, source_path: str, doc_id: str, extracted_sha256: str,
+        raw_sha256: str, extraction_version: str,
+    ):
+        """Persist derived index evidence only while its source bindings remain current."""
+        state = self.discover_state()
+        if state is None:
+            return None
+        record = self.index_provenance_for(
+            source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
+        )
+        if record is None:
+            return None
+        try:
+            state.put_indexed_role_provenance(record)
+        except ProjectStateError as exc:
+            raise BookServiceError("state_unavailable", "Index provenance could not be persisted.") from exc
+        return record if self.index_provenance_is_current(record) else None
+
     def index_admitted_doc_ids(self, sources) -> frozenset[str]:
         state = self.discover_state()
         config = load_book_config(self.root, state)
