@@ -1383,6 +1383,36 @@ class EngineDocumentOperations:
             raise ProjectStateError("directory move journal bytes do not match their digest")
         return value
 
+    async def _rebase_directory_asset_sources(
+        self, project: Project, old_rel: str, new_rel: str,
+    ) -> int:
+        """Repoint existing asset catalog authority and every live service cache.
+
+        A catalog is shared by connector-scoped services, while each service
+        has a short-lived in-memory mirror.  One service owns the SQL
+        transaction; the others only mirror its committed result.
+        """
+        services = [
+            service for (project_name, _connector), service in self._asset_services.items()
+            if project_name == project.name
+        ]
+        if not services:
+            # Narrow engine tests and local index-less maintenance have no
+            # catalog pool.  There can be no durable asset identity to rebase.
+            if getattr(self.store, "pool", None) is None:
+                return 0
+            services = [self._asset_service_for(project, None)]
+        primary = next(
+            (service for (project_name, connector), service in self._asset_services.items()
+             if project_name == project.name and connector is None),
+            services[0],
+        )
+        moved = await primary.rebase_directory_sources(old_rel, new_rel)
+        for service in services:
+            if service is not primary:
+                service.apply_directory_source_rebase(old_rel, new_rel)
+        return moved
+
     async def _recover_directory_move_publications(self, project: Project) -> None:
         """Finish a receipt or reverse only an interrupted owned directory move.
 
@@ -1402,6 +1432,7 @@ class EngineDocumentOperations:
         legacy = self.deindexed(project)
         for entry in pending:
             payload = entry["payload"]
+            phase = entry["phase"]
             old_rel, new_rel = payload.get("old"), payload.get("new")
             identity = payload.get("directory_identity")
             if (not isinstance(old_rel, str) or not isinstance(new_rel, str)
@@ -1430,10 +1461,22 @@ class EngineDocumentOperations:
             old_is_owned = old_t.is_dir() and (old_t.stat().st_dev, old_t.stat().st_ino) == tuple(identity)
             new_is_owned = new_t.is_dir() and (new_t.stat().st_dev, new_t.stat().st_ino) == tuple(identity)
             if receipt is not None:
+                if phase in {"asset_rebase_prepared", "assets_rebased"}:
+                    try:
+                        await self._rebase_directory_asset_sources(project, old_rel, new_rel)
+                    except Exception as exc:
+                        raise ProjectStateError("directory move asset rebase cannot be recovered") from exc
                 if not new_is_owned or old_t.exists() or hashlib.sha256(current).hexdigest() != new_digest:
                     raise ProjectStateError("completed directory move journal is not coherent")
                 state.advance_publication(entry["journal_id"], "committed")
                 continue
+            if phase in {"asset_rebase_prepared", "assets_rebased"}:
+                try:
+                    await self._rebase_directory_asset_sources(project, new_rel, old_rel)
+                except Exception as exc:
+                    # Keep both paths suppressed by the pending journal until
+                    # the catalog's exact prior authority can be restored.
+                    raise ProjectStateError("directory move asset rebase cannot be rolled back") from exc
             if old_is_owned and not new_t.exists():
                 if hashlib.sha256(current).hexdigest() == new_digest:
                     legacy.publish_owned_bytes(new_digest, old_bytes)
@@ -1613,6 +1656,7 @@ class EngineDocumentOperations:
             # watcher publication.  If either durable publication step fails,
             # revert only the directory identity and per-file paths this call
             # owns; never overwrite an external replacement.
+            asset_rebase_failed = False
             try:
                 new_t.parent.mkdir(parents=True, exist_ok=True)
                 await asyncio.to_thread(os.replace, str(old_t), str(new_t))
@@ -1621,6 +1665,13 @@ class EngineDocumentOperations:
                     hashlib.sha256(old_deindexed).hexdigest(), new_deindexed,
                 )
                 state.advance_publication(journal_id, "deindexed_published")
+                state.advance_publication(journal_id, "asset_rebase_prepared")
+                try:
+                    await self._rebase_directory_asset_sources(project, old_rel, new_rel)
+                except Exception as exc:
+                    asset_rebase_failed = True
+                    raise ProjectStateError("asset catalog path rebase failed") from exc
+                state.advance_publication(journal_id, "assets_rebased")
                 result = {
                     "status": "success", "filepath": old_rel,
                     "new_filepath": new_rel, "kind": "directory",
@@ -1635,15 +1686,20 @@ class EngineDocumentOperations:
                 if disposition != "committed":
                     raise ProjectStateError(f"unexpected directory move state: {disposition}")
                 state.advance_publication(journal_id, "committed")
-            except (OSError, ProjectStateError) as exc:
+            except (OSError, ProjectStateError, RuntimeError) as exc:
                 restored = False
                 try:
                     await self._recover_directory_move_publications(project)
                     restored = not state.pending_publications("directory_move")
                 except (OSError, ProjectStateError, DeindexedPathsError):
                     restored = False
-                return {"status": "error", "reason": "state_unavailable",
-                        "message": ("Directory move was rolled back after durable policy publication failed."
+                return {"status": "error",
+                        "reason": "asset_rebase_failed" if asset_rebase_failed else "state_unavailable",
+                        "message": ("Directory move was rolled back after asset catalog rebase failed."
+                                    if asset_rebase_failed and restored else
+                                    "Directory move outcome is unknown after asset catalog rebase failed; reconciliation is required."
+                                    if asset_rebase_failed else
+                                    "Directory move was rolled back after durable policy publication failed."
                                     if restored else
                                     "Directory move outcome is unknown after durable policy publication failed; reconciliation is required."),
                         "details": {"error": type(exc).__name__, "rolled_back": restored}}

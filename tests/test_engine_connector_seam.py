@@ -16,6 +16,8 @@ import pytest
 from starlette.requests import Request
 
 from cognita.config import CognitaConfig
+from cognita.assets.models import AssetRecord
+from cognita.assets.service import AssetService
 from cognita.books.state import ProjectState
 from cognita.connectors import ConnectorStore
 from cognita.engine_local import LocalEngineHost
@@ -558,6 +560,79 @@ async def test_directory_move_refuses_plain_project_storage_authority_before_mut
     assert (project.documents_dir / ".cognita-storage" / "state.sqlite").is_file()
     reopened = ProjectState.discover(project.documents_dir)
     assert reopened is not None and reopened.folder_policy().rules == (("private", False),)
+
+
+@pytest.mark.asyncio
+async def test_directory_move_rebases_live_asset_catalog_identity_before_reconcile(tmp_path):
+    """A real directory rename retains an existing catalog row rather than recreating it."""
+    host, project, core = _host(tmp_path)
+    core._locks[project.name] = _ReentrantLock()
+    source = project.documents_dir / "art"
+    source.mkdir()
+    (source / "cover.png").write_bytes(b"not decoded by this move test")
+    asset = AssetRecord(
+        asset_id="asset-kept", filepath="art/cover.png",
+        metadata={"title": "Catalog-only title", "tags": ["kept"]},
+        received_size=1, received_sha256="a" * 64, final_size=1,
+        final_sha256="a" * 64, width=1, height=1,
+        metadata_storage="catalog", metadata_revision=7,
+        provenance_state="cabx_present_unverified", cabx_chunk_count=2,
+    )
+    assets = AssetService(project)
+    assets._memory[asset.filepath] = asset
+    host._asset_services[(project.name, None)] = assets
+    ProjectState.initialize(project.documents_dir)
+
+    payload = await _post(host, project.name, "move_document", {
+        "filepath": "art", "new_filepath": "archive/art",
+        "expected_policy_revision": 0, "operation_id": "rebase-assets",
+    })
+    assert payload["status"] == "success"
+    assert (project.documents_dir / "archive" / "art" / "cover.png").is_file()
+    assert "art/cover.png" not in assets._memory
+    preserved = assets._memory["archive/art/cover.png"]
+    assert preserved is asset
+    assert (preserved.asset_id, preserved.metadata["title"], preserved.metadata_revision,
+            preserved.provenance_state) == (
+        "asset-kept", "Catalog-only title", 7, "cabx_present_unverified",
+    )
+    task = host._reindex_tasks.get(project.name)
+    if task is not None:
+        await task
+
+
+@pytest.mark.asyncio
+async def test_directory_move_reports_failed_asset_rebase_and_restores_directory(tmp_path):
+    """A failed catalog transaction cannot be reported as a successful move."""
+    host, project, core = _host(tmp_path)
+    core._locks[project.name] = _ReentrantLock()
+    source = project.documents_dir / "art"
+    source.mkdir()
+    (source / "cover.png").write_bytes(b"fixture")
+    ProjectState.initialize(project.documents_dir)
+
+    class FailingAssets:
+        async def rebase_directory_sources(self, old, _new):
+            if old == "art":
+                raise RuntimeError("simulated catalog failure")
+            return 0
+
+        def apply_directory_source_rebase(self, _old, _new):
+            raise AssertionError("failed primary rebase must not update a cache")
+
+    host._asset_services[(project.name, None)] = FailingAssets()
+    payload = await _post(host, project.name, "move_document", {
+        "filepath": "art", "new_filepath": "archive/art",
+        "expected_policy_revision": 0, "operation_id": "failing-rebase",
+    })
+    assert payload["status"] == "error"
+    assert payload["reason"] == "asset_rebase_failed"
+    assert payload["details"]["rolled_back"] is True
+    assert source.is_dir()
+    assert not (project.documents_dir / "archive" / "art").exists()
+    state = ProjectState.discover(project.documents_dir)
+    assert state is not None and state.folder_policy().policy_revision == 0
+    assert not state.pending_publications("directory_move")
 
 
 @pytest.mark.asyncio

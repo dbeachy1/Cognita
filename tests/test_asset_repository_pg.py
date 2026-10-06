@@ -92,6 +92,41 @@ async def test_asset_and_operation_result_commit_atomically(repository):
 
 
 @pytest.mark.asyncio
+async def test_directory_rebase_preserves_catalog_identity_metadata_provenance_and_receipts(repository):
+    """SQL rebasing treats percent/underscore folders literally and keeps catalog facts."""
+    item = record("literal%/under_score/cover.png", revision=7)
+    item.provenance_state = "cabx_present_unverified"
+    item.cabx_chunk_count = 2
+    await repository.replace_asset(item, "catalog projection", [[0.1] * 8])
+    untouched = record("literalX/underXscore/cover.png", revision=3)
+    await repository.replace_asset(untouched, "sibling projection", [[0.2] * 8])
+    receipt = {"status": "success", "filepath": item.filepath, "asset_id": item.asset_id}
+    assert await repository.claim_operation(
+        "rebase-receipt", "put_asset", "d" * 64, connector_id="connector-a",
+    ) == ("claimed", None)
+    await repository.finish_operation(
+        "rebase-receipt", receipt, tool="put_asset", connector_id="connector-a",
+    )
+
+    assert await repository.rebase_directory_sources(
+        "literal%/under_score", "moved%/under_score",
+    ) == 1
+    moved = await repository.get("moved%/under_score/cover.png")
+    assert moved is not None
+    assert moved["asset_id"] == item.asset_id
+    assert json.loads(moved["metadata"]) == item.metadata
+    assert moved["metadata_revision"] == 7
+    assert moved["provenance_state"] == "cabx_present_unverified"
+    assert moved["cabx_chunk_count"] == 2
+    assert await repository.get(item.filepath) is None
+    assert (await repository.get(untouched.filepath))["asset_id"] == untouched.asset_id
+    operation = await repository.get_operation(
+        "rebase-receipt", tool="put_asset", connector_id="connector-a",
+    )
+    assert operation["result"] == receipt
+
+
+@pytest.mark.asyncio
 async def test_catalog_rows_and_keyword_search_preserve_identity_and_metadata(
     repository, tmp_path,
 ):

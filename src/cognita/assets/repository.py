@@ -193,6 +193,85 @@ class AssetRepository:
             rows = await self.pool.fetch(f"SELECT source FROM {self.schema}.assets")
         return [row["source"] for row in rows]
 
+    @staticmethod
+    def _literal_descendant_pattern(prefix: str) -> str:
+        """Return a ``LIKE`` pattern whose prefix remains a literal path.
+
+        Asset filenames may contain percent or underscore.  PostgreSQL treats
+        both as wildcards in ``LIKE``, so directory moves must escape them
+        rather than accidentally rebasing a similarly spelled sibling.
+        """
+        return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+
+    @staticmethod
+    def _rebased_source(source: str, old_prefix: str, new_prefix: str) -> str:
+        if source == old_prefix:
+            return new_prefix
+        return new_prefix + source[len(old_prefix):]
+
+    async def rebase_directory_sources(self, old_prefix: str, new_prefix: str) -> int:
+        """Move catalog/OCR path bindings without changing asset identity.
+
+        The caller has already validated an ordinary directory rename.  This
+        transaction updates only source keys; asset IDs, catalog metadata,
+        revisions, chunks, provenance, and operation receipts stay untouched.
+        """
+        old_prefix = old_prefix.strip("/")
+        new_prefix = new_prefix.strip("/")
+        if not old_prefix or not new_prefix or old_prefix == new_prefix:
+            raise ValueError("directory prefixes must be distinct and nonempty")
+        old_pattern = self._literal_descendant_pattern(old_prefix)
+        async with self.pool.acquire() as conn, conn.transaction():
+            assets = await conn.fetch(
+                f"""SELECT source FROM {self.schema}.assets
+                    WHERE source=$1 OR source LIKE $2 ESCAPE '\\' FOR UPDATE""",
+                old_prefix, old_pattern,
+            )
+            ocr_sources = await conn.fetch(
+                f"""SELECT filepath FROM {self.schema}.asset_ocr_sources
+                    WHERE filepath=$1 OR filepath LIKE $2 ESCAPE '\\' FOR UPDATE""",
+                old_prefix, old_pattern,
+            )
+            asset_targets = [
+                self._rebased_source(str(row["source"]), old_prefix, new_prefix)
+                for row in assets
+            ]
+            ocr_targets = [
+                self._rebased_source(str(row["filepath"]), old_prefix, new_prefix)
+                for row in ocr_sources
+            ]
+            if len(asset_targets) != len(set(asset_targets)) or len(ocr_targets) != len(set(ocr_targets)):
+                raise RuntimeError("asset catalog rebase would collide with itself")
+            if asset_targets:
+                conflicts = await conn.fetch(
+                    f"SELECT source FROM {self.schema}.assets WHERE source=ANY($1::text[]) FOR UPDATE",
+                    asset_targets,
+                )
+                if conflicts:
+                    raise RuntimeError("asset catalog destination already has a source")
+            if ocr_targets:
+                conflicts = await conn.fetch(
+                    f"SELECT filepath FROM {self.schema}.asset_ocr_sources WHERE filepath=ANY($1::text[]) FOR UPDATE",
+                    ocr_targets,
+                )
+                if conflicts:
+                    raise RuntimeError("asset OCR destination already has a source")
+            if assets:
+                await conn.execute(
+                    f"""UPDATE {self.schema}.assets
+                        SET source=$2 || substring(source from char_length($1)+1)
+                        WHERE source=$1 OR source LIKE $3 ESCAPE '\\'""",
+                    old_prefix, new_prefix, old_pattern,
+                )
+            if ocr_sources:
+                await conn.execute(
+                    f"""UPDATE {self.schema}.asset_ocr_sources
+                        SET filepath=$2 || substring(filepath from char_length($1)+1)
+                        WHERE filepath=$1 OR filepath LIKE $3 ESCAPE '\\'""",
+                    old_prefix, new_prefix, old_pattern,
+                )
+        return len(assets)
+
     async def delete_source(self, filepath: str) -> None:
         async with self.pool.acquire() as conn, conn.transaction():
             await conn.execute(f"DELETE FROM {self.schema}.asset_ocr_sources WHERE filepath=$1", filepath)

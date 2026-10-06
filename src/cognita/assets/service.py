@@ -1324,6 +1324,30 @@ class AssetService:
         ]
         return await self.deindex_searchable_paths(selected)
 
+    def apply_directory_source_rebase(self, old_prefix: str, new_prefix: str) -> None:
+        """Keep this service's non-authoritative cache aligned with a SQL rebase."""
+        old_prefix = old_prefix.strip("/")
+        new_prefix = new_prefix.strip("/")
+        marker = old_prefix + "/"
+        moved = {
+            source: new_prefix + source[len(old_prefix):]
+            for source in self._memory
+            if source == old_prefix or source.startswith(marker)
+        }
+        for source, target in moved.items():
+            record = self._memory.pop(source)
+            record.filepath = target
+            self._memory[target] = record
+
+    async def rebase_directory_sources(self, old_prefix: str, new_prefix: str) -> int:
+        """Repoint durable catalog paths after an already-authorized directory move."""
+        if self.repository is None or not hasattr(self.repository, "rebase_directory_sources"):
+            self.apply_directory_source_rebase(old_prefix, new_prefix)
+            return 0
+        moved = await self.repository.rebase_directory_sources(old_prefix, new_prefix)
+        self.apply_directory_source_rebase(old_prefix, new_prefix)
+        return int(moved)
+
     async def reconcile_all(
         self, *, source_is_safe: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:

@@ -314,6 +314,16 @@ class LocalEngineHost(
                     log.error("Directory move recovery remains blocked project=%s error=%s",
                               project.name, type(exc).__name__)
                 await self.store.ensure_project(project.name)
+                # A directory journal that already rebased asset paths cannot
+                # be completed or reversed until PostgreSQL is available.
+                # Retry after schema admission so it stays fail-closed rather
+                # than leaving the policy prefixes suppressed forever.
+                try:
+                    async with self.core.write_lock(project.name):
+                        await self._recover_directory_move_publications(project)
+                except ProjectStateError as exc:
+                    log.error("Directory asset rebase recovery remains blocked project=%s error=%s",
+                              project.name, type(exc).__name__)
                 # Complete committed source-side policy changes before the
                 # watcher can publish derived rows.  A crash or PG outage leaves
                 # only a durable pending job, never an implied completed purge.
