@@ -30,8 +30,10 @@ from .configuration import (
 )
 from .fingerprint import canonical_json_sha256, request_fingerprint
 from .media import MediaValidationError, inspect_media_file
-from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave, production_mp3_argv
-from .jobs import ProcessRunnerError, ffprobe_json, run_process
+from .assembly import (AssemblyError, Mp3Source, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave,
+                       production_mp3_argv, build_test_mp3_stream_copy_argv, verify_mp3_packet_copy,
+                       write_ffconcat_manifest)
+from .jobs import ProcessRunnerError, ffprobe_json, ffprobe_packet_facts, run_process
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .read_helpers import (
     ReadCursorError, paired_text_page, parse_read_cursor, read_cursor, spoken_interval, text_page,
@@ -1909,6 +1911,8 @@ class BookService:
             return self._reserve_book_build(request, owner_key=owner_key)
         if not isinstance(request.input, dto.ChapterBuildInput):
             raise BookServiceError("unsupported_build_mode", "The requested assembly input is unavailable.")
+        if request.mode == "test_mp3_stream_copy":
+            return self._reserve_test_mp3_build(request, owner_key=owner_key)
         if request.mode != "production_pcm" or not request.outputs.master:
             raise BookServiceError("unsupported_build_mode", "This checkpoint assembles retained chapter PCM masters only.")
         state, _, layout = self._enabled_layout()
@@ -2003,6 +2007,42 @@ class BookService:
             raise BookServiceError("state_unavailable", "The build reservation could not be persisted.") from exc
         return result, disposition == "replay"
 
+    def _reserve_test_mp3_build(self, request: dto.BuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        """Pin an explicitly test-only, packet-copy chapter candidate."""
+        state, _, layout = self._enabled_layout()
+        item = request.input
+        assert isinstance(item, dto.ChapterBuildInput)
+        if request.outputs.master or "mp3_bitrate_kbps" in request.outputs.model_fields_set or request.gaps:
+            raise BookServiceError("unsupported_build_mode", "Test MP3 stream-copy has no PCM master, bitrate conversion, or silence gaps.")
+        stored = state.snapshot(item.snapshot_id)
+        if stored is None or stored["chapter_id"] != item.chapter_id or stored["manifest_revision"] != item.expected_manifest_revision:
+            raise BookServiceError("stale_manifest", "The requested frozen chapter snapshot is unavailable.")
+        scope = json.loads(stored["scope_key"])
+        if scope.get("kind") != "test":
+            raise BookServiceError("permission_denied", "MP3 stream-copy is available only in an authorized test namespace.")
+        namespace = state.namespace(item.chapter_id, stored["scope_key"])
+        if namespace is None or namespace.get("head_revision") != request.expected_head_revision:
+            raise BookServiceError("stale_head", "The chapter head changed before build admission.")
+        snapshot = stored["payload"]["result"]
+        if snapshot.get("request_plan_sha256") != item.request_plan_sha256 or [v.chunk_id for v in item.takes] != [v["chunk_id"] for v in snapshot["chunks"]]:
+            raise BookServiceError("coverage_incomplete", "Test MP3 takes must cover frozen chunks exactly once in order.")
+        take_ids: list[str] = []
+        for supplied, frozen in zip(item.takes, snapshot["chunks"], strict=True):
+            take = state.take(supplied.take_id)
+            media = None if take is None else take.get("media", {})
+            if take is None or take.get("chapter_id") != item.chapter_id or take.get("snapshot_id") != item.snapshot_id or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256 or frozen.get("request_sha256") != supplied.request_sha256 or media.get("codec") != "mp3" or media.get("encoding") != "compressed":
+                raise BookServiceError("stale_dependency", "A selected test take is not a matching verified MP3 chunk.")
+            take_ids.append(supplied.take_id)
+        pinned = {"mode": "test_mp3_stream_copy", "chapter_id": item.chapter_id, "scope_key": stored["scope_key"],
+                  "snapshot_id": item.snapshot_id, "manifest_revision": item.expected_manifest_revision,
+                  "request_plan_sha256": item.request_plan_sha256, "take_ids": take_ids,
+                  "chunk_ids": [v.chunk_id for v in item.takes], "metadata": _data(request.metadata)}
+        try:
+            disposition, result = state.reserve_build_job(job={"job_id": str(uuid.uuid4()), "payload": pinned, "created_at": datetime.now(timezone.utc).isoformat(), "pinned_inputs_sha256": canonical_json_sha256(pinned)}, owner_key=owner_key, project=self.project_name, operation_id=request.operation_id, args_sha256=canonical_json_sha256(_data(request)))
+        except ProjectStateError as exc:
+            raise BookServiceError("operation_id_conflict" if str(exc) == "operation_id_conflict" else "state_unavailable", "The build reservation could not be persisted.") from exc
+        return result, disposition == "replay"
+
     def _reserve_book_build(self, request: dto.BuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         """Pin every current accepted production chapter before book assembly."""
         if request.mode != "production_pcm" or not request.outputs.master:
@@ -2058,6 +2098,54 @@ class BookService:
             raise BookServiceError("state_unavailable", "The book-build reservation could not be persisted.") from exc
         return result, disposition == "replay"
 
+    def _run_test_mp3_build(self, job_id: str, pinned: dict[str, Any]) -> None:
+        """Copy verified MP3 packets in frozen chunk order; never decode to a master."""
+        state = self._state_required()
+        _, _, layout = self._enabled_layout()
+        chapter = self._chapter(layout, pinned["chapter_id"])
+        ffmpeg, ffprobe = self._registered_media_executables()
+        takes = [state.take(value) for value in pinned["take_ids"]]
+        if any(value is None for value in takes):
+            raise BookServiceError("stale_dependency", "A pinned MP3 take is unavailable.")
+        sources: list[Mp3Source] = []
+        packet_inputs = []
+        for chunk_id, take in zip(pinned["chunk_ids"], takes, strict=True):
+            assert take is not None
+            source = _path(self.root, take["filepath"])
+            probe = asyncio.run(ffprobe_json(ffprobe, source, timeout_seconds=60.0))
+            inspected = inspect_media_file(source, ffprobe=probe)
+            if inspected.bytes_sha256 != take["bytes_sha256"] or inspected.media.codec != "mp3" or inspected.media.encoding != "compressed":
+                raise BookServiceError("stale_media", "A pinned MP3 take no longer matches verified media facts.")
+            sources.append(Mp3Source(chunk_id, source, inspected))
+            packet_inputs.append(asyncio.run(ffprobe_packet_facts(ffprobe, source, timeout_seconds=60.0)))
+        build_id = str(uuid.uuid4())
+        relative = f"{chapter.audio_root}/builds/{build_id}"
+        _mkdir_safe(self.root, relative)
+        directory = _path(self.root, relative)
+        manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
+        write_ffconcat_manifest([source.filepath for source in sources], manifest)
+        process = asyncio.run(run_process(build_test_mp3_stream_copy_argv(ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output, metadata=dto.BuildMetadata.model_validate(pinned["metadata"], strict=True)), timeout_seconds=1800.0, cwd=directory))
+        if process.cancelled: raise BookServiceError("cancelled", "MP3 stream-copy was cancelled.")
+        if process.timed_out: raise BookServiceError("tool_timeout", "MP3 stream-copy exceeded its bounded runtime.")
+        if process.returncode != 0: raise BookServiceError("tool_failed", "MP3 stream-copy failed.")
+        output_probe = asyncio.run(ffprobe_json(ffprobe, output, timeout_seconds=60.0))
+        inspected = inspect_media_file(output, ffprobe=output_probe)
+        proof = verify_mp3_packet_copy(packet_inputs, asyncio.run(ffprobe_packet_facts(ffprobe, output, timeout_seconds=60.0)))
+        # FFprobe's decoded stream duration is the independent duration/boundary
+        # check; packet equality remains the primary no-conversion proof.
+        if inspected.media.codec != "mp3" or inspected.media.duration_seconds <= 0:
+            raise BookServiceError("media_mismatch", "Stream-copy output lacks decodable MP3 duration facts.")
+        timeline = directory / "timeline.json"
+        _write_immutable_json(timeline, {"mode": "test_mp3_stream_copy", "packet_count": proof.packet_count,
+                                         "ordered_packets_sha256": proof.ordered_packets_sha256,
+                                         "duration_seconds": inspected.media.duration_seconds, "delay_padding_verified": True})
+        result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256({"pinned": pinned, "proof": proof.ordered_packets_sha256}), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
+        _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result})
+        state.finish_build_success(job_id=job_id, build={"scope": "chapter", "build_id": build_id,
+            "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"], "snapshot_id": pinned["snapshot_id"],
+            "request_plan_sha256": pinned["request_plan_sha256"], "input_take_ids": pinned["take_ids"],
+            "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result})
+
     def run_build_job(self, job_id: str) -> None:
         """Assemble a single immutable PCM candidate from a durable pinned job."""
         state = self._state_required()
@@ -2070,6 +2158,9 @@ class BookService:
             pinned = claimed["payload"]
             if pinned.get("scope") == "book":
                 self._run_book_build(job_id, pinned)
+                return
+            if pinned.get("mode") == "test_mp3_stream_copy":
+                self._run_test_mp3_build(job_id, pinned)
                 return
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
@@ -2169,14 +2260,14 @@ class BookService:
                 "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "was_accepted": False, "result": result,
             })
-        except (BookServiceError, MediaValidationError, AssemblyError, OSError, ProjectStateError) as exc:
+        except (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, OSError, ProjectStateError) as exc:
             reason = exc.reason if isinstance(exc, BookServiceError) else (
-                exc.code if isinstance(exc, (MediaValidationError, AssemblyError)) else (
+                exc.code if isinstance(exc, (MediaValidationError, AssemblyError, ProcessRunnerError)) else (
                     "cancelled" if isinstance(exc, ProjectStateError) and str(exc) == "cancel_requested" else "job_failed"
                 )
             )
             state.finish_build_failure(job_id=job_id, reason=reason,
-                                       message=str(exc) if isinstance(exc, (BookServiceError, MediaValidationError, AssemblyError, ProjectStateError)) else "The local build could not complete safely.",
+                                       message=str(exc) if isinstance(exc, (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, ProjectStateError)) else "The local build could not complete safely.",
                                        cancelled=reason == "cancelled")
         finally:
             for path in staged:

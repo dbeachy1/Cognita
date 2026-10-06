@@ -7,6 +7,7 @@ import struct
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,7 @@ from cognita.books.models import (
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
+from cognita.books.jobs import PacketFact
 import cognita.books.service as service_module
 
 
@@ -688,6 +690,60 @@ def test_native_generation_mp3_is_retained_but_production_pcm_build_rejects_it(t
             "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
         }), owner_key="principal:fixture")
     assert rejected.value.reason == "native_pcm_required"
+
+
+def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, _ = _completed_raw_generation(service, prose, tagged)
+    source = tmp_path / "Audiobook/Chapters/1/test.mp3"
+    raw = b"ID3\x04\x00\x00packet-copy-fixture"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(raw)
+    probe = {"streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100",
+                          "channels": 1, "duration": "0.25", "bit_rate": "96000", "nb_frames": "2"}],
+             "format": {"format_name": "mp3", "duration": "0.25", "bit_rate": "96000"}}
+    async def fake_probe(_executable, _filepath, **_kwargs): return probe
+    async def fake_packets(_executable, _filepath, **_kwargs): return (PacketFact(10, "a" * 64), PacketFact(11, "b" * 64))
+    async def fake_run(argv, **_kwargs):
+        Path(argv[-1]).write_bytes(raw)
+        return SimpleNamespace(cancelled=False, timed_out=False, returncode=0)
+    monkeypatch.setattr(service, "_registered_media_executables", lambda: (source, source))
+    monkeypatch.setattr(service_module, "ffprobe_json", fake_probe)
+    monkeypatch.setattr(service_module, "ffprobe_packet_facts", fake_packets)
+    monkeypatch.setattr(service_module, "run_process", fake_run)
+    imported, _ = service.import_audio(ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "test-mp3-import", "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/test.mp3", "expected_sha256": hashlib.sha256(raw).hexdigest()},
+        "provenance": "test_mp3",
+    }), owner_key="principal:fixture")
+    service.run_import_job(imported["job_id"])
+    take = service.get_job(GetJobRequest(project="fixture", job_id=imported["job_id"]))["result"]["take"]
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(take["snapshot_id"])
+    assert snapshot is not None
+    build, replayed = service.build(BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "test-mp3-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": take["snapshot_id"],
+                  "expected_manifest_revision": snapshot["manifest_revision"], "request_plan_sha256": snapshot["payload"]["result"]["request_plan_sha256"],
+                  "takes": [{"chunk_id": take["chunk_id"], "take_id": take["take_id"], "request_sha256": take["request_sha256"]}]},
+        "mode": "test_mp3_stream_copy", "outputs": {"master": False}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    }), owner_key="principal:fixture")
+    assert not replayed
+    service.run_build_job(build["job_id"])
+    candidate = service.get_job(GetJobRequest(project="fixture", job_id=build["job_id"]))
+    assert candidate["state"] == "succeeded", candidate
+    result = candidate["result"]
+    assert [item["kind"] for item in result["outputs"]] == ["mp3_download"]
+    assert state.chapter_head("ch1", snapshot["scope_key"]) is None
+    committed, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "test-mp3-commit", "build_id": result["build_id"],
+        "expected_head_revision": None, "intent": "accept_candidate", "acceptance": {"actor": "fixture",
+        "accepted_at": datetime.now(timezone.utc).isoformat(), "listening_review": "passed", "notes": ["packet proof"]},
+    }), owner_key="principal:fixture")
+    assert committed["head_revision"] == 1
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
