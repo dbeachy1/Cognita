@@ -411,6 +411,31 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
         "include_prompt": True, "limit": 1,
     }))
     assert recovered["prompts"][0]["prompt"]["text"] == "hello"
+    # A continuation is pinned to the durable generation revision, rather
+    # than silently mixing later provider evidence into an old listing.
+    second, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "reserve-generation-second", "change": {
+            **change,
+        },
+    }), owner_key="principal:fixture")
+    first_page = service.get_generations(GetGenerationsRequest.model_validate({
+        "project": "fixture", "query": {"kind": "chapter", "chapter_id": "ch1"}, "limit": 1,
+    }))
+    assert first_page["has_more"]
+    service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "repeat-submitted-evidence", "change": {
+            "kind": "update", "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": updated["generation"]["generation_revision"],
+            "state": "submitted", "provider_ids": {"generation_ids": ["provider-1"]},
+        },
+    }), owner_key="principal:fixture")
+    with pytest.raises(BookServiceError) as stale_cursor:
+        service.get_generations(GetGenerationsRequest.model_validate({
+            "project": "fixture", "query": {"kind": "chapter", "chapter_id": "ch1"},
+            "cursor": first_page["next_cursor"], "limit": 1,
+        }))
+    assert stale_cursor.value.reason == "invalid_cursor"
+    assert second["generation"]["snapshot_id"] == prepared["snapshot_id"]
 
 
 def _completed_raw_generation(service: BookService, prose: bytes, tagged: bytes) -> tuple[dict, dict]:

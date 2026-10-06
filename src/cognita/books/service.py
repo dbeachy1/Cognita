@@ -33,6 +33,7 @@ from .media import MediaValidationError, inspect_media_file
 from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave, production_mp3_argv
 from .jobs import ProcessRunnerError, ffprobe_json, run_process
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
+from .read_helpers import ReadCursorError, parse_read_cursor, read_cursor, text_page
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
 from ..parsing import compute_doc_id
@@ -1340,6 +1341,7 @@ class BookService:
         return result, disposition == "replay"
 
     def get_generations(self, request: dto.GetGenerationsRequest) -> dict[str, Any]:
+        """Read durable generation evidence and frozen prompt pages only."""
         state = self._state_required()
         if isinstance(request.query, dto.RecordGenerationQuery):
             records = state.generations(generation_record_id=request.query.generation_record_id)
@@ -1348,27 +1350,65 @@ class BookService:
             records = state.generations(chapter_id=request.query.chapter_id)
             if "states" in request.query.model_fields_set:
                 records = [item for item in records if item["state"] in request.query.states]
-        view = canonical_json_sha256({"query": _data(request.query), "records": [r["generation_record_id"] for r in records]})
-        limit = request.limit if "limit" in request.model_fields_set else 100
-        offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
-        page = records[offset:offset + limit]
-        prompts = []
-        if "include_prompt" in request.model_fields_set and request.include_prompt:
-            for record in page:
+        view = canonical_json_sha256({
+            "query": _data(request.query),
+            "records": [(record["generation_record_id"], record["generation_revision"])
+                        for record in records],
+        })
+        limit = request.limit if "limit" in request.model_fields_set else 50
+        include_prompt = "include_prompt" in request.model_fields_set and request.include_prompt
+        try:
+            offset, prompt_offset = (
+                parse_read_cursor(request.cursor, view)
+                if "cursor" in request.model_fields_set else (0, 0)
+            )
+        except ReadCursorError as exc:
+            raise BookServiceError("invalid_cursor", "The generation cursor is invalid or stale.") from exc
+        if offset > len(records) or (not include_prompt and prompt_offset):
+            raise BookServiceError("invalid_cursor", "The generation cursor is invalid or stale.")
+
+        page: list[dict[str, Any]] = []
+        prompts: list[dict[str, Any]] = []
+        remaining = 40_000
+        index = offset
+        next_prompt_offset = 0
+        while index < len(records) and len(page) < limit:
+            record = records[index]
+            page.append(record)
+            if include_prompt:
                 stored = state.snapshot(record["snapshot_id"])
-                if stored is None:
-                    continue
-                chunk = next((c for c in stored["payload"]["result"]["chunks"] if c["chunk_id"] == record["chunk_id"]), None)
-                if chunk is None:
-                    continue
-                text = stored["payload"]["speech_text"][chunk["start"]:chunk["end"]]
-                prompts.append({"generation_record_id": record["generation_record_id"], "prompt": {
-                    "text": text, "returned_start": 0, "returned_end": len(text),
-                    "total_codepoints": len(text), "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
-                }})
-        end = offset + len(page)
-        return {"generations": page, "prompts": prompts, "has_more": end < len(records),
-                "next_cursor": _cursor(view, end) if end < len(records) else None}
+                chunk = (next((item for item in stored["payload"].get("result", {}).get("chunks", [])
+                               if item.get("chunk_id") == record["chunk_id"]), None)
+                         if stored is not None else None)
+                if chunk is not None:
+                    prompt = stored["payload"].get("speech_text", "")
+                    prompt = prompt[chunk["start"]:chunk["end"]]
+                    start = prompt_offset if index == offset else 0
+                    if start > len(prompt):
+                        raise BookServiceError("invalid_cursor", "The generation cursor is invalid or stale.")
+                    if remaining == 0:
+                        page.pop()
+                        break
+                    item = text_page(prompt, start, remaining)
+                    prompts.append({"generation_record_id": record["generation_record_id"], "prompt": item})
+                    consumed = int(item["returned_end"]) - start
+                    remaining -= consumed
+                    if int(item["returned_end"]) < len(prompt):
+                        next_prompt_offset = int(item["returned_end"])
+                        break
+            index += 1
+            prompt_offset = 0
+            if include_prompt and remaining == 0:
+                break
+        if next_prompt_offset:
+            next_index = index
+        else:
+            next_index = index
+        has_more = next_index < len(records)
+        return {
+            "generations": page, "prompts": prompts, "has_more": has_more,
+            "next_cursor": (read_cursor(view, next_index, next_prompt_offset) if has_more else None),
+        }
 
     @staticmethod
     def _metadata_contains(value: object, expected: str) -> bool:
