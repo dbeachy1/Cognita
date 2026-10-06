@@ -19,6 +19,7 @@ so there is one generator rather than two that drift.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -31,8 +32,6 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
-
-from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 PROJECT = "Self-Test"
 # 13.0 §7.1: a second, populated project in the generated installation. The
@@ -188,6 +187,33 @@ print("PASS canonical HTTP multiline argv, repeated jobs, and metadata-independe
 
 class RunnerError(RuntimeError):
     """A setup, lifecycle, or transport check failed."""
+
+
+def _combined_contract_version(repo: Path) -> int:
+    """Read the public MCP generation from the checkout's leaf identity file.
+
+    This host runner is loaded by release.py before Cognita is installed, so
+    importing ``cognita.connectors`` here would break release setup. The
+    identity module is deliberately dependency-free; read its literal without
+    importing the application package.
+    """
+    identity = repo / "src" / "cognita" / "release_identity.py"
+    try:
+        tree = ast.parse(identity.read_text(encoding="utf-8"), filename=str(identity))
+    except (OSError, SyntaxError) as exc:
+        raise RunnerError(f"cannot read combined contract version from {identity}") from exc
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, ast.AnnAssign) else []
+        )
+        if any(isinstance(target, ast.Name) and target.id == "COMBINED_CONTRACT_VERSION"
+               for target in targets):
+            value = node.value
+            if (isinstance(value, ast.Constant) and isinstance(value.value, int)
+                    and not isinstance(value.value, bool) and value.value > 0):
+                return value.value
+            break
+    raise RunnerError(f"no positive COMBINED_CONTRACT_VERSION literal in {identity}")
 
 
 
@@ -491,10 +517,11 @@ def run_selftest(
     # Copy the runner into the candidate image so imports resolve from the same
     # installed package in that image, then pass the synthetic key through
     # stdin into a child environment instead of exposing it in argv or logs.
+    contract_version = _combined_contract_version(repo)
     if run_command(compose + ["cp", str(repo / "scripts" / "run-selftest.py"), "cognita:/tmp/cognita-run-selftest.py"], repo, output, 60):
         raise RunnerError(f"could not copy self-test runner into candidate; see {output}")
     internal_url = (
-        f"http://127.0.0.1:{mcp_port}/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
+        f"http://127.0.0.1:{mcp_port}/mcp/connectors/{slug}/mcp/v{contract_version}"
     )
     command = compose + [
         "exec", "-T", "-e", f"COGNITA_TEST_PROJECT={PROJECT}", "cognita", "sh", "-c",

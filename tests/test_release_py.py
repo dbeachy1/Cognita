@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import contextlib
+import builtins
 import importlib.util
 import os
 import subprocess
@@ -852,6 +853,68 @@ def test_version_comes_only_from_release_identity(clean_repo, log):
     assert "APPLICATION_VERSION" in str(excinfo.value)
     assert "release_identity.py" in str(excinfo.value)
     assert "12.17.0" not in str(excinfo.value)
+
+
+def test_release_installation_and_host_runner_need_no_installed_cognita(tmp_path, monkeypatch):
+    """The host release path reads the repo identity without importing Cognita."""
+    checkout = tmp_path / "checkout"
+    scripts = checkout / "scripts"
+    identity = checkout / "src" / "cognita" / "release_identity.py"
+    scripts.mkdir(parents=True)
+    identity.parent.mkdir(parents=True)
+    (scripts / "kei_http_selftest.py").write_bytes(
+        (REPO / "scripts" / "kei_http_selftest.py").read_bytes())
+    (scripts / "run-selftest.py").write_text("# synthetic copied runner\n", encoding="utf-8")
+    identity.write_text("COMBINED_CONTRACT_VERSION = 77\n", encoding="utf-8")
+    monkeypatch.setattr(release, "REPO_ROOT", checkout)
+    monkeypatch.setattr(release.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(release.os, "getgid", lambda: 1000, raising=False)
+
+    original_import = builtins.__import__
+
+    def forbid_cognita(name, *args, **kwargs):
+        if name == "cognita" or name.startswith("cognita."):
+            raise AssertionError(f"host release runner imported {name}")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", forbid_cognita)
+    monkeypatch.setattr(release.shutil, "which", lambda command: None)
+    install_root = tmp_path / "installation"
+    install_root.mkdir()
+    installation = release.write_installation(
+        install_root, mcp_port=8765, admin_port=8766, version="16.0.0",
+        release_target="test", gpu=False, models_root=tmp_path / "models",
+        log=release.Log(None), mode="core",
+    )
+    assert installation.env_path.is_file()
+
+    host = release._selftest_module()
+    commands = []
+
+    def run_command(args, *unused, **kwargs):
+        commands.append(args)
+        return 0
+
+    class Process:
+        returncode = 1
+
+        def __init__(self, args, **kwargs):
+            commands.append(args)
+
+        def communicate(self, value, timeout):
+            assert value == b"synthetic-key\n"
+            return None, None
+
+    monkeypatch.setattr(host, "run_command", run_command)
+    monkeypatch.setattr(host.subprocess, "Popen", Process)
+    assert host.run_selftest(
+        checkout, ["docker", "compose"], "synthetic-key", tmp_path,
+        mcp_port=8765, mode="core",
+    ) == 1
+    assert commands[0][-1] == "cognita:/tmp/cognita-run-selftest.py"
+    assert commands[1][-1].endswith(
+        "/mcp/connectors/self-test/mcp/v77"
+    )
 
 
 def test_the_repo_names_its_own_version_in_one_place():

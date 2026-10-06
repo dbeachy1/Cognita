@@ -253,6 +253,10 @@ def test_provisioning_failure_prevents_ocr_calls(monkeypatch):
 def test_host_explicitly_provisions_installed_fixtures_and_removes_copied_runner(
         tmp_path, monkeypatch, mode, exit_code):
     from scripts import kei_http_selftest as host
+    identity = tmp_path / "src" / "cognita" / "release_identity.py"
+    identity.parent.mkdir(parents=True)
+    identity.write_text(
+        f"COMBINED_CONTRACT_VERSION = {PUBLIC_CONTRACT_VERSION}\n", encoding="utf-8")
     commands, inputs = [], []
     def command(args, *unused):
         commands.append(args)
