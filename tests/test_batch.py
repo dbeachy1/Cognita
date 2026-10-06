@@ -219,7 +219,7 @@ async def test_tools_list_inside_a_batch_is_still_rewritten(env):
     app, tok, _, _, _ = env
     r = await post(app, tok, [{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}])
     tools = r.json()[0]["result"]["tools"]
-    assert len(tools) == 72 and "list_projects" in {t["name"] for t in tools}
+    assert len(tools) == 73 and "list_projects" in {t["name"] for t in tools}
 
 
 async def test_single_message_still_works_unchanged(env):
