@@ -48,7 +48,7 @@ from cognita.books.models import (
     RecordGenerationRequest,
 )
 from cognita.books.projection import project_docx_pair
-from cognita.books.service import BookService
+from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState
 from cognita.books.policy import EffectiveIndexPolicy
 from cognita.books.config import FolderRule
@@ -331,7 +331,8 @@ def make_take(service: BookService, prepared: dict, chapter_id: str,
 
 
 def chapter_build(service: BookService, chapter_id: str, prepared: dict,
-                  takes: list[dict], operation: str, head_revision: int | None) -> dict:
+                  takes: list[dict], operation: str, head_revision: int | None,
+                  gaps: list[dict] | None = None) -> dict:
     state = ProjectState.discover(service.root)
     assert state is not None
     snapshot = state.snapshot(prepared["snapshot_id"])
@@ -350,7 +351,7 @@ def chapter_build(service: BookService, chapter_id: str, prepared: dict,
         },
         "mode": "production_pcm",
         "outputs": {"master": True, "mp3_bitrate_kbps": 192},
-        "gaps": [],
+        "gaps": gaps or [],
         "metadata": {"title": f"Synthetic {chapter_id}", "author": "Synthetic Example",
                      "edition": "16.0.0", "chapter_number": 1 if chapter_id == "chapter-one" else 2},
     }), owner_key=OWNER)
@@ -488,6 +489,7 @@ def main() -> None:
             first_acceptances[chapter_id] = chapter_build(
                 service, chapter_id, prepared_by_chapter[chapter_id],
                 takes_by_chapter[chapter_id], f"build-{chapter_id}-v1", None,
+                gaps=[{"before_id": f"{chapter_id}-closing", "sample_frames": 73}],
             )
 
         book_gaps = [
@@ -495,27 +497,64 @@ def main() -> None:
             {"before_id": "chapter-two", "sample_frames": 441},
         ]
         initial_book = book_build(service, "build-whole-book-v1", None, gaps=book_gaps)
+        initial_timeline_path = service.root / initial_book["build"]["timeline_filepath"]
+        initial_timeline_bytes = initial_timeline_path.read_bytes()
         initial_book_two_start = next(
             int(entry["start_frame"]) for entry in initial_book["timeline"]["entries"]
             if entry["source_id"] == "chapter-two"
         )
-        assert initial_book_two_start == 88_861
+        assert initial_book_two_start == 88_934
         leading_gap = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"], "seconds": 0.0},
         }))
         assert [(match["chapter_id"], match["chunk_ids"], match["segment_kind"])
                 for match in leading_gap["matches"]] == [("chapter-one", ["chapter-one-opening"], "silence")]
+        chapter_one_start = next(
+            int(entry["start_frame"]) for entry in initial_book["timeline"]["entries"]
+            if entry["source_id"] == "chapter-one"
+        )
+        chapter_one_children = next(
+            entry["child_entries"] for entry in initial_book["timeline"]["entries"]
+            if entry["source_id"] == "chapter-one"
+        )
+        internal_gap = next(entry for entry in chapter_one_children if entry["kind"] == "silence")
+        assert int(internal_gap["start_frame"]) == chapter_one_start + 44_100
+        internal_silence = service.find_chunk(FindChunkRequest.model_validate({
+            "project": PROJECT, "chapter_id": "chapter-one",
+            "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                      "seconds": int(internal_gap["start_frame"]) / 44_100},
+        }))
+        assert [(match["chunk_ids"], match["matched_take_ids"], match["segment_kind"])
+                for match in internal_silence["matches"]] == [
+                    (["chapter-one-opening"], [takes_by_chapter["chapter-one"][0]["take_id"]], "silence"),
+                    (["chapter-one-closing"], [takes_by_chapter["chapter-one"][1]["take_id"]], "silence"),
+                ]
         interchapter_gap = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
-                      "seconds": 88_420 / 44_100},
+                      "seconds": 88_493 / 44_100},
         }))
         assert [(match["chapter_id"], match["chunk_ids"], match["segment_kind"])
                 for match in interchapter_gap["matches"]] == [
                     ("chapter-one", ["chapter-one-closing"], "silence"),
                     ("chapter-two", ["chapter-two-opening"], "silence"),
                 ]
+        filtered_interchapter = service.find_chunk(FindChunkRequest.model_validate({
+            "project": PROJECT, "chapter_id": "chapter-two", "limit": 1,
+            "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                      "seconds": 88_493 / 44_100},
+        }))
+        assert [(match["chapter_id"], match["chunk_ids"])
+                for match in filtered_interchapter["matches"]] == [("chapter-two", ["chapter-two-opening"])]
+        assert filtered_interchapter["has_more"] is False
+        cursor_query = FindChunkRequest.model_validate({
+            "project": PROJECT, "limit": 1,
+            "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                      "seconds": 88_493 / 44_100},
+        })
+        cursor_page = service.find_chunk(cursor_query)
+        assert cursor_page["next_cursor"] is not None
         initial_book_chapter_two = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT, "chapter_id": "chapter-two",
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
@@ -527,6 +566,17 @@ def main() -> None:
         assert initial_book_match["snapshot_id"] == prepared_by_chapter["chapter-two"]["snapshot_id"]
         assert initial_book_match["chunk_ids"] == ["chapter-two-opening"]
         assert initial_book_match["matched_take_ids"] == [takes_by_chapter["chapter-two"][0]["take_id"]]
+        past_end = int(initial_book["timeline"]["frame_count"])
+        try:
+            service.find_chunk(FindChunkRequest.model_validate({
+                "project": PROJECT,
+                "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                          "seconds": past_end / 44_100},
+            }))
+        except BookServiceError as error:
+            assert error.reason == "past_end"
+        else:
+            raise AssertionError("A whole-book timestamp at total frame_count must be past_end.")
         quote = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT, "chapter_id": "chapter-one",
             "query": {"kind": "quote", "text": "lantern stayed lit"},
@@ -588,8 +638,16 @@ def main() -> None:
             int(entry["start_frame"]) for entry in second_book["timeline"]["entries"]
             if entry["source_id"] == "chapter-two"
         )
-        assert second_book_two_start == 132_961
+        assert second_book_two_start == 133_034
         assert second_book["dependencies"][1]["chapter_build_id"] == initial_book["dependencies"][1]["chapter_build_id"]
+        assert initial_timeline_path.read_bytes() == initial_timeline_bytes
+        old_chapter_one_time = service.find_chunk(FindChunkRequest.model_validate({
+            "project": PROJECT, "chapter_id": "chapter-one",
+            "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                      "seconds": 220 / 44_100},
+        }))['matches'][0]
+        assert old_chapter_one_time["matched_take_ids"] == [takes_by_chapter["chapter-one"][0]["take_id"]]
+        assert old_chapter_one_time["current_take_ids"] == [replacement["take_id"]]
         old_book_match = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT, "chapter_id": "chapter-two",
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
@@ -602,6 +660,16 @@ def main() -> None:
         }))["matches"][0]
         assert old_book_match["snapshot_id"] == new_book_match["snapshot_id"] == prepared_by_chapter["chapter-two"]["snapshot_id"]
         assert old_book_match["matched_take_ids"] == new_book_match["matched_take_ids"] == [takes_by_chapter["chapter-two"][0]["take_id"]]
+        try:
+            service.find_chunk(FindChunkRequest.model_validate({
+                "project": PROJECT, "limit": 1, "cursor": cursor_page["next_cursor"],
+                "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                          "seconds": 88_493 / 44_100},
+            }))
+        except BookServiceError as error:
+            assert error.reason == "invalid_cursor"
+        else:
+            raise AssertionError("A book lookup cursor must expire when a participating chapter head changes.")
 
         rolled_back, _ = service.commit_build(CommitBuildRequest.model_validate({
             "project": PROJECT,
@@ -640,6 +708,13 @@ def main() -> None:
         }))
         assert chapter["accepted_build_id"] == previous_build
         assert rolled_back["head_revision"] == 3
+        rolled_back_old_time = service.find_chunk(FindChunkRequest.model_validate({
+            "project": PROJECT, "chapter_id": "chapter-one",
+            "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
+                      "seconds": 220 / 44_100},
+        }))['matches'][0]
+        assert rolled_back_old_time["matched_take_ids"] == rolled_back_old_time["current_take_ids"]
+        assert initial_timeline_path.read_bytes() == initial_timeline_bytes
         assert restored_book_head["accepted_build_id"] == initial_book["build"]["build_id"]
         historic_match = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT,

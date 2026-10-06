@@ -1164,6 +1164,36 @@ def test_book_timestamp_uses_pinned_child_identity_and_old_dependency_fallback(t
         assert match["current_take_ids"] == [take["take_id"]]
 
 
+def test_old_book_timeline_fails_without_pinned_chapter_facts_and_keeps_history_unchanged(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="book-missing-pinned-facts")
+    accepted = _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="book-missing-pinned-facts", expected_head=None,
+    )
+    legacy = _persist_book_timeline_fixture(
+        service, state, accepted["accepted_build_id"], build_id="book-legacy-missing-facts", nested=False,
+    )
+    outer_timeline = tmp_path / legacy["timeline_filepath"]
+    outer_bytes = outer_timeline.read_bytes()
+    outer_build_record = state.build(legacy["build_id"])
+    chapter_timeline = tmp_path / state.build(accepted["accepted_build_id"])["result"]["timeline_filepath"]
+    chapter_timeline.unlink()
+
+    with pytest.raises(BookServiceError) as unavailable:
+        service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture",
+            "query": {"kind": "timestamp", "build_id": legacy["build_id"], "seconds": 0.0},
+        }))
+
+    assert unavailable.value.reason == "state_unavailable"
+    assert not chapter_timeline.exists()
+    assert outer_timeline.read_bytes() == outer_bytes
+    assert state.build(legacy["build_id"]) == outer_build_record
+
+
 def test_direct_take_associations_keep_history_separate_from_current_head(tmp_path):
     service, state, stored, settings_path, *_rest, settings = _production_prepared_fixture(tmp_path)
     old_plan = stored["payload"]["result"]
