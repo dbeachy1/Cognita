@@ -130,6 +130,30 @@ def test_compressed_audio_stays_compressed_and_requires_actual_probe_facts() -> 
         inspect_media(raw, ffprobe={**probe, "streams": [*probe["streams"], *probe["streams"]]})
 
 
+def test_compressed_mp3_zero_sample_width_from_ffprobe_is_unknown(tmp_path) -> None:
+    # Actual FFprobe 6.1.1 output for an MP3 fixture: bits_per_raw_sample is
+    # absent and bits_per_sample is the sentinel 0 (not a PCM width).
+    raw = b"synthetic MP3 fixture bytes"
+    probe = {
+        "streams": [{
+            "codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100",
+            "channels": 1, "duration": "0.261224", "bit_rate": "192000",
+            "bits_per_sample": 0, "nb_frames": "10",
+        }],
+        "format": {"format_name": "mp3", "duration": "0.261224"},
+    }
+    inspected = inspect_media(raw, ffprobe=probe)
+    assert inspected.media.encoding == "compressed"
+    assert inspected.media.storage_bits is None and inspected.media.valid_bits is None
+    assert inspected.media.canonical_sample_sha256 is None
+
+    path = tmp_path / "sample.mp3"
+    path.write_bytes(raw)
+    streamed = inspect_media_file(path, ffprobe=probe)
+    assert streamed.media == inspected.media
+    assert streamed.media.frame_count == "10"
+
+
 def test_rf64_pcm_sample_identity_matches_wav_and_ffprobe_evidence() -> None:
     samples = struct.pack("<hh", 42, -7)
     result = inspect_media(_rf64(samples))

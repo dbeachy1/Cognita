@@ -271,7 +271,10 @@ def _parse_probe(probe: Mapping[str, object]) -> MediaProperties:
     if frame_count_value not in (None, "N/A", ""):
         frame_count = str(_safe_positive(frame_count_value, "frame count"))
     bits_value = stream.get("bits_per_raw_sample", stream.get("bits_per_sample"))
-    bits = _safe_positive(bits_value, "sample bits") if bits_value not in (None, "N/A", "") else None
+    # FFprobe reports bits_per_sample=0 for compressed MP3 streams. It means
+    # the codec does not expose a PCM storage width, not an invalid zero-bit
+    # audio format; compressed sample width is therefore unknown here.
+    bits = _safe_positive(bits_value, "sample bits") if bits_value not in (None, "N/A", "", 0, "0") else None
     return MediaProperties.model_validate({
         "codec": codec,
         "container": container,
@@ -308,7 +311,7 @@ def _assert_pcm_matches_probe(fmt: _PcmFormat, probe: Mapping[str, object]) -> N
     if _safe_positive(stream.get("channels"), "channel count") != fmt.channels:
         raise MediaValidationError("media_mismatch", "WAVE channel count conflicts with ffprobe")
     bits_value = stream.get("bits_per_raw_sample", stream.get("bits_per_sample"))
-    if bits_value not in (None, "N/A", "") and _safe_positive(bits_value, "sample bits") != fmt.storage_bits:
+    if bits_value not in (None, "N/A", "", 0, "0") and _safe_positive(bits_value, "sample bits") != fmt.storage_bits:
         raise MediaValidationError("media_mismatch", "WAVE sample width conflicts with ffprobe")
 
 
