@@ -1845,6 +1845,10 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
     {"download_url": "https://media.example/audio?signature=synthetic_secret"},
     {"endpoint": "https://user:synthetic_secret@media.example/audio"},
     {"nested": {"x-api-key": "synthetic_secret"}},
+    {"links": ["https://example.test/audio?sig=synthetic_fixture"]},
+    {"href": "https://fixture_user:synthetic_fixture@example.test/audio"},
+    {"nested": [{"location": "HTTPS://example.test/audio?X-Amz-Credential=synthetic_fixture"}]},
+    {"href": " https://example.test/audio?sig=synthetic_fixture \n"},
 ])
 def test_durable_provider_facts_refuse_explicit_transport_credentials(facts):
     with pytest.raises(BookServiceError) as rejected:
@@ -1856,6 +1860,10 @@ def test_durable_provider_facts_refuse_explicit_transport_credentials(facts):
 def test_durable_provider_facts_preserve_public_nonsecret_structures():
     facts = {
         "provider_id": "provider-7", "public_url": "https://example.org/evidence",
+        "links": ["https://example.org/audio?format=pcm", {"href": "https://example.org/evidence"}],
+        "previous_text": "https://fixture_user:synthetic_fixture@example.test/audio",
+        "prompt": "https://example.test/audio?sig=synthetic_fixture",
+        "next_text": "Literal prose https://example.test/audio?sig=synthetic_fixture",
         "nested": {"enabled": True, "attempts": [1, 2, {"format": "pcm"}]},
     }
     _validate_durable_provider_facts(facts)
@@ -1867,6 +1875,10 @@ def test_durable_provider_facts_preserve_public_nonsecret_structures():
     {"download_url": "https://example.test/audio?api_key=synthetic_fixture"},
     {"download_url": "https://example.test/audio?X-Amz-Credential=synthetic_fixture"},
     {"signed_download_url": "https://example.test/audio?sig=synthetic_fixture"},
+    {"links": ["https://example.test/audio?sig=synthetic_fixture"]},
+    {"href": "https://fixture_user:synthetic_fixture@example.test/audio"},
+    {"nested": [{"location": "https://example.test/audio?access_token=synthetic_fixture"}]},
+    {"href": " https://example.test/audio?sig=synthetic_fixture \n"},
 ])
 def test_generation_update_rejects_credentials_before_sqlite_mutation(tmp_path, metadata):
     service, _prose, _tagged, _spec, _prepared, request = _generation_cas_fixture(tmp_path)
@@ -1893,6 +1905,12 @@ def test_generation_update_rejects_credentials_before_sqlite_mutation(tmp_path, 
         owner_key="principal:fixture", project="fixture",
         tool="audiobook_record_generation", operation_id=operation_id,
     ) is None
+    reopened_state = BookService(tmp_path, "fixture")._state_required()
+    assert reopened_state.generation(generation["generation_record_id"]) == before
+    assert reopened_state.receipt(
+        owner_key="principal:fixture", project="fixture",
+        tool="audiobook_record_generation", operation_id=operation_id,
+    ) is None
 
 
 def test_generation_allows_nonsecret_evidence_and_reopens_exact_json(tmp_path):
@@ -1903,6 +1921,7 @@ def test_generation_allows_nonsecret_evidence_and_reopens_exact_json(tmp_path):
     provider_ids = {"flow_id": "flow-public", "generation_ids": ["provider-7"]}
     metadata = {
         "public_url": "https://example.org/evidence", "provider_id": "provider-7",
+        "links": ["https://example.org/audio?format=pcm", {"href": "https://example.org/evidence"}],
         "nested": {"attempt": 1, "formats": ["pcm", "wav"]},
     }
     updated, replayed = service.record_generation(RecordGenerationRequest.model_validate({
@@ -1934,6 +1953,16 @@ def test_generation_allows_nonsecret_evidence_and_reopens_exact_json(tmp_path):
         "parameters": {},
         "context_fields": {"download_url": "https://media.example/audio?signature=synthetic_secret"},
     },
+    {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {"links": ["https://example.test/audio?sig=synthetic_fixture"]},
+        "context_fields": {},
+    },
+    {
+        "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
+        "parameters": {},
+        "context_fields": {"href": "https://fixture_user:synthetic_fixture@example.test/audio"},
+    },
 ])
 def test_prepare_rejects_credential_request_fields_before_snapshot_or_receipt(tmp_path, request_spec):
     service, prose, tagged = _fixture(tmp_path)
@@ -1957,13 +1986,17 @@ def test_prepare_rejects_credential_request_fields_before_snapshot_or_receipt(tm
     assert not (tmp_path / ".cognita-storage").exists()
 
 
-def test_prepare_keeps_nonsecret_context_fingerprinted_and_retained(tmp_path):
+@pytest.mark.parametrize("previous_text", [
+    "Prior prose with a literal https://example.test/audio?api_key=synthetic_fixture",
+    "https://example.test/audio?sig=synthetic_fixture",
+])
+def test_prepare_keeps_nonsecret_context_fingerprinted_and_retained(tmp_path, previous_text):
     service, prose, tagged = _fixture(tmp_path)
     spec = {
         "provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice",
         "parameters": {"format": "pcm", "public_url": "https://example.org/reference"},
         "context_fields": {
-            "previous_text": "Prior prose with a literal https://example.test/audio?api_key=synthetic_fixture",
+            "previous_text": previous_text,
             "additional": {"provider_id": "provider-7", "attempt": 1},
         },
     }
@@ -1975,6 +2008,8 @@ def test_prepare_keeps_nonsecret_context_fingerprinted_and_retained(tmp_path):
     assert chunk["request_sha256"] == request_fingerprint("hello", spec)
     frozen = service._state_required().snapshot(prepared["snapshot_id"])
     assert frozen["payload"]["result"]["chunks"][0]["request_spec"] == spec
+    reopened = BookService(tmp_path, "fixture")._state_required().snapshot(prepared["snapshot_id"])
+    assert reopened["payload"]["result"]["chunks"][0]["request_spec"] == spec
 
 
 def test_generation_reservation_rejects_credential_request_before_sqlite_mutation(tmp_path):

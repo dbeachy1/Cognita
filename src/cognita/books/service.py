@@ -79,6 +79,9 @@ _URL_KEYS = frozenset(map(_provider_fact_key, {
     "presigned_url", "presigned_uri",
     "presigned_download_url", "presigned_download_uri",
 }))
+_LITERAL_TEXT_KEYS = frozenset(map(_provider_fact_key, {
+    "prompt", "previous_text", "next_text",
+}))
 _SIGNED_QUERY_KEYS = _SECRET_KEYS | frozenset(map(_provider_fact_key, {
     "signature", "sig", "token",
     "x_amz_signature", "x_amz_credential", "x_amz_security_token",
@@ -99,8 +102,18 @@ def _validate_durable_provider_facts(value: Any, *, key: str | None = None) -> N
         for child in value:
             _validate_durable_provider_facts(child, key=key)
         return
-    if isinstance(value, str) and normalized in _URL_KEYS:
-        parsed = urlsplit(value)
+    if isinstance(value, str) and normalized not in _LITERAL_TEXT_KEYS:
+        # Provider JSON may put a transport URL under any key or in an array.
+        # Recognize whole HTTP URLs, without scanning literal prose for links.
+        candidate = value.strip()
+        whole_url = (candidate.casefold().startswith(("http://", "https://"))
+                     and not any(character.isspace() for character in candidate))
+        if normalized not in _URL_KEYS and not whole_url:
+            return
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError as exc:
+            raise BookServiceError("validation_failed", "Provider evidence contains an invalid transport URL.") from exc
         if parsed.username is not None or parsed.password is not None:
             raise BookServiceError("validation_failed", "Provider evidence cannot contain credential URLs.")
         if any(_provider_fact_key(name) in _SIGNED_QUERY_KEYS
