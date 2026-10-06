@@ -969,6 +969,8 @@ class LocalEngineHost(
                     )
 
             async def perform() -> dict[str, Any]:
+                # Keep the authenticated request context available to async media finalizers.
+                book_caller = caller
                 if tool == "audiobook_inspect_chapter":
                     data = service.inspect(request_model)
                 elif tool == "audiobook_prepare_chapter":
@@ -990,7 +992,6 @@ class LocalEngineHost(
                         key = (project.name, job_id)
                         service.mark_import_worker_started(job_id)
                         source_request = request_model.source
-                        book_caller = caller
 
                         async def run_import() -> None:
                             from .books.sources import (

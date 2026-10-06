@@ -647,6 +647,55 @@ async def test_authenticated_workspace_import_reserves_before_controlled_transfe
     assert denied_payload["status"] == "error" and denied_payload["reason"] == "read_only"
     assert len(broker.calls) == 1
 
+    if interleaving is None:
+        # Revoke after the authenticated build is queued but before its worker
+        # finalizes, proving the async callback retains this request's caller.
+        original_run_build = service.run_build_job
+        build_entered = threading.Event()
+        release_build = threading.Event()
+
+        def controlled_build_worker(job_id, *, before_finalize=None, after_finalize=None):
+            build_entered.set()
+            if not release_build.wait(timeout=5):
+                raise AssertionError("test did not release the controlled build worker")
+            return original_run_build(
+                job_id, before_finalize=before_finalize, after_finalize=after_finalize,
+            )
+
+        service.run_build_job = controlled_build_worker
+        take = final["result"]["take"]
+        build_response = await gateway_post(_rpc("tools/call", {
+            "name": "audiobook_build", "arguments": {
+                "project": "fixture", "operation_id": "authenticated-workspace-build",
+                "expected_head_revision": None,
+                "input": {
+                    "kind": "chapter", "chapter_id": "ch1",
+                    "snapshot_id": prepared["snapshot_id"],
+                    "expected_manifest_revision": prepared["manifest_revision"],
+                    "request_plan_sha256": prepared["request_plan_sha256"],
+                    "takes": [{"chunk_id": "authenticated-workspace",
+                               "take_id": take["take_id"],
+                               "request_sha256": take["request_sha256"]}],
+                },
+                "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+                "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+            },
+        }))
+        assert build_response.status_code == 200
+        build_payload = json.loads(build_response.json()["result"]["content"][0]["text"])
+        assert build_payload["status"] == "success", build_payload
+        build_job = build_payload["data"]
+        build_key = ("fixture", build_job["job_id"])
+        try:
+            assert await asyncio.to_thread(build_entered.wait, 3)
+            credential_store.revoke(_credential.credential_id)
+        finally:
+            release_build.set()
+        await asyncio.wait_for(host._book_build_tasks[build_key], timeout=8)
+        failed_build = state.build_job(build_job["job_id"])
+        assert failed_build["state"] == "failed", failed_build
+        assert failed_build["error"]["reason"] == "project_unavailable", failed_build
+
 
 def test_book_wire_capture_suppresses_source_and_malformed_bodies():
     for raw in (
