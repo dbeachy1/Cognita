@@ -26,11 +26,12 @@ from cognita.books.models import (
     PrepareRequest,
     RecordGenerationRequest,
 )
+import cognita.books.service as service_module
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.config import BookLayout
 from cognita.books.state import ProjectState, ProjectStateError
 from cognita.books.media import inspect_media_file
-from cognita.books.docx import parse_docx
+from cognita.books.docx import FileLockedError, parse_docx
 from cognita.books.projection import project_docx_pair
 from cognita.books.jobs import PacketFact
 from cognita.books.fingerprint import canonical_json_sha256
@@ -331,6 +332,22 @@ def test_prepare_bookmarks_snapshot_and_guarded_working_publication(tmp_path):
     assert state.publications("chapter_bookmark_prepare") == []
 
 
+def test_locked_working_tagged_file_fails_before_snapshot_artifacts(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+
+    def locked(_path):
+        raise FileLockedError("fixture lock")
+
+    monkeypatch.setattr(service_module, "require_unlocked", locked)
+    with pytest.raises(BookServiceError) as failure:
+        _prepare_test_plan(service, "bookmark-locked", prose, tagged, None, [
+            {"chunk_id": "part", "start": 0, "end": 5, "request_spec": None},
+        ], publish=True)
+    assert failure.value.reason == "file_locked"
+    assert not (tmp_path / service_module.STATE_ROOT / "snapshots").exists()
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == tagged
+
+
 def test_prepare_bookmark_false_keeps_working_bytes_unchanged(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
     before = (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes()
@@ -340,6 +357,12 @@ def test_prepare_bookmark_false_keeps_working_bytes_unchanged(tmp_path):
     assert result["working_tagged_updated"] is False
     assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == before
     assert result["snapshot_tagged_sha256"] != result["input_tagged_sha256"]
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(result["snapshot_id"])
+    assert snapshot is not None
+    frozen_tagged = (tmp_path / snapshot["payload"]["tagged_filepath"]).read_bytes()
+    assert parse_docx(frozen_tagged).bookmarks[0].name == result["chunks"][0]["bookmark"]
 
 
 def test_bookmark_publication_restart_restores_uncommitted_owned_bytes(tmp_path, monkeypatch):
@@ -555,6 +578,300 @@ def test_production_eligibility_rejects_changed_approved_prose(tmp_path):
             "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
         }), owner_key="principal:fixture")
     assert denied.value.reason == "stale_dependency"
+
+
+def _build_and_accept_production_chapter(service, prepared, take, *, operation_prefix, expected_head):
+    chunk = prepared["chunks"][0]
+    build_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-build", "expected_head_revision": expected_head,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": chunk["chunk_id"], "take_id": take["take_id"],
+                             "request_sha256": chunk["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, _ = service.build(build_request, owner_key="principal:fixture")
+    build_id = f"synthetic-{operation_prefix}"
+    relative = f"Audiobook/Chapters/1/builds/{build_id}"
+    directory = service.root / relative
+    directory.mkdir(parents=True, exist_ok=False)
+    samples = (service.root / take["filepath"]).read_bytes()
+    pcm_path = directory / "master.pcm"
+    pcm_path.write_bytes(samples)
+    media = dict(take["media"])
+    media.update({"container": "raw_pcm", "frame_count": len(samples) // 2,
+                  "duration_seconds": len(samples) / 2 / 8000})
+    output = {"kind": "pcm_master", "filepath": f"{relative}/master.pcm",
+              "bytes_sha256": hashlib.sha256(samples).hexdigest(), "size_bytes": len(samples),
+              "media": media}
+    timeline_value = {"sample_rate_hz": 8000, "channels": 1, "encoding": "signed_integer",
+                      "storage_bits": 16, "frame_count": len(samples) // 2,
+                      "entries": [{"source_id": chunk["chunk_id"], "kind": "audio",
+                                   "start_frame": "0", "end_frame": str(len(samples) // 2),
+                                   "source_bytes_sha256": take["bytes_sha256"],
+                                   "canonical_sample_sha256": media["canonical_sample_sha256"]}]}
+    (directory / "timeline.json").write_text(json.dumps(timeline_value), encoding="utf-8")
+    result = {
+        "kind": "build", "build_id": build_id, "scope": "chapter", "namespace": {"kind": "production"},
+        "source_snapshot_ids": [prepared["snapshot_id"]], "input_take_ids": [take["take_id"]],
+        "chapter_dependencies": [], "request_plan_sha256": prepared["request_plan_sha256"],
+        "outputs": [output], "timeline_filepath": f"{relative}/timeline.json",
+        "recipe_sha256": "0" * 64,
+        "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                       "sample_or_packet_verification": True, "errors": []},
+        "needs_listening_review": True,
+    }
+    service._state_required().finish_build_success(job_id=queued["job_id"], build={
+        "scope": "chapter", "build_id": build_id, "chapter_id": "ch1",
+        "scope_key": '{"kind":"production"}', "snapshot_id": prepared["snapshot_id"],
+        "request_plan_sha256": prepared["request_plan_sha256"], "input_take_ids": [take["take_id"]],
+        "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result,
+    })
+    committed, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-accept",
+        "build_id": build_id, "expected_head_revision": expected_head,
+        "intent": "accept_candidate",
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["synthetic local PCM test"]},
+    }), owner_key="principal:fixture")
+    return committed
+
+
+def _reserve_synthetic_book_build(service, state, layout, *, operation_prefix, expected_book_head):
+    head = state.chapter_head("ch1", '{"kind":"production"}')
+    assert head is not None
+    dependency = {
+        "chapter_id": "ch1", "chapter_build_id": head["accepted_build_id"],
+        "chapter_head_revision": head["head_revision"], "snapshot_id": head["accepted_snapshot_id"],
+        "request_plan_sha256": head["accepted_plan_sha256"],
+    }
+    request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": f"{operation_prefix}-reserve",
+        "expected_head_revision": expected_book_head,
+        "input": {"kind": "book", "book_id": layout.book_id,
+                  "expected_layout_revision": layout.layout_revision, "chapters": [dependency]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [], "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, _ = service.build(request, owner_key="principal:fixture")
+    job = state.build_job(queued["job_id"])
+    assert job is not None
+    pinned = job["payload"]
+    dependencies = [entry["dependency"] for entry in pinned["chapters"]]
+    chapter_build = state.build(dependency["chapter_build_id"])
+    assert chapter_build is not None
+    output = next(item for item in chapter_build["result"]["outputs"] if item["kind"] == "pcm_master")
+    build_id = f"synthetic-book-{operation_prefix}"
+    result = {
+        "kind": "build", "build_id": build_id, "scope": "book", "namespace": {"kind": "production"},
+        "source_snapshot_ids": [item["snapshot_id"] for item in dependencies],
+        "input_take_ids": chapter_build["input_take_ids"], "chapter_dependencies": dependencies,
+        "request_plan_sha256": None, "outputs": [output],
+        "timeline_filepath": chapter_build["result"]["timeline_filepath"],
+        "recipe_sha256": "0" * 64,
+        "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                       "sample_or_packet_verification": True, "errors": []},
+        "needs_listening_review": True,
+    }
+    state.finish_build_success(job_id=queued["job_id"], build={
+        "scope": "book", "build_id": build_id, "book_id": layout.book_id,
+        "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
+        "dependencies": dependencies, "result": result,
+    })
+    return build_id
+
+
+def _commit_book(service, operation_id, build_id, expected_head, intent):
+    return service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": operation_id, "build_id": build_id,
+        "expected_head_revision": expected_head, "intent": intent,
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["synthetic local PCM test"]},
+    }), owner_key="principal:fixture")[0]
+
+
+def test_same_prose_chapter_retake_stales_reserved_book_dependency(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_state_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    first_take = _import_native_take(service, prepared, "main", operation_prefix="book-first-take")
+    first = _build_and_accept_production_chapter(service, prepared, first_take,
+                                                 operation_prefix="book-first", expected_head=None)
+    service = BookService(tmp_path, "fixture")
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    layout = service._enabled_layout()[2]
+    chapter_head = state.chapter_head("ch1", '{"kind":"production"}')
+    assert chapter_head is not None
+    dependency = {
+        "chapter_id": "ch1", "chapter_build_id": chapter_head["accepted_build_id"],
+        "chapter_head_revision": chapter_head["head_revision"],
+        "snapshot_id": chapter_head["accepted_snapshot_id"],
+        "request_plan_sha256": chapter_head["accepted_plan_sha256"],
+    }
+    book_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "book-race-reserve", "expected_head_revision": None,
+        "input": {"kind": "book", "book_id": layout.book_id,
+                  "expected_layout_revision": layout.layout_revision, "chapters": [dependency]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [], "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, _ = service.build(book_request, owner_key="principal:fixture")
+    book_job = state.build_job(queued["job_id"])
+    assert book_job is not None
+
+    second_take = _import_native_take(service, prepared, "main", operation_prefix="book-second-take")
+    second = _build_and_accept_production_chapter(service, prepared, second_take,
+                                                  operation_prefix="book-second", expected_head=1)
+    assert second["head_revision"] == 2
+    with pytest.raises(BookServiceError) as chapter_cas:
+        service.commit_build(CommitBuildRequest.model_validate({
+            "project": "fixture", "operation_id": "competing-chapter-commit",
+            "build_id": first["accepted_build_id"], "expected_head_revision": 1,
+            "intent": "accept_candidate",
+            "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                           "listening_review": "passed", "notes": []},
+        }), owner_key="principal:fixture")
+    assert chapter_cas.value.reason == "stale_head"
+    pinned = book_job["payload"]
+    book_build_id = "synthetic-book-build"
+    dependency_set = [entry["dependency"] for entry in pinned["chapters"]]
+    state.finish_build_success(job_id=queued["job_id"], build={
+        "scope": "book", "build_id": book_build_id, "book_id": layout.book_id,
+        "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
+        "dependencies": dependency_set,
+        "result": {
+            "kind": "build", "build_id": book_build_id, "scope": "book",
+            "namespace": {"kind": "production"},
+            "source_snapshot_ids": [entry["snapshot_id"] for entry in dependency_set],
+            "input_take_ids": [], "chapter_dependencies": dependency_set,
+            "request_plan_sha256": None,
+            "outputs": [first["exports"][0]], "timeline_filepath": first["exports"][0]["filepath"],
+            "recipe_sha256": "0" * 64,
+            "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                           "sample_or_packet_verification": True, "errors": []},
+            "needs_listening_review": True,
+        },
+    })
+    with pytest.raises(BookServiceError) as stale:
+        service.commit_build(CommitBuildRequest.model_validate({
+            "project": "fixture", "operation_id": "book-race-commit", "build_id": book_build_id,
+            "expected_head_revision": None, "intent": "accept_candidate",
+            "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                           "listening_review": "passed", "notes": []},
+        }), owner_key="principal:fixture")
+    assert stale.value.reason == "stale_dependency"
+    assert state.book_head(layout.book_id) is None
+
+
+def test_chapter_rollback_allows_older_performance_after_tag_and_settings_refresh(tmp_path):
+    service, state, stored, settings_path, _layout_path, _chapter_state_path, prose, tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="historic-chapter-take")
+    accepted = _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="historic-chapter", expected_head=None,
+    )
+    tagged_refresh = tagged.replace(b"<w:p>", b'<w:p w:rsidR="00000002">')
+    prose_refresh = prose.replace(b"<w:p>", b'<w:p w:rsidR="00000003">')
+    tagged_path = tmp_path / "Chapters/1/chapter_audio-tags.docx"
+    prose_path = tmp_path / "Chapters/1/chapter.docx"
+    tagged_path.write_bytes(tagged_refresh)
+    prose_path.write_bytes(prose_refresh)
+    current_settings = json.loads(json.dumps(settings))
+    current_settings["request_spec"]["voice_id"] = "voice-b"
+    settings_path.write_text(json.dumps(current_settings, indent=2), encoding="utf-8")
+    inspected = _inspect(service)
+    refreshed, _ = service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "historic-chapter-refresh", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose_refresh).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged_refresh).hexdigest(),
+        "expected_manifest_revision": prepared["manifest_revision"],
+        "scope": {"kind": "production"}, "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": hashlib.sha256(settings_path.read_bytes()).hexdigest(),
+        "production_target": current_settings["production_target"],
+        "chunks": [{"chunk_id": "main", "start": 0, "end": 5,
+                    "request_spec": current_settings["request_spec"]}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }), owner_key="principal:fixture")
+    before = prose_path.read_bytes(), tagged_path.read_bytes()
+    rolled_back, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "historic-chapter-rollback",
+        "build_id": accepted["accepted_build_id"], "expected_head_revision": 1,
+        "intent": "rollback",
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["same approved prose"]},
+    }), owner_key="principal:fixture")
+    assert rolled_back["accepted_plan_matches_prepared"] is False
+    assert rolled_back["accepted_build_id"] == accepted["accepted_build_id"]
+    assert refreshed["request_plan_sha256"] != prepared["request_plan_sha256"]
+    assert (prose_path.read_bytes(), tagged_path.read_bytes()) == before
+
+
+def test_book_accepts_current_chapter_rollback_and_historical_book_rollback(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_state_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    first_take = _import_native_take(service, prepared, "main", operation_prefix="books-first-take")
+    chapter_first = _build_and_accept_production_chapter(
+        service, prepared, first_take, operation_prefix="books-first", expected_head=None,
+    )
+    second_take = _import_native_take(service, prepared, "main", operation_prefix="books-second-take")
+    chapter_second = _build_and_accept_production_chapter(
+        service, prepared, second_take, operation_prefix="books-second", expected_head=1,
+    )
+    rolled_chapter = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "books-chapter-rollback",
+        "build_id": chapter_first["accepted_build_id"], "expected_head_revision": 2,
+        "intent": "rollback",
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["same request plan"]},
+    }), owner_key="principal:fixture")[0]
+    assert rolled_chapter["accepted_plan_matches_prepared"] is True
+    layout = service._enabled_layout()[2]
+    book_first_id = _reserve_synthetic_book_build(
+        service, state, layout, operation_prefix="books-first", expected_book_head=None,
+    )
+    _commit_book(service, "books-first-book-accept", book_first_id, None, "accept_candidate")
+
+    third_take = _import_native_take(service, prepared, "main", operation_prefix="books-third-take")
+    chapter_third = _build_and_accept_production_chapter(
+        service, prepared, third_take, operation_prefix="books-third", expected_head=3,
+    )
+    assert chapter_third["head_revision"] == 4
+    book_second_id = _reserve_synthetic_book_build(
+        service, state, layout, operation_prefix="books-second", expected_book_head=1,
+    )
+    _commit_book(service, "books-second-book-accept", book_second_id, 1, "accept_candidate")
+    with pytest.raises(BookServiceError) as book_cas:
+        _commit_book(service, "books-competing-book-commit", book_second_id, 1, "accept_candidate")
+    assert book_cas.value.reason == "stale_head"
+
+    working = (tmp_path / "Chapters/1/chapter.docx").read_bytes()
+    tagged = (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    rolled_book = _commit_book(service, "books-historic-rollback", book_first_id, 2, "rollback")
+    assert rolled_book["accepted_build_id"] == book_first_id
+    assert rolled_book["accepted_plan_matches_prepared"] is False
+    assert (tmp_path / "Chapters/1/chapter.docx").read_bytes() == working
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == tagged
+
+    fourth_take = _import_native_take(service, prepared, "main", operation_prefix="books-fourth-take")
+    fourth = _build_and_accept_production_chapter(
+        service, prepared, fourth_take, operation_prefix="books-fourth", expected_head=4,
+    )
+    assert fourth["head_revision"] == 5
+    book_state = service.get_book(GetBookRequest.model_validate({
+        "project": "fixture", "book_id": layout.book_id,
+    }))
+    assert book_state["accepted_build_id"] == book_first_id
+    assert book_state["current_outputs_stale"] is True
 
 
 def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):

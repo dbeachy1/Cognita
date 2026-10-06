@@ -118,6 +118,13 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _require_unlocked(path: Path) -> None:
+    try:
+        require_unlocked(path)
+    except FileLockedError as exc:
+        raise BookServiceError("file_locked", str(exc)) from exc
+
+
 def _cursor(view_id: str, offset: int) -> str:
     raw = json.dumps({"v": 1, "view": view_id, "offset": offset}, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -816,7 +823,7 @@ class BookService:
                 if current_hash == new_hash:
                     if not backup.exists() or _file_sha256(backup) != old_hash:
                         raise ValueError("original backup is unavailable or changed")
-                    require_unlocked(target)
+                    _require_unlocked(target)
                     if restore_stage.exists():
                         if _file_sha256(restore_stage) != old_hash:
                             raise ValueError("restore stage changed")
@@ -1228,7 +1235,6 @@ class BookService:
         snapshot_id = str(uuid.uuid4())
         scope_path = hashlib.sha256(request.scope.model_dump_json().encode()).hexdigest()[:24]
         snapshot_dir = self.root / STATE_ROOT / "snapshots" / layout.book_id / request.chapter_id / scope_path
-        _mkdir_safe(self.root, snapshot_dir.relative_to(self.root).as_posix())
         prose_path = snapshot_dir / f"{snapshot_id}-prose.docx"
         tagged_path = snapshot_dir / f"{snapshot_id}-tagged.docx"
         input_tagged_path = snapshot_dir / f"{snapshot_id}-tagged-input.docx"
@@ -1281,8 +1287,10 @@ class BookService:
             projected, request.chunks,
             limit=request.request_limit.value, unit=request.request_limit.unit,
         )
-        require_unlocked(_path(self.root, chapter.tagged_filepath)) if request.publish_bookmarks_to_working_tagged_docx else None
+        if request.publish_bookmarks_to_working_tagged_docx:
+            _require_unlocked(_path(self.root, chapter.tagged_filepath))
 
+        _mkdir_safe(self.root, snapshot_dir.relative_to(self.root).as_posix())
         for path, content in ((prose_path, prose_bytes), (tagged_path, tagged_snapshot_bytes),
                               (input_tagged_path, tagged_bytes)):
             try:
@@ -1316,7 +1324,7 @@ class BookService:
             chunk = {
                 "chunk_id": item.chunk_id, "snapshot_id": snapshot_id, "order": order,
                 "start": item.start, "end": item.end,
-                "bookmark": (bookmark_names[item.chunk_id][0] if bookmark_names[item.chunk_id] else "cog_empty"),
+                "bookmark": (bookmark_names[item.chunk_id][0] if bookmark_names[item.chunk_id] else ""),
                 "source_segments": [
                     {"paragraph_id": segment.paragraph_id, "start": segment.start, "end": segment.end,
                      "bookmark": bookmark_names[item.chunk_id][segment_index]}
@@ -1452,7 +1460,7 @@ class BookService:
             new_hash = hashlib.sha256(tagged_snapshot_bytes).hexdigest()
             if _file_sha256(target) != old_hash:
                 raise BookServiceError("stale_source", "The registered tagged DOCX changed before bookmark publication.")
-            require_unlocked(target)
+            _require_unlocked(target)
             backup_path = snapshot_dir / f"{snapshot_id}-working-tagged-backup.docx"
             stage_path = target.with_name(f".{target.name}.{snapshot_id}.stage")
             restore_path = target.with_name(f".{target.name}.{snapshot_id}.restore")
@@ -1483,12 +1491,29 @@ class BookService:
                 "tool": "audiobook_prepare_chapter", "operation_id": request.operation_id,
                 "args_sha256": args_sha,
             }
-            state.begin_publication(journal_id, "chapter_bookmark_prepare", journal_payload)
-            if _file_sha256(target) != old_hash:
-                raise BookServiceError("stale_source", "The registered tagged DOCX changed before bookmark publication.")
-            require_unlocked(target)
-            os.replace(stage_path, target)
-            state.advance_publication(journal_id, "published")
+            try:
+                state.begin_publication(journal_id, "chapter_bookmark_prepare", journal_payload)
+            except ProjectStateError as exc:
+                leftovers = [
+                    path.relative_to(self.root).as_posix()
+                    for path in (backup_path, stage_path)
+                    if path.exists()
+                ]
+                if leftovers:
+                    log.warning(
+                        "Bookmark publication journal creation failed; unregistered staged artifacts remain: %s",
+                        leftovers,
+                    )
+                raise BookServiceError("publication_failed", "The bookmark publication journal could not be created.") from exc
+            try:
+                if _file_sha256(target) != old_hash:
+                    raise BookServiceError("stale_source", "The registered tagged DOCX changed before bookmark publication.")
+                _require_unlocked(target)
+                os.replace(stage_path, target)
+                state.advance_publication(journal_id, "published")
+            except Exception:
+                self.recover_bookmark_publications()
+                raise
         try:
             status, revision, committed = state.commit_snapshot(
                 snapshot_id=snapshot_id, chapter_id=request.chapter_id,

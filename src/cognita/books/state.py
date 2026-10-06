@@ -1632,8 +1632,10 @@ class ProjectState:
     def namespace(self, chapter_id: str, scope_key: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT manifest_revision,media_revision,head_revision,current_snapshot_id,"
-                "current_plan_sha256 FROM book_namespaces WHERE chapter_id=? AND scope_key=?",
+                "SELECT n.manifest_revision,n.media_revision,h.head_revision AS head_revision,"
+                "n.current_snapshot_id,n.current_plan_sha256 FROM book_namespaces n "
+                "LEFT JOIN book_chapter_heads h ON h.chapter_id=n.chapter_id AND h.scope_key=n.scope_key "
+                "WHERE n.chapter_id=? AND n.scope_key=?",
                 (chapter_id, scope_key),
             ).fetchone()
         return None if row is None else dict(row)
