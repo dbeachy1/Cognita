@@ -37,6 +37,8 @@ def _fixture(root, *, bound: bool = False) -> tuple[BookService, bytes, bytes]:
     (root / "Project Files/Source").mkdir(parents=True)
     (root / "Project Files/Source/Version1.docx").write_bytes(prose)
     (root / "Project Files/ref.md").write_text("Reference facts", encoding="utf-8")
+    (root / "Project Files/guide.md").write_text("Instructions", encoding="utf-8")
+    (root / "Project Files/workflow.md").write_text("Workflow", encoding="utf-8")
     (root / "Chapters/1/chapter.docx").write_bytes(prose)
     (root / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
     chapter_state = {
@@ -69,7 +71,8 @@ def _fixture(root, *, bound: bool = False) -> tuple[BookService, bytes, bytes]:
             "audio_root": "Audiobook/Chapters/1",
         }],
         "indexed_references": [{"filepath": "Project Files/ref.md", "role": "reference"}],
-        "indexed_instructions": [], "indexed_workflow_documents": [],
+        "indexed_instructions": [{"filepath": "Project Files/guide.md", "role": "instructions"}],
+        "indexed_workflow_documents": [{"filepath": "Project Files/workflow.md", "role": "workflow"}],
         "index_policy": {
             "default_unknown": "exclude", "tagged_copies": "exclude", "archives": "exclude",
             "media": "exclude", "duplicate_prose": "single_active_source",
@@ -231,7 +234,60 @@ def test_registered_index_provenance_is_persisted_and_revalidated(tmp_path):
     assert state.indexed_role_provenance(path) == record
     from types import SimpleNamespace
     candidate = SimpleNamespace(source=path, doc_id=parsed.doc_id, content_hash=parsed.content_hash)
-    assert service.index_admitted_doc_ids([candidate]) == frozenset({parsed.doc_id})
+    assert set(service.index_admitted_doc_ids([candidate])) == {parsed.doc_id}
 
     source.write_text("Reference changed", encoding="utf-8")
-    assert service.index_admitted_doc_ids([candidate]) == frozenset()
+    assert service.index_admitted_doc_ids([candidate]) == {}
+
+
+def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_path):
+    from cognita.parsing import parse_file
+    from types import SimpleNamespace
+    from docx import Document
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    document = Document()
+    document.add_paragraph("hello")
+    stream = io.BytesIO()
+    document.save(stream)
+    valid_prose = stream.getvalue()
+    for path in (
+        "Chapters/1/chapter.docx", "Chapters/1/chapter_audio-tags.docx",
+        "Project Files/Source/Version1.docx",
+    ):
+        (tmp_path / path).write_bytes(valid_prose)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(valid_prose).hexdigest()
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    ProjectState.initialize(tmp_path)
+    candidates = []
+    paths = [
+        "Project Files/ref.md", "Project Files/guide.md",
+        "Project Files/workflow.md", "Chapters/1/chapter.docx",
+    ]
+    for path in paths:
+        source = tmp_path / path
+        parsed = parse_file(source, tmp_path)
+        assert parsed is not None
+        raw_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        assert service.record_index_provenance(
+            path, parsed.doc_id, parsed.content_hash, raw_sha, "fixture-extraction-v1",
+        ) is not None
+        candidates.append(SimpleNamespace(
+            source=path, doc_id=parsed.doc_id, content_hash=parsed.content_hash,
+        ))
+
+    ids = {item.source: item.doc_id for item in candidates}
+    assert set(service.index_admitted_doc_ids(candidates, "editing")) == {
+        ids["Project Files/ref.md"], ids["Chapters/1/chapter.docx"],
+    }
+    assert set(service.index_admitted_doc_ids(candidates, "canon")) == {
+        ids["Project Files/ref.md"],
+    }
+    assert set(service.index_admitted_doc_ids(candidates, "instructions")) == {
+        ids["Project Files/guide.md"],
+    }
+    assert set(service.index_admitted_doc_ids(candidates, "workflow")) == {
+        ids["Project Files/workflow.md"],
+    }

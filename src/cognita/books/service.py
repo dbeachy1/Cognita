@@ -209,17 +209,21 @@ class BookService:
                     tagged = _read_bytes(self.root, chapter.tagged_filepath)
                     pair = project_docx_pair(raw, tagged)
                     approval = chapter_state.approval_provenance
-                    if (chapter_state.editorial_status != "approved" or approval is None
-                            or chapter_state.approved_source_raw_sha256 != raw_sha256
-                            or approval.source_raw_sha256 != raw_sha256
-                            or approval.prose_projection_sha256 != pair.prose_projection_sha256
-                            or approval.projection_version != pair.projection_version
-                            or chapter_state.approved_prose_projection_sha256 != pair.prose_projection_sha256
-                            or chapter_state.approval_projection_version != pair.projection_version):
+                    approval_is_current = (
+                        chapter_state.editorial_status == "approved" and approval is not None
+                        and chapter_state.approved_source_raw_sha256 == raw_sha256
+                        and approval.source_raw_sha256 == raw_sha256
+                        and approval.prose_projection_sha256 == pair.prose_projection_sha256
+                        and approval.projection_version == pair.projection_version
+                        and chapter_state.approved_prose_projection_sha256 == pair.prose_projection_sha256
+                        and chapter_state.approval_projection_version == pair.projection_version
+                    )
+                    if chapter_state.editorial_status == "approved" and not approval_is_current:
                         return None
-                    values["approval_source_raw_sha256"] = approval.source_raw_sha256
-                    values["approval_prose_projection_sha256"] = approval.prose_projection_sha256
-                    values["approval_projection_version"] = approval.projection_version
+                    if approval_is_current:
+                        values["approval_source_raw_sha256"] = approval.source_raw_sha256
+                        values["approval_prose_projection_sha256"] = approval.prose_projection_sha256
+                        values["approval_projection_version"] = approval.projection_version
                 else:
                     summary = chapter_state.summary
                     if (summary is None or not summary.approved or summary.filepath != source_path
@@ -264,22 +268,76 @@ class BookService:
             raise BookServiceError("state_unavailable", "Index provenance could not be persisted.") from exc
         return record if self.index_provenance_is_current(record) else None
 
-    def index_admitted_doc_ids(self, sources) -> frozenset[str]:
+    def index_admitted_doc_ids(
+        self, sources, retrieval_profile: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
         state = self.discover_state()
         config = load_book_config(self.root, state)
         if state is None or config.config_state != "enabled" or config.layout is None:
-            return frozenset()
-        admitted: set[str] = set()
+            return {}
+        profile = retrieval_profile or "canon"
+        if profile not in {"editing", "canon", "instructions", "workflow"}:
+            return {}
+        admitted: dict[str, dict[str, Any]] = {}
         for source in sources:
             source_path = source.source
-            if self._registered_role(config.layout, source_path) is None:
+            registered = self._registered_role(config.layout, source_path)
+            if registered is None:
                 continue
             record = state.indexed_role_provenance(source_path)
-            if (record is not None and record.doc_id == source.doc_id
-                    and record.extracted_sha256 == source.content_hash
-                    and self.index_provenance_is_current(record)):
-                admitted.add(record.doc_id)
-        return frozenset(admitted)
+            if (record is None or record.doc_id != source.doc_id
+                    or record.extracted_sha256 != source.content_hash
+                    or not self.index_provenance_is_current(record)):
+                continue
+            role, chapter, chapter_kind = registered
+            if chapter is None and source_path in {
+                item.filepath for item in config.layout.indexed_instructions
+            }:
+                allowed = profile == "instructions"
+            elif chapter is None and source_path in {
+                item.filepath for item in config.layout.indexed_workflow_documents
+            }:
+                allowed = profile == "workflow"
+            elif chapter is None:
+                allowed = profile in {"editing", "canon"}
+            elif chapter_kind == "working":
+                allowed = profile == "editing" or (
+                    record.approval_source_raw_sha256 is not None
+                    and record.approval_prose_projection_sha256 is not None
+                    and record.approval_projection_version is not None
+                )
+            elif chapter_kind == "summary":
+                # index_provenance_for only returns summaries whose approved
+                # source/projection binding remains current.
+                allowed = True
+            else:
+                allowed = profile in {"editing", "canon"}
+            if allowed:
+                editorial_status = None
+                summary_freshness = "not_applicable"
+                if chapter is not None:
+                    # A concurrently edited or malformed chapter-state file must
+                    # not turn a read-only search into an index-authority error.
+                    # The persisted provenance no longer proves the returned hit
+                    # is current, so fail closed for that source instead.
+                    try:
+                        chapter_state = validate_chapter_state(
+                            _read_bytes(self.root, chapter.chapter_state_filepath)
+                        )
+                    except (BookServiceError, ValueError, ProjectionError):
+                        continue
+                    editorial_status = chapter_state.editorial_status
+                    if chapter_kind == "summary":
+                        summary_freshness = "fresh"
+                admitted[record.doc_id] = {
+                    "source_path": record.source_path,
+                    "role": record.role,
+                    "chapter_id": record.chapter_id,
+                    "editorial_status": editorial_status,
+                    "summary_freshness": summary_freshness,
+                    "provenance": record,
+                }
+        return admitted
 
     def begin_managed_write(
         self, project: Any, path: str, bytes_sha256: str,

@@ -217,7 +217,8 @@ class LocalEngineHost(
             )
         if hasattr(self.core, "set_book_index_admission_provider"):
             self.core.set_book_index_admission_provider(
-                lambda project, sources: self.book_index_admission_for(project, sources)
+                lambda project, sources, retrieval_profile=None:
+                    self.book_index_admission_for(project, sources, retrieval_profile)
             )
         if hasattr(self.core, "set_book_index_provenance_recorder"):
             self.core.set_book_index_provenance_recorder(
@@ -623,30 +624,44 @@ class LocalEngineHost(
         )
 
     def book_index_provenance_for(
-        self, project: Project, source_path: str, doc_id: str,
+        self, project: Project | str, source_path: str, doc_id: str,
         extracted_sha256: str, raw_sha256: str, extraction_version: str,
     ):
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return None
         return self.book_service_for(project).index_provenance_for(
             source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
         )
 
-    def book_index_provenance_is_current(self, project: Project, record) -> bool:
+    def book_index_provenance_is_current(self, project: Project | str, record) -> bool:
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return False
         return self.book_service_for(project).index_provenance_is_current(record)
 
     def record_book_index_provenance_for(
-        self, project: Project, source_path: str, doc_id: str,
+        self, project: Project | str, source_path: str, doc_id: str,
         extracted_sha256: str, raw_sha256: str, extraction_version: str,
     ):
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return None
         return self.book_service_for(project).record_index_provenance(
             source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
         )
 
-    def book_index_admission_for(self, project_or_name, sources) -> frozenset[str]:
+    def book_index_admission_for(
+        self, project_or_name, sources, retrieval_profile: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
         project = (self.registry.get(project_or_name)
                    if isinstance(project_or_name, str) else project_or_name)
         if project is None:
-            return frozenset()
-        return self.book_service_for(project).index_admitted_doc_ids(sources)
+            return {}
+        return self.book_service_for(project).index_admitted_doc_ids(sources, retrieval_profile)
 
     async def _dispatch_book_tool(
         self, project: Project, tool: str, args: dict, *,
