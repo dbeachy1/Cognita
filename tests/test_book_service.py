@@ -766,6 +766,76 @@ def _commit_book(service, operation_id, build_id, expected_head, intent):
     }), owner_key="principal:fixture")[0]
 
 
+def _assert_completed_build_replay_survives_changed_guards(service, request, original_job):
+    state = service._state_required()
+    assert state.build_job(original_job["job_id"])["state"] == "succeeded"
+    assert service.build(request, owner_key="principal:fixture") == (original_job, True)
+    with pytest.raises(BookServiceError) as other_owner:
+        service.build(request, owner_key="principal:other")
+    assert other_owner.value.reason in {"stale_manifest", "stale_head", "stale_dependency"}
+    changed = request.model_dump(mode="json", exclude_unset=True)
+    changed["metadata"]["edition"] = "different arguments"
+    with pytest.raises(BookServiceError) as conflict:
+        service.build(BuildRequest.model_validate(changed), owner_key="principal:fixture")
+    assert conflict.value.reason == "operation_id_conflict"
+
+    # Replays do not reread mutable prose or immutable input media. The current
+    # layout/dispatch authority must nevertheless remain valid on every call.
+    source = service.root / "Chapters/1/chapter.docx"
+    original_source = source.read_bytes()
+    source.write_bytes(b"source changed after accepted build")
+    try:
+        assert service.build(request, owner_key="principal:fixture") == (original_job, True)
+        with pytest.raises(BookServiceError) as changed_conflict:
+            service.build(BuildRequest.model_validate(changed), owner_key="principal:fixture")
+        assert changed_conflict.value.reason == "operation_id_conflict"
+    finally:
+        source.write_bytes(original_source)
+    layout_path = service.root / "Project Files/Book_Layout.json"
+    original_layout = layout_path.read_bytes()
+    layout_path.write_bytes(b"{}")
+    try:
+        with pytest.raises(BookServiceError) as invalid_authority:
+            service.build(request, owner_key="principal:fixture")
+        assert invalid_authority.value.reason == "configuration_conflict"
+    finally:
+        layout_path.write_bytes(original_layout)
+
+
+def test_completed_book_build_replay_survives_acceptance_and_changed_plan(tmp_path):
+    service, state, stored, settings_path, _layout_path, _chapter_path, _prose, _tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="book-replay-take")
+    _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="book-replay-chapter", expected_head=None,
+    )
+    layout = service._enabled_layout()[2]
+    build_id = _reserve_synthetic_book_build(
+        service, state, layout, operation_prefix="book-replay", expected_book_head=None,
+    )
+    build = state.build(build_id)
+    request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "book-replay-reserve", "expected_head_revision": None,
+        "input": {"kind": "book", "book_id": layout.book_id,
+                  "expected_layout_revision": layout.layout_revision, "chapters": build["dependencies"]},
+        "mode": "production_pcm", "outputs": {"master": True, "mp3_bitrate_kbps": 192},
+        "gaps": [], "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    original_job = state.receipt(owner_key="principal:fixture", project="fixture",
+                                 tool="audiobook_build", operation_id=request.operation_id)[1]
+    committed = _commit_book(service, "book-replay-accept", build_id, None, "accept_candidate")
+    assert committed["head_revision"] == 1
+    assert service.build(request, owner_key="principal:fixture") == (original_job, True)
+    changed_plan, _ = _prepare_production_context(
+        service, stored, settings_path, settings,
+        {**settings["request_spec"]["context_fields"], "previous_text": "new plan context"},
+    )
+    assert changed_plan["request_plan_sha256"] != prepared["request_plan_sha256"]
+    _assert_completed_build_replay_survives_changed_guards(service, request, original_job)
+
+
 def test_same_prose_chapter_retake_stales_reserved_book_dependency(tmp_path):
     service, state, stored, _settings_path, _layout_path, _chapter_state_path, _prose, _tagged, _settings = (
         _production_prepared_fixture(tmp_path)
@@ -1829,14 +1899,15 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
     assert state is not None
     snapshot = state.snapshot(take["snapshot_id"])
     assert snapshot is not None
-    build, replayed = service.build(BuildRequest.model_validate({
+    build_request = BuildRequest.model_validate({
         "project": "fixture", "operation_id": "test-mp3-build", "expected_head_revision": None,
         "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": take["snapshot_id"],
                   "expected_manifest_revision": snapshot["manifest_revision"], "request_plan_sha256": snapshot["payload"]["result"]["request_plan_sha256"],
                   "takes": [{"chunk_id": take["chunk_id"], "take_id": take["take_id"], "request_sha256": take["request_sha256"]}]},
         "mode": "test_mp3_stream_copy", "outputs": {"master": False}, "gaps": [],
         "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
-    }), owner_key="principal:fixture")
+    })
+    build, replayed = service.build(build_request, owner_key="principal:fixture")
     assert not replayed
     service.run_build_job(build["job_id"])
     candidate = service.get_job(GetJobRequest(project="fixture", job_id=build["job_id"]))
@@ -1863,6 +1934,15 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
         "accepted_at": datetime.now(timezone.utc).isoformat(), "listening_review": "passed", "notes": ["packet proof"]},
     }), owner_key="principal:fixture")
     assert committed["head_revision"] == 1
+    assert service.build(build_request, owner_key="principal:fixture") == (build, True)
+    changed_spec = json.loads(json.dumps(snapshot["payload"]["result"]["chunks"][0]["request_spec"]))
+    changed_spec["context_fields"]["previous_text"] = "new plan context"
+    changed_plan = _prepare_test_plan(
+        service, "mp3-replay-changed-plan", prose, tagged, snapshot["manifest_revision"],
+        [{"chunk_id": take["chunk_id"], "start": 0, "end": 5, "request_spec": changed_spec}],
+    )
+    assert changed_plan["request_plan_sha256"] != build_request.input.request_plan_sha256
+    _assert_completed_build_replay_survives_changed_guards(service, build_request, build)
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
@@ -2012,6 +2092,14 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
         }))
     assert missing_chapter.value.reason == "validation_failed"
     assert located["matches"][0]["coordinate_projection"] == "timeline"
+    changed_spec = json.loads(json.dumps(snapshot["payload"]["result"]["chunks"][0]["request_spec"]))
+    changed_spec["context_fields"]["previous_text"] = "new plan context"
+    changed_plan = _prepare_test_plan(
+        service, "pcm-replay-changed-plan", prose, tagged, snapshot["manifest_revision"],
+        [{"chunk_id": take["chunk_id"], "start": 0, "end": 5, "request_spec": changed_spec}],
+    )
+    assert changed_plan["request_plan_sha256"] != build_request.input.request_plan_sha256
+    _assert_completed_build_replay_survives_changed_guards(service, build_request, queued)
 
 def test_index_status_reports_pending_and_blocked_registered_sources(tmp_path):
     service, _prose, _tagged = _fixture(tmp_path, bound=True)

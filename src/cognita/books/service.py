@@ -2729,6 +2729,18 @@ class BookService:
         chapter head.  The gateway schedules ``run_build_job`` outside its
         admission lock and a later, explicit commit performs the head CAS.
         """
+        state, _, layout = self._enabled_layout()
+        args_sha256 = canonical_json_sha256(_data(request))
+        # The authenticated dispatch gate still runs on every call. Resolve
+        # durable replay before any variant checks mutable heads/plans/media.
+        prior = state.receipt(
+            owner_key=owner_key, project=self.project_name,
+            tool="audiobook_build", operation_id=request.operation_id,
+        )
+        if prior is not None:
+            if prior[0] != args_sha256:
+                raise BookServiceError("operation_id_conflict", "This operation ID was used with different arguments.")
+            return prior[1], True
         if isinstance(request.input, dto.BookBuildInput):
             return self._reserve_book_build(request, owner_key=owner_key)
         if not isinstance(request.input, dto.ChapterBuildInput):
@@ -2737,7 +2749,6 @@ class BookService:
             return self._reserve_test_mp3_build(request, owner_key=owner_key)
         if request.mode != "production_pcm" or not request.outputs.master:
             raise BookServiceError("unsupported_build_mode", "This checkpoint assembles retained chapter PCM masters only.")
-        state, _, layout = self._enabled_layout()
         item = request.input
         chapter = self._chapter(layout, item.chapter_id)
         stored = state.snapshot(item.snapshot_id)
@@ -2819,7 +2830,6 @@ class BookService:
             if target.model_dump(exclude={"mp3_bitrate_kbps"}) != configured_target.model_dump(exclude={"mp3_bitrate_kbps"}):
                 raise BookServiceError("media_mismatch", "Native takes do not match the frozen production target.")
             target = configured_target
-        args_sha256 = canonical_json_sha256(_data(request))
         pinned = {
             "chapter_id": chapter.chapter_id, "scope_key": stored["scope_key"],
             "snapshot_id": item.snapshot_id, "manifest_revision": item.expected_manifest_revision,
