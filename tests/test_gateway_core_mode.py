@@ -8,6 +8,7 @@ Activated by COGNITA_TEST_PG_DSN.
 This is the M3 claim under test: proxy.py runs UNCHANGED against the local
 engine, so everything the 3.x gateway guaranteed still holds without workers.
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 import os

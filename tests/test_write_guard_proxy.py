@@ -10,6 +10,7 @@ The assertions that matter are the negative ones: on a stale hash the worker
 must never be reached AND no backup may be taken, because a rejected write that
 still snapshotted would quietly churn the retention window.
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 

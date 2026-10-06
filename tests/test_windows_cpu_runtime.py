@@ -1,4 +1,5 @@
 """Focused Windows CPU runtime capability and source identity checks."""
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import asyncio
 import json

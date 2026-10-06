@@ -7,6 +7,7 @@ FakeEngineHost, whose httpx client is an ASGITransport so no sockets are
 involved. (Before 14.0.0 the worker stood in for knowledge-rag and the gateway's
 client was monkeypatched.)
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 
@@ -536,7 +537,7 @@ async def test_self_test_plan_writable(env):
     assert seen == []  # served by the gateway, worker untouched
 
 
-async def test_combined_v5_self_test_adds_workspace_sections_and_bridge_by_policy(env):
+async def test_combined_current_self_test_adds_workspace_sections_and_bridge_by_policy(env):
     app, tok, _, _, seen = env
     store = app.state.test_connector_store
     store.update(

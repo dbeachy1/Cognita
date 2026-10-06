@@ -16,6 +16,7 @@ fake now holds a write open until the test releases it, and a probe lock
 announces the moment a second writer is queued on the gateway's lock. Every wait
 is on a signal a correct run is guaranteed to send; the timeout is a hang guard.
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import asyncio
 import json

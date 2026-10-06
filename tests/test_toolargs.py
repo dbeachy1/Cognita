@@ -6,6 +6,7 @@ is not the wasted call — it is a client that believes it filtered and did not,
 and has no way to find out. These tests pin the refusal on BOTH tool layers,
 because either one going lenient re-opens the hole for half the surface.
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 

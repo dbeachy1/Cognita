@@ -5,6 +5,7 @@ Off by default: the files contain whatever the tools returned.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 
@@ -57,7 +58,7 @@ async def test_capture_writes_the_whole_exchange_with_the_token_redacted(tmp_pat
     files = sorted((tmp_path / "logs" / "mcp-wire").glob("*.json"))
     assert len(files) == 1 and f"-{slug}-int_41.json" in files[0].name
     record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["connector"] == slug and record["route"] == "v5"
+    assert record["connector"] == slug and record["route"] == f"v{PUBLIC_CONTRACT_VERSION}"
     # The request, whole: the exact JSON-RPC the client sent, and its headers.
     assert json.loads(record["request"]["body"])["params"]["arguments"] == {"project": "RW", "section": "index"}
     assert record["request"]["headers"]["authorization"] == "<redacted>"

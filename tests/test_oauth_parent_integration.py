@@ -1,4 +1,5 @@
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import asyncio
 from types import SimpleNamespace

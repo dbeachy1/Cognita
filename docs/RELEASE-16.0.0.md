@@ -1,4 +1,6 @@
-## Cognita 16.0.0 development release record
+# Cognita 16.0.0 release notes
+
+Development record only. Qualification, release review, publication, and verified 16.0.0 download assets are pending; this document does not announce a published release.
 
 This source candidate adds the audiobook source, generation, take, and build workflows. The combined connector API advances from v5 to v6 for its expanded catalog and typed book/storage contracts. Workspace remains v3; the PostgreSQL schema remains 1; the Workspace metadata schema remains 1; and the Toolbox remains 12.6.0.
 

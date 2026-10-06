@@ -9,6 +9,7 @@ would be a hole in it wearing a JSON array as a disguise — and one failing
 element does not take the others down, because a batch is a transport
 optimization and not a transaction.
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 

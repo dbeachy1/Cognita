@@ -20,6 +20,7 @@ promises it has to keep for EVERY document in the call:
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import asyncio
 import json

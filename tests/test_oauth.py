@@ -5,6 +5,7 @@ The child owns the temporary DOT database; no legacy OAuth store is involved.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import asyncio
 import base64

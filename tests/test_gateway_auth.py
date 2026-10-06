@@ -1,3 +1,4 @@
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 import json
 import logging
 
@@ -344,7 +345,7 @@ async def test_mcp_rejects_future_generation_after_authentication(app_and_token)
     app, token, connector_id = app_and_token
     async with await _client(app) as c:
         r = await c.post(
-            f"/mcp/connectors/{connector_id}/mcp/v6",
+            f"/mcp/connectors/{connector_id}/mcp/v{PUBLIC_CONTRACT_VERSION + 1}",
             json={},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -434,7 +435,7 @@ async def test_protected_resource_metadata_is_versioned_and_published(tmp_path):
             f"/.well-known/oauth-protected-resource/mcp/connectors/{connector_slug}"
         )
         future = await c.get(
-            f"/.well-known/oauth-protected-resource/mcp/connectors/{connector_slug}/mcp/v6"
+            f"/.well-known/oauth-protected-resource/mcp/connectors/{connector_slug}/mcp/v{PUBLIC_CONTRACT_VERSION + 1}"
         )
         retired_uuid = await c.get(
             f"/.well-known/oauth-protected-resource/mcp/connectors/{connector_id}/mcp/v{PUBLIC_CONTRACT_VERSION}"

@@ -1,11 +1,11 @@
 {
   "consumed_source_sha256": {
-    "/tmp/cognita-1501-evidence/containers/cognita-nvidia/Dockerfile": "1f03c9c6be0fcabe23f52ccdb26db437b7bd624294e5cf758a1916d73a81d10c",
-    "/tmp/cognita-1501-evidence/containers/cognita-nvidia/runtime-lock.json": "cc39d5f028a9cf63763938fc5e567b0ce61f5d0ae2f32948a6019efe25235e05",
-    "/tmp/cognita-1501-evidence/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
-    "/tmp/cognita-1501-evidence/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
-    "/tmp/cognita-1501-evidence/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
-    "/tmp/cognita-1501-evidence/scripts/refresh_dependency_locks.py": "cf492daf61bafa40fda7004e294c7c866bb5129a704084fdf7272b206c2494e6"
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/cognita-nvidia/Dockerfile": "7c20406258769de8c0c3f5ccf53b4ea2d68a43310e0aa5c192b1d60101e3ce54",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/cognita-nvidia/runtime-lock.json": "b538af14e3885df7f401dbb5d57651f8359e074afc767cfb6be1dfd89573c8ca",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/scripts/refresh_dependency_locks.py": "fc75a464182d828a82ab75d663454e313fda06e1b5f9e1abfda0f48f143b8911"
   },
   "index_url": "https://pypi.org/simple",
   "interpreters": {
@@ -30,17 +30,30 @@
       "vendor_artifacts": {}
     }
   },
-  "maintenance_evidence": "/tmp/cognita-1501-evidence-root/dependency-refresh-evidence.json",
+  "maintenance_evidence": "/home/dougb/cognita-data/builds/codex-audiobook-16-lock-evidence/locks-revalidation-df176f2/nvidia/dependency-refresh-evidence.json",
   "operation": "dependency-refresh",
   "platform": {
     "architecture": "x86_64",
     "os": "linux"
+  },
+  "preserve_existing_pins": true,
+  "preserved_pin_seeds": {
+    "embedding-nvidia": {
+      "path": "containers/embedding-nvidia-requirements.lock",
+      "sha256": "4de063616087db1d9ae895b324544f12d1994b5411bbd5918acb2ec0e54870e3"
+    },
+    "ocr-nvidia": {
+      "path": "containers/ocr-nvidia-requirements.lock",
+      "sha256": "5cf668f141e8625ef18e4c7e974124d65f6579d885b1f8b99b308325960f23a9"
+    }
   },
   "roles": {
     "embedding-nvidia": {
       "input_sha256": "e4d2274b7dcfbcbdea277b2e273c4d58f05a58d8954393dd856fbf92c1119301",
       "lock_sha256": "4de063616087db1d9ae895b324544f12d1994b5411bbd5918acb2ec0e54870e3",
       "packages": 35,
+      "preserve_existing_pins": true,
+      "preserved_pin_seed_sha256": "4de063616087db1d9ae895b324544f12d1994b5411bbd5918acb2ec0e54870e3",
       "resolver": {
         "expected_python": "3.13",
         "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
@@ -56,14 +69,16 @@
         "containers/cognita-nvidia/runtime-lock.json"
       ],
       "source_sha256": {
-        "containers/cognita-nvidia/Dockerfile": "1f03c9c6be0fcabe23f52ccdb26db437b7bd624294e5cf758a1916d73a81d10c",
-        "containers/cognita-nvidia/runtime-lock.json": "cc39d5f028a9cf63763938fc5e567b0ce61f5d0ae2f32948a6019efe25235e05"
+        "containers/cognita-nvidia/Dockerfile": "7c20406258769de8c0c3f5ccf53b4ea2d68a43310e0aa5c192b1d60101e3ce54",
+        "containers/cognita-nvidia/runtime-lock.json": "b538af14e3885df7f401dbb5d57651f8359e074afc767cfb6be1dfd89573c8ca"
       }
     },
     "ocr-nvidia": {
       "input_sha256": "b9b1ff9f622851cf053263bf7d9b4004d6db6902e68935654145ac947be10821",
       "lock_sha256": "5cf668f141e8625ef18e4c7e974124d65f6579d885b1f8b99b308325960f23a9",
       "packages": 45,
+      "preserve_existing_pins": true,
+      "preserved_pin_seed_sha256": "5cf668f141e8625ef18e4c7e974124d65f6579d885b1f8b99b308325960f23a9",
       "resolver": {
         "expected_python": "3.13",
         "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
@@ -80,8 +95,8 @@
         "docs/easyocr-qualification-dependencies.json"
       ],
       "source_sha256": {
-        "containers/cognita-nvidia/Dockerfile": "1f03c9c6be0fcabe23f52ccdb26db437b7bd624294e5cf758a1916d73a81d10c",
-        "containers/cognita-nvidia/runtime-lock.json": "cc39d5f028a9cf63763938fc5e567b0ce61f5d0ae2f32948a6019efe25235e05",
+        "containers/cognita-nvidia/Dockerfile": "7c20406258769de8c0c3f5ccf53b4ea2d68a43310e0aa5c192b1d60101e3ce54",
+        "containers/cognita-nvidia/runtime-lock.json": "b538af14e3885df7f401dbb5d57651f8359e074afc767cfb6be1dfd89573c8ca",
         "docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
       }
     }
@@ -92,12 +107,12 @@
     "ocr-nvidia"
   ],
   "source": {
-    "branch": "nvidia-acceleration",
-    "commit": "eea118bb44ce0ab3b015b5c33b8d38abb00c1ad8",
-    "remote": "git@github.com:dbeachy1/Cognita.git",
-    "tree": "f28fbbbefc9ef7c866d0d7b66b5289a789e73570"
+    "branch": "codex/audiobook-locks-revalidation",
+    "commit": "df176f21264b9cef9d9a3604a8a3a621cb317bb4",
+    "remote": "https://github.com/dbeachy1/Cognita.git",
+    "tree": "b1989f5cecaaa5596125389654f35e11c0a179c9"
   },
-  "source_root": "/tmp/cognita-1501-evidence",
+  "source_root": "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation",
   "tool": {
     "pip_compile": "container:python -m piptools",
     "versions": {

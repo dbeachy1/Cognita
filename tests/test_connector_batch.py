@@ -5,6 +5,7 @@ they never dispatch a batch against a personal project or corpus.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 

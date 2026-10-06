@@ -1,4 +1,5 @@
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import hashlib
 import uuid
@@ -182,7 +183,7 @@ def test_workspace_stable_setup_uses_current_v3_alias(tmp_path: Path):
     assert current["url"] == "https://example.test/mcp/workspace/workspace/mcp/v3"
 
 
-def test_combined_credential_setup_offers_stable_and_current_v5(tmp_path: Path):
+def test_combined_credential_setup_offers_stable_and_current_contract(tmp_path: Path):
     store = _store(tmp_path)
     surface_id = str(uuid.uuid4())
     service = CredentialAdminService(

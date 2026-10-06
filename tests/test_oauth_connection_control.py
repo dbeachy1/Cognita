@@ -19,6 +19,7 @@ from argon2 import PasswordHasher
 from django import db
 from django.test import RequestFactory
 from django.utils import timezone
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 from cognita.oauth_service.asgi import create_application
 from cognita.oauth_service.bootstrap import bootstrap_service
 from cognita.oauth_service.principal import OAuthPrincipalStore

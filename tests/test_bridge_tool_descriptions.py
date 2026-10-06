@@ -9,6 +9,7 @@ wording on the wire, in both directions, on the description and on the argument.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import pytest
 from httpx import ASGITransport, AsyncClient

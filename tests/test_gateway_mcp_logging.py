@@ -7,6 +7,7 @@ the bearer token, argument values, or content.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import logging
 
@@ -69,7 +70,7 @@ async def test_tool_call_exchange_logs_framing_sizes_and_headers(env, caplog):
     result = r.json()["result"]
 
     [exchange] = _lines(caplog, "mcp exchange ")
-    assert f"connector={slug} route=v5 http_method=POST methods=tools/call ids=str:st-7 batch=no" in exchange
+    assert f"connector={slug} route=v{PUBLIC_CONTRACT_VERSION} http_method=POST methods=tools/call ids=str:st-7 batch=no" in exchange
     assert "accept=application/json, text/event-stream" in exchange
     assert "content_type=application/json" in exchange
     assert "protocol_version=2025-06-18 session_id=absent user_agent=FixtureClient/9.9" in exchange

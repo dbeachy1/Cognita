@@ -1,5 +1,14 @@
 # Changelog
 
+## 16.0.0 — Audiobook production workflow (development; not published)
+
+- Adds registered source import, generation receipts, chapter and whole-book production builds,
+  immutable recipe evidence, retake and rollback workflows, reader lookup, and scoped backup and
+  restore. The combined connector contract is v6; Workspace remains v3.
+- This development entry does not represent a published release. Linux and Windows qualification
+  and Doug's release review are still required; no 16.0.0 installer or source archive is attached.
+  See `docs/RELEASE-16.0.0.md` for the validation and publication boundary.
+
 ## 15.7.0 — Restore supported Workspace write sizes (2026-10-05)
 
 - Workspace writes can use the existing 1 MiB file allowance through the private broker,

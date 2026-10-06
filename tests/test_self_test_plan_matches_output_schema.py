@@ -11,6 +11,7 @@ tools/list and validate the real result against it.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import json
 

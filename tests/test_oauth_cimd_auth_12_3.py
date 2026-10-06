@@ -569,6 +569,7 @@ import yaml
 from argon2 import PasswordHasher
 from jwcrypto import jwk, jws
 
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 from cognita.oauth_service.asgi import create_application
 from cognita.oauth_service.bootstrap import bootstrap_service
 from cognita.oauth_service.principal import OAuthPrincipalStore

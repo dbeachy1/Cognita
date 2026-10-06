@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 PROJECT = "Self-Test"
 # 13.0 §7.1: a second, populated project in the generated installation. The
@@ -492,7 +493,9 @@ def run_selftest(
     # stdin into a child environment instead of exposing it in argv or logs.
     if run_command(compose + ["cp", str(repo / "scripts" / "run-selftest.py"), "cognita:/tmp/cognita-run-selftest.py"], repo, output, 60):
         raise RunnerError(f"could not copy self-test runner into candidate; see {output}")
-    internal_url = f"http://127.0.0.1:{mcp_port}/mcp/connectors/{slug}/mcp/v5"
+    internal_url = (
+        f"http://127.0.0.1:{mcp_port}/mcp/connectors/{slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
+    )
     command = compose + [
         "exec", "-T", "-e", f"COGNITA_TEST_PROJECT={PROJECT}", "cognita", "sh", "-c",
         "read -r COGNITA_TEST_API_KEY; export COGNITA_TEST_API_KEY; "

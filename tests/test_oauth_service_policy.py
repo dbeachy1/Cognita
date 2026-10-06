@@ -1,4 +1,5 @@
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 from types import SimpleNamespace
 
@@ -9,7 +10,12 @@ from django.conf import settings
 from oauthlib.oauth2.rfc6749.errors import CustomOAuth2Error
 
 from cognita.config import CognitaConfig
-from cognita.connectors import ConnectorStore, build_connector_url, build_route_url
+from cognita.connectors import (
+    PUBLIC_CONTRACT_VERSION,
+    ConnectorStore,
+    build_connector_url,
+    build_route_url,
+)
 from cognita.registry import Registry
 
 if not settings.configured:
@@ -85,7 +91,10 @@ def test_connector_resource_is_exact_and_resolves_current_access(tmp_path):
 def test_retired_generation_is_not_an_oauth_resource(tmp_path):
     policy, _store = _policy(tmp_path)
     current = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v{PUBLIC_CONTRACT_VERSION}"
-    previous = f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/v4"
+    previous = (
+        f"https://cognita.example/mcp/connectors/{CONNECTOR_SLUG}/mcp/"
+        f"v{PUBLIC_CONTRACT_VERSION - 1}"
+    )
 
     assert policy.validate(current) == current
     assert policy.validate(current) == current
@@ -111,7 +120,10 @@ def test_versioned_resources_honor_public_base_path_prefix(tmp_path):
     policy, _store = _policy(tmp_path)
     policy.config.public_base_url = "https://cognita.example/cognita"
     policy.config._deployment_public_base_url = policy.config.public_base_url
-    current = build_route_url(policy.config.public_base_url, "combined", CONNECTOR_SLUG, 5)
+    current = build_route_url(
+        policy.config.public_base_url, "combined", CONNECTOR_SLUG,
+        PUBLIC_CONTRACT_VERSION,
+    )
 
     assert policy.validate(current) == current
     assert policy.connector_resource_for(
@@ -230,7 +242,7 @@ def test_only_current_generation_is_valid(tmp_path):
 
     current = policy.resource_for(CONNECTOR_ID)
     assert policy.validate(current) == current
-    for retired_or_future in (1, 2, 3, 4, 6):
+    for retired_or_future in (1, 2, 3, 4, 5, PUBLIC_CONTRACT_VERSION + 1):
         resource = build_connector_url(
             "https://cognita.example", CONNECTOR_SLUG, retired_or_future,
         )

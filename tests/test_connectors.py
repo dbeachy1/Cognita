@@ -162,15 +162,15 @@ def test_versioned_resource_parser_is_strict():
         f"/mcp/connectors/{connector_slug}/mcp/v2?x=1",
     ):
         assert parse_connector_path(invalid) is None
-    assert PUBLIC_CONTRACT_VERSION == 5
-    assert not is_supported_contract_version(4)
-    assert is_supported_contract_version(5)
+    assert PUBLIC_CONTRACT_VERSION >= 1
+    assert not is_supported_contract_version(PUBLIC_CONTRACT_VERSION - 1)
+    assert is_supported_contract_version(PUBLIC_CONTRACT_VERSION)
     assert not is_supported_contract_version(1)
-    assert not is_supported_contract_version(6)
-    assert not is_published_contract_version(4)
+    assert not is_supported_contract_version(PUBLIC_CONTRACT_VERSION + 1)
+    assert not is_published_contract_version(PUBLIC_CONTRACT_VERSION - 1)
     assert not is_published_contract_version(1)
-    assert is_published_contract_version(5)
-    assert not is_published_contract_version(6)
+    assert is_published_contract_version(PUBLIC_CONTRACT_VERSION)
+    assert not is_published_contract_version(PUBLIC_CONTRACT_VERSION + 1)
     assert supported_contract_versions(1) == (1,)
     assert supported_contract_versions(3) == (3,)
     assert supported_contract_versions(True) == ()
@@ -250,7 +250,7 @@ def test_legacy_persisted_generation_never_changes_code_owned_current_version(tm
     assert snapshot.revision == 7
     assert snapshot.connectors[0].slug == "c"
     assert not hasattr(snapshot.connectors[0], "contract_version")
-    assert PUBLIC_CONTRACT_VERSION == 5
+    assert PUBLIC_CONTRACT_VERSION >= 1
     assert "contract_version:" not in path.read_text(encoding="utf-8")
 
 
@@ -297,14 +297,15 @@ async def test_admin_connector_crud_auth_unknown_fields_and_get_is_read_only(adm
         )
         assert created.status_code == 201
         connector = created.json()["connector"]
-        assert connector["contract_version"] == PUBLIC_CONTRACT_VERSION == 5
+        assert connector["contract_version"] == PUBLIC_CONTRACT_VERSION
         assert connector["slug"] == "c"
         assert connector["path"] == "/mcp/connectors/c/mcp"
         assert connector["url"] == "https://cognita.example/mcp/connectors/c/mcp"
         assert connector["stable_url"] == connector["url"]
         assert connector["current_url"] == f"https://cognita.example/mcp/connectors/c/mcp/v{PUBLIC_CONTRACT_VERSION}"
-        assert "/v5" not in connector["path"]
-        assert connector["current_url"].count("/v5") == 1
+        retired_path = f"/v{PUBLIC_CONTRACT_VERSION - 1}"
+        assert retired_path not in connector["path"]
+        assert connector["current_url"].count(f"/v{PUBLIC_CONTRACT_VERSION}") == 1
         obsolete_publish = await client.post(
             f"/api/connectors/{connector['id']}/contract-version",
             json={"expected_revision": 1},

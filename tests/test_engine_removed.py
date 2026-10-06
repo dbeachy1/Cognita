@@ -7,6 +7,7 @@ core, so the refusal has to be loud and has to name where the value came from.
 """
 
 from __future__ import annotations
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import argparse
 import importlib

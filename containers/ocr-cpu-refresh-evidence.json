@@ -1,11 +1,11 @@
 {
   "consumed_source_sha256": {
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/cognita/Dockerfile": "e0100767a3bc7ad250a80a577e0bba03c9445b6dab90f4433d63b5ec08a0bae7",
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
-    "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source/scripts/refresh_dependency_locks.py": "cf492daf61bafa40fda7004e294c7c866bb5129a704084fdf7272b206c2494e6"
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/cognita/Dockerfile": "e714c50a4a13529c422d857412106a6725201ab2e8dfe782017783b397b9e7fc",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/containers/resolver-tooling.lock": "ad319e0cb3bf4c1d12d960d2f6393e92b475a58c7c279945cd3769cf0ab60d8e",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/scripts/dependency_locks.py": "a0874481514caf766175336d5a21e1642586c45a927fd23d2edcc42453bb95a0",
+    "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation/scripts/refresh_dependency_locks.py": "fc75a464182d828a82ab75d663454e313fda06e1b5f9e1abfda0f48f143b8911"
   },
   "index_url": "https://pypi.org/simple",
   "interpreters": {
@@ -47,17 +47,26 @@
       }
     }
   },
-  "maintenance_evidence": "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-evidence-public/dependency-refresh-evidence.json",
+  "maintenance_evidence": "/home/dougb/cognita-data/builds/codex-audiobook-16-lock-evidence/locks-revalidation-df176f2/ocr-cpu/dependency-refresh-evidence.json",
   "operation": "dependency-refresh",
   "platform": {
     "architecture": "x86_64",
     "os": "linux"
+  },
+  "preserve_existing_pins": true,
+  "preserved_pin_seeds": {
+    "ocr-cpu": {
+      "path": "containers/ocr-cpu-requirements.lock",
+      "sha256": "3ad435e0e184c4678eef7eced5619b81dc88b4c8010f8ef94e5371bf81ed20e8"
+    }
   },
   "roles": {
     "ocr-cpu": {
       "input_sha256": "b753a0b7944466504099c794c4992b8d3ed8a1a72bcfb286ad76bb505bf7706c",
       "lock_sha256": "3ad435e0e184c4678eef7eced5619b81dc88b4c8010f8ef94e5371bf81ed20e8",
       "packages": 27,
+      "preserve_existing_pins": true,
+      "preserved_pin_seed_sha256": "3ad435e0e184c4678eef7eced5619b81dc88b4c8010f8ef94e5371bf81ed20e8",
       "resolver": {
         "expected_python": "3.13",
         "image": "python:3.13-slim-bookworm@sha256:ed86c82274b3c69b52fb5820f358f0bd7df0b603332063cb5c6e32bd220c3e6e",
@@ -101,7 +110,7 @@
         "docs/easyocr-qualification-dependencies.json"
       ],
       "source_sha256": {
-        "containers/cognita/Dockerfile": "e0100767a3bc7ad250a80a577e0bba03c9445b6dab90f4433d63b5ec08a0bae7",
+        "containers/cognita/Dockerfile": "e714c50a4a13529c422d857412106a6725201ab2e8dfe782017783b397b9e7fc",
         "containers/cognita/runtime-lock.json": "d9c51cca9d4a371e7899153b40a10aea67929545fc05a3e0b11d19923cbd51a4",
         "docs/easyocr-qualification-dependencies.json": "384882877f240708cea3a178221fcde4cb3ea73ec936c7e63ec15534a88da6d7"
       }
@@ -112,12 +121,12 @@
     "ocr-cpu"
   ],
   "source": {
-    "branch": "codex/public-15.2.0",
-    "commit": "f2cfdb3db27415d427f72615d340d746738e9508",
+    "branch": "codex/audiobook-locks-revalidation",
+    "commit": "df176f21264b9cef9d9a3604a8a3a621cb317bb4",
     "remote": "https://github.com/dbeachy1/Cognita.git",
-    "tree": "20833eacb7002b6881a96eb163061c4279bbb92b"
+    "tree": "b1989f5cecaaa5596125389654f35e11c0a179c9"
   },
-  "source_root": "/data/cognita/releases/candidates/public-15.2.0-f2cfdb3/ocr-source",
+  "source_root": "/home/dougb/cognita-data/builds/codex-audiobook-16/.codex/worktrees/locks-revalidation",
   "tool": {
     "pip_compile": "container:python -m piptools",
     "versions": {

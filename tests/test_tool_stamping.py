@@ -5,6 +5,7 @@ toolsets; the stamp prefixed to every tool description is what lets the model
 pick the right knowledge base. A fake ASGI worker answers tools/list with
 canned engine tools (same rig as test_edit_proxy.py).
 """
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 
 import pytest
 from fastapi import FastAPI, Request

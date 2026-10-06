@@ -1,4 +1,5 @@
 """The packaged HTTP runner must execute OCR, rather than silently skip it."""
+from cognita.connectors import PUBLIC_CONTRACT_VERSION
 import copy
 import importlib.util
 import json
