@@ -12,7 +12,7 @@ class ReadCursorError(ValueError):
 
 
 def text_page(text: str, start: int, maximum: int) -> dict[str, object]:
-    if start < 0 or maximum < 1:
+    if start < 0 or maximum < 0:
         raise ValueError("invalid text page bounds")
     end = min(len(text), start + maximum)
     return {
@@ -48,6 +48,23 @@ def spoken_interval(speech_text: str, spoken_text: str, start: int, end: int) ->
     return spoken_text[int(boundaries[start]):int(boundaries[end])]
 
 
+def paired_text_page(prompt: str, spoken: str, offset: int, maximum: int) -> tuple[dict[str, object], dict[str, object], int]:
+    """Page two logical fields through one shared code-point budget."""
+    total = len(prompt) + len(spoken)
+    if offset < 0 or offset > total or maximum < 1:
+        raise ValueError("invalid paired text page bounds")
+    prompt_start = min(offset, len(prompt))
+    prompt_count = min(maximum, len(prompt) - prompt_start)
+    spoken_start = max(0, offset - len(prompt))
+    spoken_count = min(maximum - prompt_count, len(spoken) - spoken_start)
+    next_offset = offset + prompt_count + spoken_count
+    return (
+        text_page(prompt, prompt_start, prompt_count),
+        text_page(spoken, spoken_start, spoken_count),
+        next_offset,
+    )
+
+
 def read_cursor(view: str, record_offset: int, text_offset: int = 0) -> str:
     raw = json.dumps(
         {"v": 2, "view": view, "record_offset": record_offset, "text_offset": text_offset},
@@ -70,4 +87,4 @@ def parse_read_cursor(cursor: str, view: str) -> tuple[int, int]:
         raise ReadCursorError("cursor does not belong to this immutable read") from exc
 
 
-__all__ = ["ReadCursorError", "parse_read_cursor", "read_cursor", "spoken_interval", "text_page"]
+__all__ = ["ReadCursorError", "paired_text_page", "parse_read_cursor", "read_cursor", "spoken_interval", "text_page"]

@@ -770,6 +770,27 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert chapter["source_status"] == "eligible"
     assert chapter["takes"][0]["take_id"] == take["take_id"]
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
+    # One shared cap pages the frozen prompt and tag-removed spoken text
+    # without switching to the current working DOCX or dropping a suffix.
+    cursor = None
+    prompt_pages, spoken_pages = [], []
+    while True:
+        arguments = {
+            "project": "fixture", "chapter_id": "ch1",
+            "scope": {"kind": "test", "authorization_id": "test-auth"},
+            "snapshot_id": snapshot_id, "include_text": True, "max_characters": 1,
+        }
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        text_page = service.get_chapter(GetChapterRequest.model_validate(arguments))
+        for item in text_page["returned_texts"]:
+            prompt_pages.append(item["prompt"]["text"])
+            spoken_pages.append(item["spoken_text"]["text"])
+        if not text_page["has_more"]:
+            break
+        cursor = text_page["next_cursor"]
+    assert "".join(prompt_pages) == "hello"
+    assert "".join(spoken_pages) == "hello"
     first_metadata_page = service.get_chapter(GetChapterRequest.model_validate({
         "project": "fixture", "chapter_id": "ch1",
         "scope": {"kind": "test", "authorization_id": "test-auth"},

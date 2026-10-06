@@ -33,7 +33,9 @@ from .media import MediaValidationError, inspect_media_file
 from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave, production_mp3_argv
 from .jobs import ProcessRunnerError, ffprobe_json, run_process
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
-from .read_helpers import ReadCursorError, parse_read_cursor, read_cursor, spoken_interval, text_page
+from .read_helpers import (
+    ReadCursorError, paired_text_page, parse_read_cursor, read_cursor, spoken_interval, text_page,
+)
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
 from ..parsing import compute_doc_id
@@ -1072,10 +1074,32 @@ class BookService:
                          for kind, item in metadata],
         })
         limit = request.limit if "limit" in request.model_fields_set else 100
-        offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
+        include_text = "include_text" in request.model_fields_set and request.include_text
+        text_offset = 0
+        try:
+            if include_text:
+                offset, text_offset = (parse_read_cursor(request.cursor, view)
+                                       if "cursor" in request.model_fields_set else (0, 0))
+            else:
+                offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
+        except ReadCursorError as exc:
+            raise BookServiceError("invalid_cursor", "The chapter cursor is invalid or stale.") from exc
         if offset > len(metadata):
             raise BookServiceError("invalid_cursor", "The chapter cursor is invalid or stale.")
-        page_metadata = metadata[offset:offset + limit]
+        cap = request.max_characters if "max_characters" in request.model_fields_set else 40000
+        oversized_text = False
+        if include_text and stored is not None and offset < len(metadata) and metadata[offset][0] == "chunk":
+            first_chunk = metadata[offset][1]
+            try:
+                first_spoken = spoken_interval(snap.get("speech_text", ""), snap.get("spoken_projection", ""),
+                                                first_chunk["start"], first_chunk["end"])
+            except ValueError as exc:
+                raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
+            first_prompt = snap.get("speech_text", "")[first_chunk["start"]:first_chunk["end"]]
+            oversized_text = text_offset > 0 or len(first_prompt) + len(first_spoken) > cap
+        # Text continuations deliberately carry one chunk record: an oversized
+        # immutable prompt cannot be hidden behind a metadata-only cursor.
+        page_metadata = ([metadata[offset]] if oversized_text else metadata[offset:offset + limit])
         page_chunks = [dict(item) for kind, item in page_metadata if kind == "chunk"]
         page_takes = [item for kind, item in page_metadata if kind == "take"]
         page_take_ids = {item["take_id"] for item in page_takes}
@@ -1084,24 +1108,48 @@ class BookService:
             item["reusable_take_ids"] = [take_id for take_id in item.get("reusable_take_ids", []) if take_id in page_take_ids]
         page_candidates = [item for kind, item in page_metadata if kind == "candidate"]
         returned_texts: list[dict[str, Any]] = []
-        if "include_text" in request.model_fields_set and request.include_text and stored is not None:
+        next_text_offset = 0
+        if include_text and stored is not None:
             speech_text = snap.get("speech_text", "")
             spoken_text = snap.get("spoken_projection", "")
-            cap = request.max_characters if "max_characters" in request.model_fields_set else 40000
-            remaining = cap
-            for chunk in page_chunks:
+            for chunk in page_chunks[:1]:
                 prompt = speech_text[chunk["start"]:chunk["end"]]
                 try:
                     spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"])
                 except ValueError as exc:
                     raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
-                if len(prompt) + len(spoken) > remaining:
-                    break
-                returned_texts.append({"chunk_id": chunk["chunk_id"],
-                                       "prompt": text_page(prompt, 0, len(prompt)),
-                                       "spoken_text": text_page(spoken, 0, len(spoken))})
-                remaining -= len(prompt) + len(spoken)
+                try:
+                    prompt_page, spoken_page, next_text_offset = paired_text_page(prompt, spoken, text_offset, cap)
+                except ValueError as exc:
+                    raise BookServiceError("invalid_cursor", "The chapter text cursor is invalid or stale.") from exc
+                returned_texts.append({"chunk_id": chunk["chunk_id"], "prompt": prompt_page,
+                                       "spoken_text": spoken_page})
+                if not oversized_text:
+                    # Normal chunks fit in the page; continue returning later
+                    # chunk text below from the same shared budget.
+                    next_text_offset = 0
+            if not oversized_text:
+                remaining = cap - sum(len(item["prompt"]["text"]) + len(item["spoken_text"]["text"])
+                                      for item in returned_texts)
+                for chunk in page_chunks[1:]:
+                    prompt = speech_text[chunk["start"]:chunk["end"]]
+                    try:
+                        spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"])
+                    except ValueError as exc:
+                        raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
+                    if len(prompt) + len(spoken) > remaining:
+                        break
+                    returned_texts.append({"chunk_id": chunk["chunk_id"],
+                                           "prompt": text_page(prompt, 0, len(prompt)),
+                                           "spoken_text": text_page(spoken, 0, len(spoken))})
+                    remaining -= len(prompt) + len(spoken)
         next_offset = offset + len(page_metadata)
+        if next_text_offset:
+            prompt_total = len(prompt) + len(spoken)
+            if next_text_offset < prompt_total:
+                next_offset = offset
+            else:
+                next_text_offset = 0
         return {
             "chapter_id": chapter.chapter_id,
             "namespace": scope.model_dump(mode="json"),
@@ -1123,7 +1171,8 @@ class BookService:
             "source_status": source_status,
             "chunks": page_chunks, "takes": page_takes, "returned_texts": returned_texts,
             "has_more": next_offset < len(metadata),
-            "next_cursor": _cursor(view, next_offset) if next_offset < len(metadata) else None,
+            "next_cursor": ((read_cursor(view, next_offset, next_text_offset) if include_text
+                             else _cursor(view, next_offset)) if next_offset < len(metadata) else None),
         }
 
     def find_chunk(self, request: dto.FindChunkRequest) -> dict[str, Any]:
