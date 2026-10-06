@@ -915,7 +915,10 @@ class Store:
                 return []
             params.append(list(include_doc_ids))
             conds.append(f"d.doc_id = ANY(${len(params)}::text[])")
-        filter_sql = " AND " + " AND ".join(conds)
+        # Unlike ``lexical_search`` the registered leg starts with the required
+        # tier predicate.  It supplies the complete WHERE expression, so a
+        # leading ``AND`` would produce ``WHERE AND d.tier ...`` on every call.
+        filter_sql = " AND ".join(conds)
         rows = await self.pool.fetch(
             f"""SELECT d.doc_id || '_r0' AS chunk_id, d.doc_id, 0 AS chunk_index,
                        coalesce(d.content, '') AS content, NULL::text AS section,
