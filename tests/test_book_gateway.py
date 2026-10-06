@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import asyncio
+import threading
 
 import httpx
 import pytest
@@ -317,8 +318,9 @@ async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_j
     assert commit_payload["status"] == "success" and commit_payload["data"]["head_revision"] == 1
 
 
+@pytest.mark.parametrize("interleaving", [None, "revoke_before_transfer", "revoke_after_transfer", "working_plan_change", "shutdown_during_media"])
 @pytest.mark.asyncio
-async def test_authenticated_workspace_import_reserves_before_controlled_transfer(host, tmp_path):
+async def test_authenticated_workspace_import_reserves_before_controlled_transfer(host, tmp_path, interleaving):
     from pathlib import Path
     from cognita.books.sources import StagedAudioSource
 
@@ -366,6 +368,32 @@ async def test_authenticated_workspace_import_reserves_before_controlled_transfe
             self.calls.append((principal, current_connector, project, path))
             stage = Path(staging_root) / ".cognita-book-source-controlled"
             stage.write_bytes(samples)
+            if interleaving == "revoke_after_transfer":
+                credential_store.revoke(_credential.credential_id)
+            elif interleaving == "working_plan_change":
+                from cognita.books.models import InspectRequest, PrepareRequest
+
+                service = host.book_service_for(project)
+                inspected = service.inspect(InspectRequest.model_validate({
+                    "project": project.name, "chapter_id": "ch1",
+                    "prose_filepath": "Chapters/1/chapter.docx",
+                    "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+                }))
+                service.prepare(PrepareRequest.model_validate({
+                    "project": project.name, "operation_id": "prepare-during-workspace-transfer",
+                    "chapter_id": "ch1", "document_view_id": inspected["document_view_id"],
+                    "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+                    "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+                    "expected_manifest_revision": prepared["manifest_revision"],
+                    "scope": {"kind": "test", "authorization_id": "test-auth"},
+                    "speech_selection_confirmed": True,
+                    "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+                    "expected_settings_sha256": None, "production_target": None,
+                    "chunks": [{"chunk_id": "authenticated-workspace-v2", "start": 0,
+                                "end": 5, "replaces_chunk_ids": ["authenticated-workspace"],
+                                "request_spec": spec}],
+                    "publish_bookmarks_to_working_tagged_docx": False,
+                }), owner_key=f"principal:{_credential.credential_id}")
             return StagedAudioSource(stage, digest, len(samples), "workspace")
 
     broker = ControlledBroker()
@@ -449,6 +477,30 @@ async def test_authenticated_workspace_import_reserves_before_controlled_transfe
         }))
         generation = json.loads(response.json()["result"]["content"][0]["text"])["data"]["generation"]
 
+    service = host.book_service_for(host.registry.get("fixture"))
+    media_entered = threading.Event()
+    media_release = threading.Event()
+    media_exited = threading.Event()
+    if interleaving == "revoke_before_transfer":
+        original_import = service.import_audio
+
+        def reserve_then_revoke(request, *, owner_key):
+            result = original_import(request, owner_key=owner_key)
+            credential_store.revoke(_credential.credential_id)
+            return result
+
+        service.import_audio = reserve_then_revoke
+    elif interleaving == "shutdown_during_media":
+        def blocking_media_worker(_job_id, **_kwargs):
+            media_entered.set()
+            try:
+                if not media_release.wait(timeout=5):
+                    raise AssertionError("test did not release the controlled import worker")
+            finally:
+                media_exited.set()
+
+        service.run_import_job = blocking_media_worker
+
     imported = await gateway_post(_rpc("tools/call", {
         "name": "audiobook_import_audio", "arguments": {
             "project": "fixture", "operation_id": "authenticated-workspace-import",
@@ -465,6 +517,53 @@ async def test_authenticated_workspace_import_reserves_before_controlled_transfe
     }))
     assert imported.status_code == 200
     job = json.loads(imported.json()["result"]["content"][0]["text"])["data"]
+    if interleaving == "shutdown_during_media":
+        assert await asyncio.to_thread(media_entered.wait, 3)
+        key = ("fixture", job["job_id"])
+        stage_root = service.root / ".cognita-storage" / "audiobook-staging" / job["job_id"]
+        worker_task = host._book_import_tasks[key]
+        shutdown = asyncio.create_task(host.shutdown())
+        try:
+            await asyncio.sleep(0.05)
+            assert not shutdown.done()
+            assert not media_exited.is_set()
+            assert host._book_import_tasks.get(key) is worker_task
+        finally:
+            media_release.set()
+        await asyncio.wait_for(shutdown, timeout=5)
+        assert media_exited.is_set()
+        assert key not in host._book_import_tasks
+        current_job = service.discover_state().import_job(job["job_id"])
+        assert current_job["state"] == "failed"
+        assert current_job["error"]["reason"] == "source_unavailable"
+        assert not stage_root.exists()
+        return
+    state = service.discover_state()
+    initial_generation = state.generation(generation["generation_record_id"])
+    scope_key = state.snapshot(initial_generation["snapshot_id"])["scope_key"]
+    head_before_transfer = state.chapter_head("ch1", scope_key)
+    if interleaving in {"revoke_before_transfer", "revoke_after_transfer"}:
+        key = ("fixture", job["job_id"])
+        for _ in range(100):
+            task = host._book_import_tasks.get(key)
+            current_job = state.import_job(job["job_id"])
+            if task is None and current_job and current_job["state"] in {"succeeded", "failed", "cancelled"}:
+                break
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5)
+                break
+            await asyncio.sleep(0.01)
+        current_job = state.import_job(job["job_id"])
+        assert current_job["state"] == "failed", current_job
+        assert current_job["error"]["reason"] == "project_unavailable", current_job
+        assert len(broker.calls) == (0 if interleaving == "revoke_before_transfer" else 1)
+        current_generation = state.generation(generation["generation_record_id"])
+        assert current_generation["media_registered"] is False
+        assert current_generation["take_id"] is None
+        assert state.namespace("ch1", scope_key)["head_revision"] is None
+        assert state.chapter_head("ch1", scope_key) == head_before_transfer
+        return
+
     final = None
     for _ in range(50):
         read = await gateway_post(_rpc("tools/call", {
@@ -476,9 +575,19 @@ async def test_authenticated_workspace_import_reserves_before_controlled_transfe
         if final["state"] in {"succeeded", "failed", "cancelled"}:
             break
         await asyncio.sleep(0.01)
-    assert final is not None and final["state"] == "succeeded", final
+    assert final is not None and final["state"] == "succeeded", state.import_job(job["job_id"])["error"]
     assert final["result"]["take"]["bytes_sha256"] == digest
     assert len(broker.calls) == 1
+    if interleaving == "working_plan_change":
+        current_generation = state.generation(generation["generation_record_id"])
+        current_namespace = state.namespace("ch1", scope_key)
+        assert current_generation["snapshot_id"] == prepared["snapshot_id"]
+        assert current_generation["media_registered"] is True
+        assert current_generation["provider_ids"]["generation_ids"] == ["synthetic-broker"]
+        assert current_namespace["manifest_revision"] == prepared["manifest_revision"] + 1
+        assert current_namespace["current_snapshot_id"] != prepared["snapshot_id"]
+        assert current_namespace["head_revision"] is None
+        assert state.chapter_head("ch1", scope_key) == head_before_transfer
 
     listed = await gateway_post(_rpc("tools/call", {
         "name": "list_project_files", "arguments": {
