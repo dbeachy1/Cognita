@@ -138,6 +138,7 @@ class BookService:
         # an unfinished row absent from this set is never assumed to have a
         # surviving worker.
         self._active_import_jobs: set[str] = set()
+        self._active_build_jobs: set[str] = set()
 
     def discover_state(self) -> ProjectState | None:
         if self.state is None:
@@ -674,6 +675,8 @@ class BookService:
             raise BookServiceError("configuration_conflict", "Chapter editorial state is invalid.") from exc
         if chapter_state.chapter_id != chapter.chapter_id or chapter_state.layout_revision != layout.layout_revision:
             raise BookServiceError("stale_configuration", "Chapter state is bound to another layout revision.")
+        production_settings_sha256: str | None = None
+        prepared_production_target: dict[str, Any] | None = None
         if isinstance(request.scope, dto.ProductionScope):
             authorization = layout.production_authorization
             if authorization is None or authorization.revoked or not authorization.completed_book:
@@ -697,6 +700,8 @@ class BookService:
                     or request.request_limit.value != settings.request_limit.value
                     or request.request_limit.unit != settings.request_limit.unit):
                 raise BookServiceError("settings_mismatch", "The requested production settings differ from the validated book settings.")
+            production_settings_sha256 = settings_sha
+            prepared_production_target = _data(settings.production_target)
         else:
             auth = next((item for item in layout.test_authorizations
                          if item.authorization_id == request.scope.authorization_id), None)
@@ -825,6 +830,8 @@ class BookService:
             "speech_text": projected.speech_text,
             "spoken_projection": projected.spoken_projection,
             "prose_projection": projected.prose_projection,
+            "production_settings_sha256": production_settings_sha256,
+            "production_target": prepared_production_target,
         }
         try:
             status, revision, committed = state.commit_snapshot(
@@ -849,8 +856,9 @@ class BookService:
     def get_chapter(self, request: dto.GetChapterRequest) -> dict[str, Any]:
         state, _, layout = self._enabled_layout()
         chapter = self._chapter(layout, request.chapter_id)
-        scope_key = request.scope.model_dump_json() if "scope" in request.model_fields_set else None
-        namespace = state.namespace(chapter.chapter_id, scope_key) if scope_key else None
+        scope = request.scope if "scope" in request.model_fields_set else dto.ProductionScope(kind="production")
+        scope_key = scope.model_dump_json()
+        namespace = state.namespace(chapter.chapter_id, scope_key)
         snapshot_id = request.snapshot_id if "snapshot_id" in request.model_fields_set else (
             namespace.get("current_snapshot_id") if namespace else None
         )
@@ -859,13 +867,49 @@ class BookService:
             raise BookServiceError("snapshot_not_found", "The snapshot does not belong to this chapter.")
         snap = stored["payload"] if stored else {}
         result_data = snap.get("result", {})
-        chunks = result_data.get("chunks", [])
+        chunks = [dict(item) for item in result_data.get("chunks", [])]
+        takes = state.takes(chapter_id=chapter.chapter_id, snapshot_id=snapshot_id) if snapshot_id else []
+        take_ids_by_chunk: dict[str, list[str]] = {}
+        for take in takes:
+            take_ids_by_chunk.setdefault(take["chunk_id"], []).append(take["take_id"])
+        for chunk in chunks:
+            chunk["take_ids"] = take_ids_by_chunk.get(chunk["chunk_id"], [])
         if "chunk_ids" in request.model_fields_set:
             wanted = set(request.chunk_ids)
             chunks = [item for item in chunks if item["chunk_id"] in wanted]
+            takes = [item for item in takes if item["chunk_id"] in wanted]
+        candidates = state.builds(chapter_id=chapter.chapter_id, scope_key=scope_key)
+        head = state.chapter_head(chapter.chapter_id, scope_key)
+        source_status = "not_prepared"
+        if snapshot_id:
+            try:
+                source_status = (
+                    "eligible" if hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
+                    == result_data.get("snapshot_prose_sha256") else "changed"
+                )
+            except BookServiceError:
+                source_status = "blocked"
+        returned_texts: list[dict[str, Any]] = []
+        if "include_text" in request.model_fields_set and request.include_text and stored is not None:
+            speech_text = snap.get("speech_text", "")
+            cap = request.max_characters if "max_characters" in request.model_fields_set else 40000
+            remaining = cap
+            for chunk in chunks:
+                text = speech_text[chunk["start"]:chunk["end"]]
+                if len(text) > remaining:
+                    break
+                prompt = text
+                returned_texts.append({
+                    "chunk_id": chunk["chunk_id"],
+                    "prompt": {"text": prompt, "returned_start": 0, "returned_end": len(prompt),
+                               "total_codepoints": len(prompt), "text_sha256": hashlib.sha256(prompt.encode()).hexdigest()},
+                    "spoken_text": {"text": text, "returned_start": 0, "returned_end": len(text),
+                                    "total_codepoints": len(text), "text_sha256": hashlib.sha256(text.encode()).hexdigest()},
+                })
+                remaining -= len(text)
         return {
             "chapter_id": chapter.chapter_id,
-            "namespace": request.scope.model_dump(mode="json") if scope_key else {"kind": "production"},
+            "namespace": scope.model_dump(mode="json"),
             "manifest_revision": namespace.get("manifest_revision") if namespace else None,
             "media_revision": namespace.get("media_revision", 0) if namespace else 0,
             "head_revision": namespace.get("head_revision") if namespace else None,
@@ -874,12 +918,15 @@ class BookService:
             "tagged_sha256": result_data.get("snapshot_tagged_sha256"),
             "spoken_projection_sha256": result_data.get("spoken_projection_sha256"),
             "request_plan_sha256": result_data.get("request_plan_sha256"),
-            "accepted_build_id": None, "accepted_snapshot_id": None,
-            "accepted_request_plan_sha256": None, "production_settings_sha256": None,
-            "candidate_build_ids": [], "accepted_plan_matches_prepared": None,
-            "current_outputs_stale": bool(snapshot_id),
-            "source_status": "eligible" if snapshot_id else "not_prepared",
-            "chunks": chunks, "takes": [], "returned_texts": [],
+            "accepted_build_id": head["accepted_build_id"] if head else None,
+            "accepted_snapshot_id": head["accepted_snapshot_id"] if head else None,
+            "accepted_request_plan_sha256": head["accepted_plan_sha256"] if head else None,
+            "production_settings_sha256": snap.get("production_settings_sha256"),
+            "candidate_build_ids": [item["build_id"] for item in candidates],
+            "accepted_plan_matches_prepared": (bool(head["accepted_plan_matches_prepared"]) if head else None),
+            "current_outputs_stale": bool(head and (head["accepted_snapshot_id"] != snapshot_id or not head["accepted_plan_matches_prepared"])),
+            "source_status": source_status,
+            "chunks": chunks, "takes": takes, "returned_texts": returned_texts,
             "has_more": False, "next_cursor": None,
         }
 
@@ -1433,18 +1480,291 @@ class BookService:
         """Clear pre-start ownership when task scheduling itself is cancelled."""
         self._active_import_jobs.discard(job_id)
 
+    def build(self, request: dto.BuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        """Reserve a pinned chapter assembly candidate.
+
+        Candidate assembly deliberately has no side effect on the accepted
+        chapter head.  The gateway schedules ``run_build_job`` outside its
+        admission lock and a later, explicit commit performs the head CAS.
+        """
+        if not isinstance(request.input, dto.ChapterBuildInput):
+            raise BookServiceError("unsupported_build_mode", "Book assembly is not available until chapter heads are durable.")
+        if request.mode != "production_pcm" or not request.outputs.master:
+            raise BookServiceError("unsupported_build_mode", "This checkpoint assembles retained chapter PCM masters only.")
+        state, _, layout = self._enabled_layout()
+        item = request.input
+        chapter = self._chapter(layout, item.chapter_id)
+        stored = state.snapshot(item.snapshot_id)
+        if stored is None or stored["chapter_id"] != chapter.chapter_id:
+            raise BookServiceError("not_prepared", "The requested frozen chapter snapshot is unavailable.")
+        if stored["manifest_revision"] != item.expected_manifest_revision:
+            raise BookServiceError("stale_manifest", "The requested snapshot is not at the expected manifest revision.")
+        namespace = state.namespace(chapter.chapter_id, stored["scope_key"])
+        if namespace is None or namespace.get("manifest_revision") != item.expected_manifest_revision:
+            raise BookServiceError("stale_manifest", "The chapter manifest changed before build admission.")
+        if namespace.get("head_revision") != request.expected_head_revision:
+            raise BookServiceError("stale_head", "The chapter head changed before build admission.")
+        snapshot = stored["payload"]
+        snapshot_result = snapshot.get("result", {})
+        if snapshot_result.get("request_plan_sha256") != item.request_plan_sha256:
+            raise BookServiceError("request_hash_mismatch", "The requested build plan does not match the frozen snapshot.")
+        scope = json.loads(stored["scope_key"])
+        chunks = snapshot_result.get("chunks", [])
+        if [value.chunk_id for value in item.takes] != [value.get("chunk_id") for value in chunks]:
+            raise BookServiceError("coverage_incomplete", "Build takes must cover frozen chunks exactly once in frozen order.")
+        source_take_ids: list[str] = []
+        sources: list[PcmSource] = []
+        target: dto.ProductionTarget | None = None
+        for supplied, frozen in zip(item.takes, chunks, strict=True):
+            take = state.take(supplied.take_id)
+            if take is None or (
+                take.get("chapter_id") != chapter.chapter_id or take.get("snapshot_id") != item.snapshot_id
+                or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256
+                or frozen.get("request_sha256") != supplied.request_sha256
+                or take.get("provenance") != "native_generation"
+            ):
+                raise BookServiceError("stale_dependency", "A selected take is not a matching native frozen chunk take.")
+            media = take.get("media", {})
+            current_target = dto.ProductionTarget.model_validate({
+                "sample_rate_hz": media.get("sample_rate_hz"), "channels": media.get("channels"),
+                "encoding": media.get("encoding"), "storage_bits": media.get("storage_bits"),
+                "valid_bits": media.get("valid_bits"), "mp3_bitrate_kbps": 1,
+            }, strict=True)
+            if target is None:
+                target = current_target
+            elif target.model_dump(exclude={"mp3_bitrate_kbps"}) != current_target.model_dump(exclude={"mp3_bitrate_kbps"}):
+                raise BookServiceError("media_mismatch", "Selected native takes have different PCM formats.")
+            source_path = _path(self.root, take["filepath"])
+            inspection = inspect_media_file(source_path, raw_format={
+                "container": "raw_pcm", "encoding": media["encoding"],
+                "sample_rate_hz": media["sample_rate_hz"], "channels": media["channels"],
+                "storage_bits": media["storage_bits"], "valid_bits": media["valid_bits"],
+                "endianness": media["endianness"], "interleaving": "interleaved",
+                "provider_format_evidence": "retained-native-pcm",
+            }, provider_format_evidence="retained-native-pcm")
+            if inspection.bytes_sha256 != take.get("bytes_sha256"):
+                raise BookServiceError("stale_media", "An immutable take no longer matches its retained byte hash.")
+            sources.append(PcmSource(supplied.chunk_id, source_path, inspection))
+            source_take_ids.append(supplied.take_id)
+        assert target is not None
+        if scope.get("kind") == "production":
+            configured = snapshot.get("production_target")
+            if configured is None:
+                raise BookServiceError("stale_settings", "The production snapshot lacks its pinned target settings.")
+            configured_target = dto.ProductionTarget.model_validate(configured, strict=True)
+            if target.model_dump(exclude={"mp3_bitrate_kbps"}) != configured_target.model_dump(exclude={"mp3_bitrate_kbps"}):
+                raise BookServiceError("media_mismatch", "Native takes do not match the frozen production target.")
+        args_sha256 = canonical_json_sha256(_data(request))
+        pinned = {
+            "chapter_id": chapter.chapter_id, "scope_key": stored["scope_key"],
+            "snapshot_id": item.snapshot_id, "manifest_revision": item.expected_manifest_revision,
+            "request_plan_sha256": item.request_plan_sha256, "take_ids": source_take_ids,
+            "chunk_ids": [source.source_id for source in sources], "target": _data(target),
+            "gaps": _data(request.gaps), "metadata": _data(request.metadata),
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        job_id = str(uuid.uuid4())
+        try:
+            disposition, result = state.reserve_build_job(
+                job={"job_id": job_id, "payload": pinned, "created_at": now,
+                     "pinned_inputs_sha256": canonical_json_sha256(pinned)},
+                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                args_sha256=args_sha256,
+            )
+        except ProjectStateError as exc:
+            if str(exc) == "operation_id_conflict":
+                raise BookServiceError("operation_id_conflict", "This operation ID was used with different arguments.") from exc
+            raise BookServiceError("state_unavailable", "The build reservation could not be persisted.") from exc
+        return result, disposition == "replay"
+
+    def run_build_job(self, job_id: str) -> None:
+        """Assemble a single immutable PCM candidate from a durable pinned job."""
+        state = self._state_required()
+        claimed = state.claim_build_job(job_id)
+        if claimed is None:
+            return
+        self._active_build_jobs.add(job_id)
+        staged: list[Path] = []
+        try:
+            pinned = claimed["payload"]
+            _, _, layout = self._enabled_layout()
+            chapter = self._chapter(layout, pinned["chapter_id"])
+            target = dto.ProductionTarget.model_validate(pinned["target"], strict=True)
+            takes = [state.take(take_id) for take_id in pinned["take_ids"]]
+            if any(take is None for take in takes):
+                raise BookServiceError("stale_dependency", "A pinned take was not retained.")
+            sources: list[PcmSource] = []
+            for chunk_id, take in zip(pinned["chunk_ids"], takes, strict=True):
+                assert take is not None
+                media = take["media"]
+                source = _path(self.root, take["filepath"])
+                inspection = inspect_media_file(source, raw_format={
+                    "container": "raw_pcm", "encoding": media["encoding"],
+                    "sample_rate_hz": media["sample_rate_hz"], "channels": media["channels"],
+                    "storage_bits": media["storage_bits"], "valid_bits": media["valid_bits"],
+                    "endianness": media["endianness"], "interleaving": "interleaved",
+                    "provider_format_evidence": "retained-native-pcm",
+                }, provider_format_evidence="retained-native-pcm")
+                if inspection.bytes_sha256 != take["bytes_sha256"]:
+                    raise BookServiceError("stale_media", "A pinned take changed before assembly.")
+                sources.append(PcmSource(chunk_id, source, inspection))
+            build_id = str(uuid.uuid4())
+            build_relative = f"{chapter.audio_root}/builds/{build_id}"
+            _mkdir_safe(self.root, build_relative)
+            build_dir = _path(self.root, build_relative)
+            pcm = build_dir / "master.pcm"
+            pcm_stage = build_dir / "master.pcm.part"
+            timeline = build_dir / "timeline.json"
+            timeline_stage = build_dir / "timeline.json.part"
+            staged.extend([pcm_stage, timeline_stage])
+            with pcm_stage.open("xb") as output:
+                assembled = assemble_pcm_stream(sources, [dto.SilenceGap.model_validate(g, strict=True) for g in pinned["gaps"]], target, output)
+                output.flush()
+                os.fsync(output.fileno())
+            media = dto.MediaProperties.model_validate({
+                "codec": ("pcm_f" if target.encoding == "float" else "pcm_s") + f"{target.storage_bits}le",
+                "container": "raw_pcm", "sample_rate_hz": target.sample_rate_hz, "channels": target.channels,
+                "encoding": target.encoding, "storage_bits": target.storage_bits, "valid_bits": target.valid_bits,
+                "endianness": "little", "bitrate_bps": None, "frame_count": assembled.frame_count,
+                "duration_seconds": int(assembled.frame_count) / target.sample_rate_hz,
+                "canonical_sample_sha256": assembled.samples_sha256,
+            }, strict=True).model_dump(mode="json")
+            timeline_value = {
+                "sample_rate_hz": assembled.timeline.sample_rate_hz, "channels": assembled.timeline.channels,
+                "encoding": assembled.timeline.encoding, "storage_bits": assembled.timeline.storage_bits,
+                "frame_count": assembled.timeline.frame_count, "entries": _data(assembled.timeline.entries),
+            }
+            with timeline_stage.open("x", encoding="utf-8") as output:
+                json.dump(timeline_value, output, ensure_ascii=False, separators=(",", ":"))
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(pcm_stage, pcm)
+            os.replace(timeline_stage, timeline)
+            staged.clear()
+            output_data = {
+                "kind": "pcm_master", "filepath": f"{build_relative}/master.pcm",
+                "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media,
+            }
+            recipe = canonical_json_sha256({"pinned": pinned, "timeline": timeline_value})
+            result = dto.BuildResult.model_validate({
+                "kind": "build", "build_id": build_id, "scope": "chapter",
+                "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]],
+                "input_take_ids": pinned["take_ids"], "chapter_dependencies": [],
+                "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [output_data],
+                "timeline_filepath": f"{build_relative}/timeline.json", "recipe_sha256": recipe,
+                "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                               "sample_or_packet_verification": True, "errors": []},
+                "needs_listening_review": True,
+            }, strict=True).model_dump(mode="json", exclude_unset=True)
+            state.finish_build_success(job_id=job_id, build={
+                "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
+                "snapshot_id": pinned["snapshot_id"], "request_plan_sha256": pinned["request_plan_sha256"],
+                "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
+                "was_accepted": False, "result": result,
+            })
+        except (BookServiceError, MediaValidationError, AssemblyError, OSError, ProjectStateError) as exc:
+            reason = exc.reason if isinstance(exc, BookServiceError) else (
+                exc.code if isinstance(exc, (MediaValidationError, AssemblyError)) else (
+                    "cancelled" if isinstance(exc, ProjectStateError) and str(exc) == "cancel_requested" else "job_failed"
+                )
+            )
+            state.finish_build_failure(job_id=job_id, reason=reason,
+                                       message=str(exc) if isinstance(exc, (BookServiceError, MediaValidationError, AssemblyError, ProjectStateError)) else "The local build could not complete safely.",
+                                       cancelled=reason == "cancelled")
+        finally:
+            for path in staged:
+                path.unlink(missing_ok=True)
+            self._active_build_jobs.discard(job_id)
+
+    def commit_build(self, request: dto.CommitBuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        state, _, layout = self._enabled_layout()
+        args_sha256 = canonical_json_sha256(_data(request))
+        prior = state.receipt(owner_key=owner_key, project=self.project_name,
+                              tool="audiobook_commit_build", operation_id=request.operation_id)
+        if prior is not None:
+            if prior[0] != args_sha256:
+                raise BookServiceError("operation_id_conflict", "This operation ID was used with different arguments.")
+            return prior[1], True
+        build = state.build(request.build_id)
+        if build is None:
+            raise BookServiceError("file_not_found", "The requested build candidate does not exist.")
+        result = build["result"]
+        validation = result["validation"]
+        if not all(validation[key] for key in ("complete", "media_integrity", "coverage", "sample_or_packet_verification")):
+            raise BookServiceError("validation_failed", "The candidate did not pass its durable assembly checks.")
+        chapter = self._chapter(layout, build["chapter_id"])
+        stored = state.snapshot(build["snapshot_id"])
+        if stored is None:
+            raise BookServiceError("stale_dependency", "The build snapshot is unavailable.")
+        snap_result = stored["payload"].get("result", {})
+        namespace = state.namespace(chapter.chapter_id, build["scope_key"])
+        current_plan = namespace.get("current_plan_sha256") if namespace else None
+        current_snapshot = namespace.get("current_snapshot_id") if namespace else None
+        plan_matches = current_snapshot == build["snapshot_id"] and current_plan == build["request_plan_sha256"]
+        if request.intent == "accept_candidate" and not plan_matches:
+            raise BookServiceError("stale_dependency", "The candidate no longer matches the current prepared chapter plan.")
+        # A rollback selects prior acceptance only when its frozen prose still
+        # equals current registered prose; it never rewrites working documents.
+        prose = _read_bytes(self.root, chapter.working_filepath)
+        tagged = _read_bytes(self.root, chapter.tagged_filepath)
+        projected = project_docx_pair(prose, tagged)
+        if projected.prose_projection_sha256 != snap_result.get("prose_projection_sha256"):
+            raise BookServiceError("stale_source", "The working prose no longer matches this build snapshot.")
+        scope = json.loads(build["scope_key"])
+        if scope.get("kind") == "test":
+            auth = next((entry for entry in layout.test_authorizations
+                         if entry.authorization_id == scope.get("authorization_id")), None)
+            now = datetime.now(timezone.utc)
+            if auth is None or auth.revoked or auth.chapter_id != chapter.chapter_id or auth.source_raw_sha256 != hashlib.sha256(prose).hexdigest() or now >= datetime.fromisoformat(auth.expires_at.replace("Z", "+00:00")):
+                raise BookServiceError("test_scope_not_authorized", "The test authorization is no longer active for this source.")
+        elif scope.get("kind") == "production":
+            state_bytes = _read_bytes(self.root, chapter.chapter_state_filepath)
+            chapter_state = validate_chapter_state(state_bytes)
+            if chapter_state.editorial_status != "approved" or chapter_state.approved_prose_projection_sha256 != projected.prose_projection_sha256:
+                raise BookServiceError("chapter_not_approved", "Current production prose is no longer approved.")
+            expected_settings = stored["payload"].get("production_settings_sha256")
+            settings_bytes = _read_bytes(self.root, layout.shared_paths.production_settings_filepath)
+            if expected_settings is None or hashlib.sha256(settings_bytes).hexdigest() != expected_settings:
+                raise BookServiceError("stale_settings", "Production settings changed after the candidate was prepared.")
+        exports = [{key: output[key] for key in ("kind", "filepath", "bytes_sha256")} for output in result["outputs"]]
+        try:
+            disposition, committed = state.commit_chapter_build(
+                build_id=request.build_id, chapter_id=chapter.chapter_id, scope_key=build["scope_key"],
+                expected_head_revision=request.expected_head_revision, intent=request.intent,
+                plan_matches_prepared=plan_matches, owner_key=owner_key, project=self.project_name,
+                operation_id=request.operation_id, args_sha256=args_sha256,
+                result={"accepted_build_id": request.build_id, "head_revision": 1, "previous_build_id": None,
+                        "accepted_plan_matches_prepared": plan_matches, "exports": exports,
+                        "dependent_book_ids_marked_stale": [], "rollback_available": True},
+            )
+        except ProjectStateError as exc:
+            reason = {"stale_head": "stale_head", "build_not_found": "file_not_found",
+                      "rollback_not_accepted": "stale_dependency"}.get(str(exc), "state_unavailable")
+            raise BookServiceError(reason, "The chapter build could not be committed.") from exc
+        return committed, disposition == "replay"
+
     def get_job(self, request: dto.GetJobRequest) -> dict[str, Any]:
         state = self._state_required()
         job = state.import_job(request.job_id)
+        is_build = False
+        if job is None:
+            job = state.build_job(request.job_id)
+            is_build = job is not None
         if job is None:
             raise BookServiceError("file_not_found", "The durable job does not exist.")
-        if job["state"] in {"queued", "running"} and request.job_id not in self._active_import_jobs:
+        active = self._active_build_jobs if is_build else self._active_import_jobs
+        if job["state"] in {"queued", "running"} and request.job_id not in active:
             # A fresh service instance proves no worker survived restart.  Do
             # not silently repeat local work or reuse a transient source.
-            self._discard_unregistered_import_artifacts(job)
-            state.finish_import_failure(job_id=request.job_id, reason="job_failed",
-                                        message="The unfinished import was interrupted by restart.")
-            job = state.import_job(request.job_id)
+            if is_build:
+                state.finish_build_failure(job_id=request.job_id, reason="job_failed",
+                                           message="The unfinished build was interrupted by restart.")
+                job = state.build_job(request.job_id)
+            else:
+                self._discard_unregistered_import_artifacts(job)
+                state.finish_import_failure(job_id=request.job_id, reason="job_failed",
+                                            message="The unfinished import was interrupted by restart.")
+                job = state.import_job(request.job_id)
             assert job is not None
         phase = "completed" if job["state"] == "succeeded" else (
             "cancel_requested" if job["state"] == "cancel_requested" else job["state"]
@@ -1464,11 +1784,18 @@ class BookService:
         args_sha256 = canonical_json_sha256({"project": request.project, "job_id": request.job_id,
                                              "expected_job_revision": request.expected_job_revision})
         try:
-            disposition, result = state.request_import_cancellation(
-                job_id=request.job_id, expected_job_revision=request.expected_job_revision,
-                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
-                args_sha256=args_sha256,
-            )
+            if state.import_job(request.job_id) is not None:
+                disposition, result = state.request_import_cancellation(
+                    job_id=request.job_id, expected_job_revision=request.expected_job_revision,
+                    owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                    args_sha256=args_sha256,
+                )
+            else:
+                disposition, result = state.request_build_cancellation(
+                    job_id=request.job_id, expected_job_revision=request.expected_job_revision,
+                    owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                    args_sha256=args_sha256,
+                )
         except ProjectStateError as exc:
             reason = {"operation_id_conflict": "operation_id_conflict", "job_not_found": "file_not_found",
                       "stale_job": "stale_generation"}.get(str(exc), "state_unavailable")

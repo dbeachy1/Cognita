@@ -540,14 +540,16 @@ ENGINE_TOOL_DEFS: list[dict] = [
 # gateway and never receives these definitions.
 ENGINE_TOOL_DEFS.extend(ASSET_TOOL_DEFS)
 # The implemented reservation/recovery and local raw-PCM import job surface is
-# advertised together. Assembly/commit/index-status/book-read remain withheld
-# until their durable implementations exist.
+# advertised together. Chapter assembly and explicit acceptance are now
+# durable candidates/head-CAS operations; index status and book reads remain
+# withheld until their own authorities exist.
 from .books.schemas import book_tool_definitions, project_storage_tool_definitions
 
 _IMPLEMENTED_BOOK_TOOLS = {
     "audiobook_inspect_chapter", "audiobook_prepare_chapter",
     "audiobook_get_chapter", "audiobook_find_chunk",
     "audiobook_record_generation", "audiobook_import_audio",
+    "audiobook_build", "audiobook_commit_build",
     "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
 }
 ENGINE_TOOL_DEFS.extend(

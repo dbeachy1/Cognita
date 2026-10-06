@@ -226,6 +226,39 @@ async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_j
     assert final["error"] is None, final["error"]
     assert final["state"] == "succeeded"
     assert final["result"]["take"]["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
+    take = final["result"]["take"]
+    built_response = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_build", "arguments": {
+            "project": "fixture", "operation_id": "gateway-build", "expected_head_revision": None,
+            "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                      "expected_manifest_revision": prepared["manifest_revision"],
+                      "request_plan_sha256": prepared["request_plan_sha256"],
+                      "takes": [{"chunk_id": "gateway-raw", "take_id": take["take_id"],
+                                 "request_sha256": take["request_sha256"]}]},
+            "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+            "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+        },
+    }), headers=headers)
+    build_job = json.loads(built_response.json()["result"]["content"][0]["text"])["data"]
+    for _ in range(40):
+        read = await _post(host, _rpc("tools/call", {
+            "name": "audiobook_get_job", "arguments": {"project": "fixture", "job_id": build_job["job_id"]},
+        }), headers=headers)
+        build_final = json.loads(read.json()["result"]["content"][0]["text"])["data"]
+        if build_final["state"] in {"succeeded", "failed", "cancelled"}:
+            break
+        await asyncio.sleep(0.01)
+    assert build_final["state"] == "succeeded", build_final
+    committed_response = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_commit_build", "arguments": {
+            "project": "fixture", "operation_id": "gateway-commit", "build_id": build_final["result"]["build_id"],
+            "expected_head_revision": None, "intent": "accept_candidate",
+            "acceptance": {"actor": "fixture", "accepted_at": "2026-10-05T00:00:00+00:00",
+                           "listening_review": "passed", "notes": ["synthetic"]},
+        },
+    }), headers=headers)
+    commit_payload = json.loads(committed_response.json()["result"]["content"][0]["text"])
+    assert commit_payload["status"] == "success" and commit_payload["data"]["head_revision"] == 1
 
 
 def test_book_wire_capture_suppresses_source_and_malformed_bodies():

@@ -209,6 +209,7 @@ class LocalEngineHost(
         self._reindex_tasks: dict[str, asyncio.Task] = {}
         self._asset_reconcile_tasks: dict[str, asyncio.Task] = {}
         self._book_import_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._book_build_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.watcher = None  # WatcherManager, set by startup() when enabled (M4)
         self._asset_services: dict[tuple[str, str | None], AssetService] = {}
         self._book_services: dict[str, BookService] = {}
@@ -447,7 +448,7 @@ class LocalEngineHost(
         if self.watcher is not None:
             await self.watcher.stop()
         background = [*self._reindex_tasks.values(), *self._asset_reconcile_tasks.values(),
-                      *self._book_import_tasks.values()]
+                      *self._book_import_tasks.values(), *self._book_build_tasks.values()]
         for task in background:
             task.cancel()
         if background:
@@ -812,6 +813,8 @@ class LocalEngineHost(
             "audiobook_find_chunk": book_dto.FindChunkRequest,
             "audiobook_record_generation": book_dto.RecordGenerationRequest,
             "audiobook_import_audio": book_dto.ImportAudioRequest,
+            "audiobook_build": book_dto.BuildRequest,
+            "audiobook_commit_build": book_dto.CommitBuildRequest,
             "audiobook_get_job": book_dto.GetJobRequest,
             "audiobook_cancel_job": book_dto.CancelJobRequest,
             "audiobook_get_generations": book_dto.GetGenerationsRequest,
@@ -881,6 +884,22 @@ class LocalEngineHost(
                             self._book_import_tasks.pop(key, None)
                             service.mark_import_worker_finished(job_id)
                         task.add_done_callback(finished)
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_build":
+                    data, replayed = service.build(request_model, owner_key=owner_key)
+                    if not replayed:
+                        job_id = data["job_id"]
+                        key = (project.name, job_id)
+                        service._active_build_jobs.add(job_id)
+                        task = asyncio.create_task(asyncio.to_thread(service.run_build_job, job_id))
+                        self._book_build_tasks[key] = task
+                        def finished_build(_task, *, key=key, job_id=job_id, service=service) -> None:
+                            self._book_build_tasks.pop(key, None)
+                            service._active_build_jobs.discard(job_id)
+                        task.add_done_callback(finished_build)
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_commit_build":
+                    data, replayed = service.commit_build(request_model, owner_key=owner_key)
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 elif tool == "audiobook_get_job":
                     data = service.get_job(request_model)

@@ -135,6 +135,7 @@ class ProjectState:
             state._ensure_indexed_role_schema()
             state._ensure_generation_schema()
             state._ensure_import_schema()
+            state._ensure_build_schema()
             return state
         except ProjectStateError:
             raise
@@ -173,6 +174,7 @@ class ProjectState:
         state._ensure_indexed_role_schema()
         state._ensure_generation_schema()
         state._ensure_import_schema()
+        state._ensure_build_schema()
         marker = {
             "schema_version": SCHEMA_VERSION,
             "database": DATABASE_FILENAME,
@@ -459,6 +461,58 @@ class ProjectState:
                 )
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("import job state schema is unavailable") from exc
+
+    def _ensure_build_schema(self) -> None:
+        """Create immutable assembly candidates and their durable local jobs.
+
+        A candidate is not a chapter head.  The separate head row is the only
+        acceptance authority, so a crashed build or an unreviewed retake can
+        never displace previously accepted exports.
+        """
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_build_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        owner_key TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        job_revision INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        result_json TEXT,
+                        error_json TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_builds (
+                        build_id TEXT PRIMARY KEY,
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        snapshot_id TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS book_builds_chapter_created "
+                    "ON book_builds(chapter_id,scope_key,created_at,build_id)"
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_chapter_heads (
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        head_revision INTEGER NOT NULL,
+                        accepted_build_id TEXT NOT NULL,
+                        accepted_snapshot_id TEXT NOT NULL,
+                        accepted_plan_sha256 TEXT NOT NULL,
+                        accepted_plan_matches_prepared INTEGER NOT NULL,
+                        PRIMARY KEY(chapter_id,scope_key)
+                    )"""
+                )
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("build state schema is unavailable") from exc
 
     def reserve_generation(
         self, *, record: dict, owner_key: str, project: str, tool: str,
@@ -783,6 +837,211 @@ class ProjectState:
                 (json.dumps(result, ensure_ascii=False, separators=(",", ":")), job_id),
             )
             return result
+
+    def take(self, take_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM book_takes WHERE take_id=?", (take_id,)
+            ).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
+
+    def takes(self, *, chapter_id: str, snapshot_id: str | None = None) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM book_takes WHERE chapter_id=? ORDER BY created_at,take_id",
+                (chapter_id,),
+            ).fetchall()
+        values = [json.loads(row["payload_json"]) for row in rows]
+        return values if snapshot_id is None else [v for v in values if v.get("snapshot_id") == snapshot_id]
+
+    def build_job(self, job_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM book_build_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        return {
+            "job_id": row["job_id"], "owner_key": row["owner_key"],
+            "operation_id": row["operation_id"], "job_revision": int(row["job_revision"]),
+            "state": row["state"], "payload": json.loads(row["payload_json"]),
+            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "error": json.loads(row["error_json"]) if row["error_json"] else None,
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+
+    def reserve_build_job(self, *, job: dict, owner_key: str, project: str,
+                          operation_id: str, args_sha256: str) -> tuple[str, dict]:
+        with self.transaction() as connection:
+            prior = self._receipt_in(
+                connection, owner_key=owner_key, project=project, tool="audiobook_build",
+                operation_id=operation_id, args_sha256=args_sha256,
+            )
+            if prior is not None:
+                return "replay", prior
+            connection.execute(
+                "INSERT INTO book_build_jobs(job_id,owner_key,operation_id,job_revision,state,payload_json,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (job["job_id"], owner_key, operation_id, 1, "queued",
+                 json.dumps(job["payload"], ensure_ascii=False, separators=(",", ":")),
+                 job["created_at"], job["created_at"]),
+            )
+            result = {"job_id": job["job_id"], "job_revision": 1, "state": "queued",
+                      "poll_after_seconds": 1, "pinned_inputs_sha256": job["pinned_inputs_sha256"]}
+            self._put_receipt_in(connection, owner_key=owner_key, project=project,
+                                 tool="audiobook_build", operation_id=operation_id,
+                                 args_sha256=args_sha256, result=result)
+            return "committed", result
+
+    def claim_build_job(self, job_id: str) -> dict | None:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT state FROM book_build_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None or row["state"] != "queued":
+                return None
+            connection.execute(
+                "UPDATE book_build_jobs SET state='running',job_revision=job_revision+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (job_id,),
+            )
+        return self.build_job(job_id)
+
+    def finish_build_failure(self, *, job_id: str, reason: str, message: str,
+                             cancelled: bool = False) -> dict | None:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT state FROM book_build_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None:
+                return None
+            if row["state"] in {"succeeded", "failed", "cancelled"}:
+                return self.build_job(job_id)
+            terminal = "cancelled" if cancelled or row["state"] == "cancel_requested" else "failed"
+            error = {"reason": reason, "message": message,
+                     "operation_outcome": "not_applied", "correlation_id": None}
+            connection.execute(
+                "UPDATE book_build_jobs SET state=?,job_revision=job_revision+1,error_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (terminal, json.dumps(error, separators=(",", ":")), job_id),
+            )
+        return self.build_job(job_id)
+
+    def request_build_cancellation(self, *, job_id: str, expected_job_revision: int,
+                                   owner_key: str, project: str, operation_id: str,
+                                   args_sha256: str) -> tuple[str, dict]:
+        with self.transaction() as connection:
+            prior = self._receipt_in(connection, owner_key=owner_key, project=project,
+                                     tool="audiobook_cancel_job", operation_id=operation_id,
+                                     args_sha256=args_sha256)
+            if prior is not None:
+                return "replay", prior
+            row = connection.execute(
+                "SELECT job_revision,state FROM book_build_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("job_not_found")
+            if int(row["job_revision"]) != expected_job_revision:
+                raise ProjectStateError("stale_job")
+            if row["state"] in {"succeeded", "failed", "cancelled"}:
+                result = {"job_id": job_id, "job_revision": int(row["job_revision"]), "state": row["state"]}
+            else:
+                connection.execute(
+                    "UPDATE book_build_jobs SET state='cancel_requested',job_revision=job_revision+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                    (job_id,),
+                )
+                result = {"job_id": job_id, "job_revision": int(row["job_revision"]) + 1,
+                          "state": "cancel_requested"}
+            self._put_receipt_in(connection, owner_key=owner_key, project=project,
+                                 tool="audiobook_cancel_job", operation_id=operation_id,
+                                 args_sha256=args_sha256, result=result)
+            return "committed", result
+
+    def finish_build_success(self, *, job_id: str, build: dict) -> dict:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT state FROM book_build_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None:
+                raise ProjectStateError("job_not_found")
+            if row["state"] == "succeeded":
+                saved = connection.execute("SELECT result_json FROM book_build_jobs WHERE job_id=?", (job_id,)).fetchone()
+                return json.loads(saved["result_json"])
+            if row["state"] == "cancel_requested":
+                raise ProjectStateError("cancel_requested")
+            if row["state"] not in {"queued", "running"}:
+                raise ProjectStateError("job_not_active")
+            connection.execute(
+                "INSERT INTO book_builds(build_id,chapter_id,scope_key,snapshot_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                (build["build_id"], build["chapter_id"], build["scope_key"], build["snapshot_id"],
+                 json.dumps(build, ensure_ascii=False, separators=(",", ":")), build["created_at"]),
+            )
+            result = build["result"]
+            connection.execute(
+                "UPDATE book_build_jobs SET state='succeeded',job_revision=job_revision+1,result_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (json.dumps(result, ensure_ascii=False, separators=(",", ":")), job_id),
+            )
+            return result
+
+    def build(self, build_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT payload_json FROM book_builds WHERE build_id=?", (build_id,)).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
+
+    def builds(self, *, chapter_id: str, scope_key: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM book_builds WHERE chapter_id=? AND scope_key=? ORDER BY created_at,build_id",
+                (chapter_id, scope_key),
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
+
+    def chapter_head(self, chapter_id: str, scope_key: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM book_chapter_heads WHERE chapter_id=? AND scope_key=?", (chapter_id, scope_key)
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def commit_chapter_build(self, *, build_id: str, chapter_id: str, scope_key: str,
+                             expected_head_revision: int | None, intent: str,
+                             plan_matches_prepared: bool, owner_key: str, project: str,
+                             operation_id: str, args_sha256: str, result: dict) -> tuple[str, dict]:
+        """Atomically append an acceptance event and move only the chapter head."""
+        with self.transaction() as connection:
+            prior = self._receipt_in(connection, owner_key=owner_key, project=project,
+                                     tool="audiobook_commit_build", operation_id=operation_id,
+                                     args_sha256=args_sha256)
+            if prior is not None:
+                return "replay", prior
+            candidate = connection.execute(
+                "SELECT payload_json FROM book_builds WHERE build_id=? AND chapter_id=? AND scope_key=?",
+                (build_id, chapter_id, scope_key),
+            ).fetchone()
+            if candidate is None:
+                raise ProjectStateError("build_not_found")
+            build = json.loads(candidate["payload_json"])
+            current = connection.execute(
+                "SELECT * FROM book_chapter_heads WHERE chapter_id=? AND scope_key=?", (chapter_id, scope_key)
+            ).fetchone()
+            current_revision = None if current is None else int(current["head_revision"])
+            if current_revision != expected_head_revision:
+                raise ProjectStateError("stale_head")
+            if intent == "rollback" and not bool(build.get("was_accepted")):
+                raise ProjectStateError("rollback_not_accepted")
+            next_revision = 1 if current_revision is None else current_revision + 1
+            previous = None if current is None else current["accepted_build_id"]
+            connection.execute(
+                "INSERT INTO book_chapter_heads(chapter_id,scope_key,head_revision,accepted_build_id,accepted_snapshot_id,accepted_plan_sha256,accepted_plan_matches_prepared) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(chapter_id,scope_key) DO UPDATE SET "
+                "head_revision=excluded.head_revision,accepted_build_id=excluded.accepted_build_id,"
+                "accepted_snapshot_id=excluded.accepted_snapshot_id,accepted_plan_sha256=excluded.accepted_plan_sha256,"
+                "accepted_plan_matches_prepared=excluded.accepted_plan_matches_prepared",
+                (chapter_id, scope_key, next_revision, build_id, build["snapshot_id"],
+                 build["request_plan_sha256"], int(plan_matches_prepared)),
+            )
+            connection.execute(
+                "UPDATE book_builds SET payload_json=? WHERE build_id=?",
+                (json.dumps({**build, "was_accepted": True}, ensure_ascii=False, separators=(",", ":")), build_id),
+            )
+            committed = dict(result)
+            committed["head_revision"] = next_revision
+            committed["previous_build_id"] = previous
+            committed["accepted_plan_matches_prepared"] = plan_matches_prepared
+            self._put_receipt_in(connection, owner_key=owner_key, project=project,
+                                 tool="audiobook_commit_build", operation_id=operation_id,
+                                 args_sha256=args_sha256, result=committed)
+            return "committed", committed
 
     def put_indexed_role_provenance(self, record: IndexedRoleProvenance) -> None:
         """Atomically replace the derived admission facts for one source path."""

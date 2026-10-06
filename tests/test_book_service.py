@@ -10,7 +10,10 @@ import pytest
 
 from cognita.books.models import (
     CancelJobRequest,
+    BuildRequest,
+    CommitBuildRequest,
     GetGenerationsRequest,
+    GetChapterRequest,
     GetJobRequest,
     ImportAudioRequest,
     InspectRequest,
@@ -494,3 +497,85 @@ def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
         "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
     }))["generations"][0]
     assert generation_after["media_registered"] is True and generation_after["take_id"] == take["take_id"]
+
+
+def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    samples = b"\x00\x00\x01\x00\xff\xff\x02\x00"
+    source = tmp_path / "Audiobook/Chapters/1/chapter-build-source.pcm"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(samples)
+    import_request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "import-for-build",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/chapter-build-source.pcm",
+                   "expected_sha256": hashlib.sha256(samples).hexdigest()},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+    import_job, _ = service.import_audio(import_request, owner_key="principal:fixture")
+    service.run_import_job(import_job["job_id"])
+    take = service.get_job(GetJobRequest(project="fixture", job_id=import_job["job_id"]))["result"]["take"]
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    generation_row = state.generation(generation["generation_record_id"])
+    snapshot_id = generation_row["snapshot_id"]
+    snapshot = state.snapshot(snapshot_id)
+    assert snapshot is not None
+    build_request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "build-one", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": snapshot_id,
+                  "expected_manifest_revision": snapshot["manifest_revision"],
+                  "request_plan_sha256": snapshot["payload"]["result"]["request_plan_sha256"],
+                  "takes": [{"chunk_id": "chunk-raw", "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]}]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    queued, replayed = service.build(build_request, owner_key="principal:fixture")
+    assert not replayed and queued["state"] == "queued"
+    assert service.build(build_request, owner_key="principal:fixture") == (queued, True)
+    service.run_build_job(queued["job_id"])
+    built = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert built["state"] == "succeeded", built
+    candidate = built["result"]
+    assert (tmp_path / candidate["outputs"][0]["filepath"]).read_bytes() == samples
+    assert state.chapter_head("ch1", snapshot["scope_key"]) is None
+    accepted_at = datetime.now(timezone.utc).isoformat()
+    committed, replayed = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "accept-one", "build_id": candidate["build_id"],
+        "expected_head_revision": None, "intent": "accept_candidate",
+        "acceptance": {"actor": "fixture", "accepted_at": accepted_at,
+                       "listening_review": "passed", "notes": ["synthetic"]},
+    }), owner_key="principal:fixture")
+    assert not replayed and committed["head_revision"] == 1
+    replay, replayed = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "accept-one", "build_id": candidate["build_id"],
+        "expected_head_revision": None, "intent": "accept_candidate",
+        "acceptance": {"actor": "fixture", "accepted_at": accepted_at,
+                       "listening_review": "passed", "notes": ["synthetic"]},
+    }), owner_key="principal:fixture")
+    assert replayed and replay == committed
+    with pytest.raises(BookServiceError) as stale:
+        service.commit_build(CommitBuildRequest.model_validate({
+            "project": "fixture", "operation_id": "accept-stale", "build_id": candidate["build_id"],
+            "expected_head_revision": None, "intent": "accept_candidate",
+            "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                           "listening_review": "passed", "notes": []},
+        }), owner_key="principal:fixture")
+    assert stale.value.reason == "stale_head"
+    rolled, _ = service.commit_build(CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "rollback-one", "build_id": candidate["build_id"],
+        "expected_head_revision": 1, "intent": "rollback",
+        "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                       "listening_review": "passed", "notes": ["same prose"]},
+    }), owner_key="principal:fixture")
+    assert rolled["head_revision"] == 2 and rolled["accepted_plan_matches_prepared"] is True
+    chapter = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1", "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "snapshot_id": snapshot_id, "include_text": True,
+    }))
+    assert chapter["accepted_build_id"] == candidate["build_id"]
+    assert chapter["takes"][0]["take_id"] == take["take_id"]
+    assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
