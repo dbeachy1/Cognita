@@ -263,6 +263,81 @@ async def test_find_literal_drops_plain_project_hit_excluded_while_walk_waits(tm
 
 
 @pytest.mark.asyncio
+async def test_find_literal_rechecks_folder_policy_after_second_scan(tmp_path, monkeypatch):
+    """A second awaited scan cannot publish hits excluded during that scan."""
+    host, project, core = _host(tmp_path)
+    records = []
+    for name in ("first", "second"):
+        folder = project.documents_dir / name
+        folder.mkdir()
+        target = folder / "note.md"
+        target.write_text("second-scan-race-token", encoding="utf-8")
+        records.append(DocumentRecord(
+            doc_id=f"literal-{name}", source=f"{name}/note.md", category="general",
+            format="md", keywords=[], content_hash="a" * 64,
+            file_size=target.stat().st_size,
+        ))
+
+    class _Store:
+        async def list_documents(self, _project):
+            return records
+
+    host.store = core.store = _Store()
+    core.policy_for = lambda _project: SimpleNamespace(
+        tier_for=lambda suffix: "general" if suffix == ".md" else None,
+    )
+    core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
+
+    first_entered, first_release = threading.Event(), threading.Event()
+    second_entered, second_release = threading.Event(), threading.Event()
+    original = host._walk_literal
+    calls = 0
+
+    def pause_scans(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_entered.set()
+            assert first_release.wait(5)
+        elif calls == 2:
+            second_entered.set()
+            assert second_release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(host, "_walk_literal", pause_scans)
+    task = asyncio.create_task(_post(
+        host, project.name, "find_literal", {"pattern": "second-scan-race-token"},
+    ))
+    try:
+        assert await asyncio.to_thread(first_entered.wait, 5)
+        state = ProjectState.initialize(project.documents_dir)
+        assert state.set_folder_rule(
+            "first", False, 0, owner_key="principal:local-admin",
+            project=project.name, tool="set_folder_indexing",
+            operation_id="exclude-first-literal-race", args_sha256="e" * 64,
+            result={"path": "first"},
+        )[0] == "committed"
+        first_release.set()
+        assert await asyncio.to_thread(second_entered.wait, 5)
+        assert state.set_folder_rule(
+            "second", False, 1, owner_key="principal:local-admin",
+            project=project.name, tool="set_folder_indexing",
+            operation_id="exclude-second-literal-race", args_sha256="f" * 64,
+            result={"path": "second"},
+        )[0] == "committed"
+    finally:
+        first_release.set()
+        second_release.set()
+    payload = await task
+    assert payload["status"] == "success"
+    assert payload["matches"] == []
+    assert payload["total_matches"] == 0
+    assert payload["files_with_matches"] == 0
+    assert payload["files_scanned"] == 0
+    assert payload["truncated"] is False
+
+
+@pytest.mark.asyncio
 async def test_search_knowledge_drops_cached_plain_project_hit_excluded_while_awaited(tmp_path):
     """A stale ordinary-search cache result is filtered at final publication."""
     host, project, core = _host(tmp_path)
@@ -305,8 +380,8 @@ async def test_search_knowledge_drops_cached_plain_project_hit_excluded_while_aw
 
 
 @pytest.mark.asyncio
-async def test_search_similar_drops_per_file_exclusion_committed_while_query_awaits(tmp_path):
-    """A durable per-file exclusion wins over a stale dense-query hit."""
+async def test_search_similar_rechecks_folder_policy_after_book_refresh(tmp_path):
+    """A folder exclusion during the last awaited refresh wins at publication."""
     host, project, core = _host(tmp_path)
     reference = project.documents_dir / "reference.md"
     private = project.documents_dir / "private"
@@ -327,6 +402,80 @@ async def test_search_similar_drops_per_file_exclusion_committed_while_query_awa
     )
     core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
 
+    dense_entered, dense_release = asyncio.Event(), asyncio.Event()
+    refresh_entered, refresh_release = asyncio.Event(), asyncio.Event()
+
+    class _Store:
+        async def get_document(self, _project, source):
+            return reference_record if source == "reference.md" else candidate_record
+
+        async def first_chunk_embedding(self, _project, _source):
+            return [0.25]
+
+        async def dense_search(self, *_args, **_kwargs):
+            dense_entered.set()
+            await dense_release.wait()
+            return [SimpleNamespace(
+                source="private/note.md", score=0.1, category="general",
+                content="similar candidate", doc_id="candidate",
+            )]
+
+    refresh_calls = 0
+
+    async def effective_sources(*_args, **_kwargs):
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 2:
+            refresh_entered.set()
+            await refresh_release.wait()
+        return None, None, {}
+
+    host.store = core.store = _Store()
+    core._effective_indexed_sources = effective_sources
+    task = asyncio.create_task(_post(
+        host, project.name, "search_similar", {"filepath": "reference.md"},
+    ))
+    try:
+        await asyncio.wait_for(dense_entered.wait(), timeout=5)
+        dense_release.set()
+        await asyncio.wait_for(refresh_entered.wait(), timeout=5)
+        state = ProjectState.initialize(project.documents_dir)
+        assert state.set_folder_rule(
+            "private", False, 0, owner_key="principal:local-admin",
+            project=project.name, tool="set_folder_indexing",
+            operation_id="exclude-similar-folder-race", args_sha256="b" * 64,
+            result={"path": "private"},
+        )[0] == "committed"
+    finally:
+        dense_release.set()
+        refresh_release.set()
+    payload = await task
+    assert payload["status"] == "no_results"
+    assert payload["similar_documents"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_similar_drops_per_file_exclusion_committed_while_query_awaits(tmp_path):
+    """The final general check retains durable per-file exclusion behavior."""
+    host, project, core = _host(tmp_path)
+    reference = project.documents_dir / "reference.md"
+    private = project.documents_dir / "private"
+    private.mkdir()
+    candidate = private / "note.md"
+    reference.write_text("reference", encoding="utf-8")
+    candidate.write_text("similar candidate", encoding="utf-8")
+    reference_record = DocumentRecord(
+        doc_id="reference", source="reference.md", category="general", format="md",
+        keywords=[], content_hash="a" * 64, file_size=reference.stat().st_size,
+    )
+    candidate_record = DocumentRecord(
+        doc_id="candidate", source="private/note.md", category="general", format="md",
+        keywords=[], content_hash="b" * 64, file_size=candidate.stat().st_size,
+    )
+    core.policy_for = lambda _project: SimpleNamespace(
+        tier_for=lambda suffix: "general" if suffix == ".md" else None,
+    )
+    core.effective_index_policy_for = lambda _project: host.effective_index_policy_for(project)
     entered, release = asyncio.Event(), asyncio.Event()
 
     class _Store:

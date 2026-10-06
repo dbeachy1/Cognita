@@ -584,12 +584,14 @@ class EngineReadOperations:
                 })
             if len(similar) >= max_results:
                 break
-        is_indexed_now = self._indexed_source_predicate(project)
-        similar = [item for item in similar if is_indexed_now(item["filepath"])]
         current_pairs = await self._book_admitted_doc_pairs(project, retrieval_profile)
         _sources, _doc_ids, current_metadata = await self.core._effective_indexed_sources(
             project.name, retrieval_profile,
         )
+        # These refreshes await external policy state. Apply the general
+        # folder/per-file authority afterward, even when no book layout exists.
+        is_indexed_now = self._indexed_source_predicate(project)
+        similar = [item for item in similar if is_indexed_now(item["filepath"])]
         if current_pairs is not None:
             similar = [
                 item for item in similar
@@ -952,6 +954,7 @@ class EngineReadOperations:
                 max_matches,
             )
         current_pairs = await self._book_admitted_doc_pairs(project)
+        final_book_pairs = None
         if current_pairs is not None:
             current_selected = [
                 d for d in selected if (d.source, d.doc_id) in current_pairs
@@ -965,10 +968,42 @@ class EngineReadOperations:
                 # a stale role result; this last filter may shorten the page.
                 final_pairs = await self._book_admitted_doc_pairs(project)
                 if final_pairs is not None:
+                    final_book_pairs = final_pairs
                     found["matches"] = [
                         item for item in found["matches"]
                         if any(item["filepath"] == source for source, _doc in final_pairs)
                     ]
+
+        # The awaited book refresh above can overlap another folder-policy
+        # change. Recheck the general authority last, including for plain
+        # projects where book admission is absent, and derive counts from the
+        # files that remain admitted.
+        selected_sources = {d.source for d in selected}
+        if final_book_pairs is not None:
+            selected_sources &= {source for source, _doc in final_book_pairs}
+        is_indexed_final = self._indexed_source_predicate(project)
+        final_sources = {source for source in selected_sources if is_indexed_final(source)}
+        if final_sources != {d.source for d in selected}:
+            found["matches"] = [
+                item for item in found["matches"]
+                if item["filepath"] in final_sources
+            ]
+            found["skipped"] = [
+                item for item in found["skipped"]
+                if item["filepath"] in final_sources
+            ]
+            if "matches_by_source" in found:
+                found["total"] = sum(
+                    count for source, count in found["matches_by_source"].items()
+                    if source in final_sources
+                )
+                found["scanned"] = sum(
+                    source in final_sources for source in found["scanned_sources"]
+                )
+                found["files_with_matches"] = sum(
+                    source in final_sources and count > 0
+                    for source, count in found["matches_by_source"].items()
+                )
 
         payload = {
             "status": "success",
@@ -1030,6 +1065,8 @@ class EngineReadOperations:
         read as a complete one."""
         matches: list[dict] = []
         skipped: list[dict] = []
+        matches_by_source: dict[str, int] = {}
+        scanned_sources: set[str] = set()
         total = scanned = files_with_matches = 0
         # A wall-clock ceiling on the whole sweep. `re` has no timeout, so a
         # catastrophic-backtracking pattern from a caller — (a+)+$ against one
@@ -1068,9 +1105,12 @@ class EngineReadOperations:
             # not this tool's contract.
             text = view.text
             scanned += 1
+            scanned_sources.add(record.source)
             hit_here = False
+            source_total = 0
             for hit in scan_text(text, matcher, context_lines):
                 total += 1
+                source_total += 1
                 hit_here = True
                 if len(matches) < max_matches:
                     item = {"filepath": record.source, "source": str(target),
@@ -1085,6 +1125,8 @@ class EngineReadOperations:
                     matches.append(item)
             if hit_here:
                 files_with_matches += 1
+            matches_by_source[record.source] = source_total
         return {"matches": matches, "skipped": skipped, "total": total,
                 "scanned": scanned, "files_with_matches": files_with_matches,
-                "timed_out": timed_out}
+                "timed_out": timed_out, "matches_by_source": matches_by_source,
+                "scanned_sources": scanned_sources}
