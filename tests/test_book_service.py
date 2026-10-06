@@ -711,7 +711,7 @@ def test_production_common_context_must_match_exact_json_values(tmp_path, field,
     )
 
 
-def _build_and_accept_production_chapter(service, prepared, take, *, operation_prefix, expected_head):
+def _build_production_chapter_candidate(service, prepared, take, *, operation_prefix, expected_head):
     chunk = prepared["chunks"][0]
     build_request = BuildRequest.model_validate({
         "project": "fixture", "operation_id": f"{operation_prefix}-build", "expected_head_revision": expected_head,
@@ -760,6 +760,13 @@ def _build_and_accept_production_chapter(service, prepared, take, *, operation_p
         "request_plan_sha256": prepared["request_plan_sha256"], "input_take_ids": [take["take_id"]],
         "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False, "result": result,
     })
+    return build_id
+
+
+def _build_and_accept_production_chapter(service, prepared, take, *, operation_prefix, expected_head):
+    build_id = _build_production_chapter_candidate(
+        service, prepared, take, operation_prefix=operation_prefix, expected_head=expected_head,
+    )
     committed, _ = service.commit_build(CommitBuildRequest.model_validate({
         "project": "fixture", "operation_id": f"{operation_prefix}-accept",
         "build_id": build_id, "expected_head_revision": expected_head,
@@ -821,6 +828,148 @@ def _commit_book(service, operation_id, build_id, expected_head, intent):
         "acceptance": {"actor": "fixture", "accepted_at": datetime.now(timezone.utc).isoformat(),
                        "listening_review": "passed", "notes": ["synthetic local PCM test"]},
     }), owner_key="principal:fixture")[0]
+
+
+def _acceptance_events(state):
+    with state._connect() as connection:
+        return [dict(row) for row in connection.execute(
+            "SELECT * FROM book_acceptance_events ORDER BY rowid",
+        ).fetchall()]
+
+
+@pytest.mark.parametrize("scope", ["chapter", "book"])
+def test_acceptance_events_are_atomic_replay_safe_and_persist_reviewer_facts(tmp_path, scope):
+    service, state, stored, *_rest = _production_prepared_fixture(tmp_path)
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="event-take")
+    build_id = _build_production_chapter_candidate(
+        service, prepared, take, operation_prefix="event-chapter", expected_head=None,
+    )
+    layout = service._enabled_layout()[2]
+    if scope == "book":
+        _commit_book(service, "event-baseline-chapter", build_id, None, "accept_candidate")
+        build_id = _reserve_synthetic_book_build(
+            service, state, layout, operation_prefix="event-book", expected_book_head=None,
+        )
+    def head():
+        return (state.chapter_head("ch1", '{"kind":"production"}') if scope == "chapter"
+                else state.book_head(layout.book_id))
+    acceptance = {"actor": "asserted reviewer", "accepted_at": "2001-02-03T04:05:06-05:00",
+                  "listening_review": "explicitly_waived", "notes": ["literal café\n[tag]", "same", "same"]}
+    arguments = {"project": "fixture", "operation_id": "event-accept", "build_id": build_id,
+                 "expected_head_revision": None, "intent": "accept_candidate", "acceptance": acceptance}
+    request = CommitBuildRequest.model_validate(arguments)
+    files_before = {path: path.read_bytes() for path in (tmp_path / "Audiobook").rglob("*") if path.is_file()}
+    events_before = _acceptance_events(state)
+    with pytest.raises(BookServiceError) as never_accepted:
+        service.commit_build(CommitBuildRequest.model_validate({**arguments, "operation_id": "event-invalid-rollback",
+                             "intent": "rollback"}), owner_key="principal:fixture")
+    assert never_accepted.value.reason == "stale_dependency"
+    assert _acceptance_events(state) == events_before and head() is None
+    before_time = datetime.now(timezone.utc)
+    committed, replayed = service.commit_build(request, owner_key="principal:fixture")
+    after_time = datetime.now(timezone.utc)
+    assert not replayed and committed["head_revision"] == 1
+    events = _acceptance_events(state)
+    assert events[:-1] == events_before
+    event = events[-1]
+    assert event["owner_key"] == "principal:fixture" and event["project"] == "fixture"
+    assert event["operation_id"] == "event-accept"
+    server_time = datetime.fromisoformat(event["committed_at"].replace("Z", "+00:00"))
+    # SQLite and Python may use differently rounded Windows clock APIs.
+    assert before_time - timedelta(seconds=1) <= server_time <= after_time + timedelta(seconds=1)
+    payload = json.loads(event["payload_json"])
+    assert payload["scope"] == scope and payload["namespace"] == {"kind": "production"}
+    assert payload["chapter_id" if scope == "chapter" else "book_id"] == ("ch1" if scope == "chapter" else layout.book_id)
+    assert payload["build_id"] == build_id and payload["intent"] == "accept_candidate"
+    assert payload["acceptance"] == acceptance
+    assert payload["previous_head"] is None and payload["head_revision"] == 1
+    assert service.commit_build(request, owner_key="principal:fixture") == (committed, True)
+    transaction_arguments = {
+        "build_id": build_id, "expected_head_revision": None, "intent": "accept_candidate",
+        "owner_key": "principal:fixture", "project": "fixture", "operation_id": "event-accept",
+        "args_sha256": canonical_json_sha256(arguments), "result": committed,
+        "plan_matches_prepared": True, "acceptance": acceptance,
+    }
+    if scope == "chapter":
+        commit_transaction = state.commit_chapter_build
+        transaction_arguments.update(chapter_id="ch1", scope_key='{"kind":"production"}')
+    else:
+        commit_transaction = state.commit_book_build
+        transaction_arguments.update(book_id=layout.book_id)
+    assert commit_transaction(**transaction_arguments) == ("replay", committed)
+    with pytest.raises(ProjectStateError, match="operation_id_conflict"):
+        commit_transaction(**{**transaction_arguments, "args_sha256": "0" * 64})
+    with pytest.raises(BookServiceError) as conflict:
+        service.commit_build(CommitBuildRequest.model_validate({**arguments, "acceptance": {**acceptance, "notes": ["changed"]}}),
+                             owner_key="principal:fixture")
+    assert conflict.value.reason == "operation_id_conflict"
+    with pytest.raises(BookServiceError) as stale:
+        service.commit_build(CommitBuildRequest.model_validate({**arguments, "operation_id": "event-stale"}),
+                             owner_key="principal:fixture")
+    assert stale.value.reason == "stale_head"
+    assert _acceptance_events(state) == events
+    previous_head = head()
+    rollback_acceptance = {**acceptance, "actor": "rollback reviewer", "listening_review": "passed"}
+    rollback = CommitBuildRequest.model_validate({**arguments, "operation_id": "event-rollback",
+        "expected_head_revision": 1, "intent": "rollback", "acceptance": rollback_acceptance})
+    rolled, replayed = service.commit_build(rollback, owner_key="principal:fixture")
+    assert not replayed and rolled["head_revision"] == 2
+    rollback_event = _acceptance_events(state)[-1]
+    rollback_payload = json.loads(rollback_event["payload_json"])
+    assert rollback_payload["acceptance"] == rollback_acceptance and rollback_payload["intent"] == "rollback"
+    assert rollback_payload["previous_head"] == previous_head and rollback_payload["head_revision"] == 2
+    assert service.commit_build(rollback, owner_key="principal:fixture") == (rolled, True)
+    persisted = _acceptance_events(state)
+    assert len(persisted) == len(events_before) + 2
+    reopened = BookService(tmp_path, "fixture")
+    assert _acceptance_events(reopened._state_required()) == persisted
+    assert reopened.commit_build(request, owner_key="principal:fixture") == (committed, True)
+    assert _acceptance_events(reopened._state_required()) == persisted
+    assert {path: path.read_bytes() for path in files_before} == files_before
+
+
+@pytest.mark.parametrize("scope", ["chapter", "book"])
+def test_acceptance_event_insert_failure_rolls_back_head_build_and_receipt(tmp_path, scope):
+    service, state, stored, *_rest = _production_prepared_fixture(tmp_path)
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="failed-event-take")
+    build_id = _build_production_chapter_candidate(
+        service, prepared, take, operation_prefix="failed-event-chapter", expected_head=None,
+    )
+    layout = service._enabled_layout()[2]
+    if scope == "book":
+        _commit_book(service, "failed-event-baseline-chapter", build_id, None, "accept_candidate")
+        build_id = _reserve_synthetic_book_build(
+            service, state, layout, operation_prefix="failed-event-book", expected_book_head=None,
+        )
+    events_before = _acceptance_events(state)
+    build_before = state.build(build_id)
+    assert not build_before["was_accepted"]
+    with state.transaction() as connection:
+        connection.execute("CREATE TRIGGER reject_acceptance_event BEFORE INSERT ON book_acceptance_events "
+                           "BEGIN SELECT RAISE(ABORT, 'synthetic event insert failure'); END")
+    request = CommitBuildRequest.model_validate({
+        "project": "fixture", "operation_id": "failed-event-accept", "build_id": build_id,
+        "expected_head_revision": None, "intent": "accept_candidate",
+        "acceptance": {"actor": "asserted reviewer", "accepted_at": "2001-02-03T04:05:06Z",
+                       "listening_review": "passed", "notes": []},
+    })
+    with pytest.raises(BookServiceError) as failed:
+        service.commit_build(request, owner_key="principal:fixture")
+    assert failed.value.reason == "state_unavailable"
+    reopened = BookService(tmp_path, "fixture")._state_required()
+    assert (reopened.chapter_head("ch1", '{"kind":"production"}') if scope == "chapter"
+            else reopened.book_head(layout.book_id)) is None
+    assert reopened.build(build_id) == build_before
+    assert _acceptance_events(reopened) == events_before
+    assert reopened.receipt(owner_key="principal:fixture", project="fixture",
+                            tool="audiobook_commit_build", operation_id="failed-event-accept") is None
+    with state.transaction() as connection:
+        connection.execute("DROP TRIGGER reject_acceptance_event")
+    committed, replayed = service.commit_build(request, owner_key="principal:fixture")
+    assert not replayed and committed["head_revision"] == 1
+    assert len(_acceptance_events(state)) == len(events_before) + 1
 
 
 def _assert_completed_build_replay_survives_changed_guards(service, request, original_job):
@@ -2763,6 +2912,7 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert recipe["inputs"][0]["bytes_sha256"] == take["bytes_sha256"]
     assert recipe["timeline"] == json.loads((tmp_path / candidate["timeline_filepath"]).read_text(encoding="utf-8"))
     assert candidate["recipe_sha256"] == canonical_json_sha256(recipe)
+    factual_files = {path: path.read_bytes() for path in (tmp_path / "Audiobook").rglob("*") if path.is_file()}
     assert state.chapter_head("ch1", snapshot["scope_key"]) is None
     accepted_at = datetime.now(timezone.utc).isoformat()
     committed, replayed = service.commit_build(CommitBuildRequest.model_validate({
@@ -2794,6 +2944,12 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
                        "listening_review": "passed", "notes": ["same prose"]},
     }), owner_key="principal:fixture")
     assert rolled["head_revision"] == 2 and rolled["accepted_plan_matches_prepared"] is True
+    assert {path: path.read_bytes() for path in factual_files} == factual_files
+    events = _acceptance_events(BookService(tmp_path, "fixture")._state_required())
+    assert len(events) == 2
+    assert [json.loads(event["payload_json"])["intent"] for event in events] == ["accept_candidate", "rollback"]
+    assert all(json.loads(event["payload_json"])["namespace"] == {"kind": "test", "authorization_id": "test-auth"}
+               for event in events)
     chapter = service.get_chapter(GetChapterRequest.model_validate({
         "project": "fixture", "chapter_id": "ch1", "scope": {"kind": "test", "authorization_id": "test-auth"},
         "snapshot_id": snapshot_id, "include_text": True,

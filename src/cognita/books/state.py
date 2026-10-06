@@ -529,6 +529,16 @@ class ProjectState:
                         accepted_plan_matches_prepared INTEGER NOT NULL
                     )"""
                 )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_acceptance_events (
+                        owner_key TEXT NOT NULL,
+                        project TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        committed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                        PRIMARY KEY(owner_key,project,operation_id)
+                    )"""
+                )
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("build state schema is unavailable") from exc
 
@@ -1136,10 +1146,25 @@ class ProjectState:
             ).fetchone()
         return None if row is None else dict(row)
 
+    @staticmethod
+    def _put_acceptance_event_in(connection: sqlite3.Connection, *, owner_key: str,
+                                 project: str, operation_id: str, event: dict) -> None:
+        # Asserted reviewer facts are kept apart from the admitted owner and
+        # SQLite's server UTC time. This insert shares the head/receipt transaction.
+        try:
+            connection.execute(
+                "INSERT INTO book_acceptance_events(owner_key,project,operation_id,payload_json) VALUES(?,?,?,?)",
+                (owner_key, project, operation_id,
+                 json.dumps(event, ensure_ascii=False, separators=(",", ":"))),
+            )
+        except sqlite3.DatabaseError as exc:
+            raise ProjectStateError("acceptance event could not be persisted") from exc
+
     def commit_chapter_build(self, *, build_id: str, chapter_id: str, scope_key: str,
                              expected_head_revision: int | None, intent: str,
                              plan_matches_prepared: bool, owner_key: str, project: str,
-                             operation_id: str, args_sha256: str, result: dict) -> tuple[str, dict]:
+                             operation_id: str, args_sha256: str, result: dict,
+                             acceptance: dict) -> tuple[str, dict]:
         """Atomically append an acceptance event and move only the chapter head."""
         with self.transaction() as connection:
             prior = self._receipt_in(connection, owner_key=owner_key, project=project,
@@ -1181,6 +1206,13 @@ class ProjectState:
             committed["head_revision"] = next_revision
             committed["previous_build_id"] = previous
             committed["accepted_plan_matches_prepared"] = plan_matches_prepared
+            self._put_acceptance_event_in(
+                connection, owner_key=owner_key, project=project, operation_id=operation_id,
+                event={"scope": "chapter", "chapter_id": chapter_id, "namespace": json.loads(scope_key),
+                       "build_id": build_id, "intent": intent, "acceptance": acceptance,
+                       "previous_head": None if current is None else dict(current),
+                       "head_revision": next_revision},
+            )
             self._put_receipt_in(connection, owner_key=owner_key, project=project,
                                  tool="audiobook_commit_build", operation_id=operation_id,
                                  args_sha256=args_sha256, result=committed)
@@ -1188,7 +1220,8 @@ class ProjectState:
 
     def commit_book_build(self, *, build_id: str, book_id: str, expected_head_revision: int | None,
                           owner_key: str, project: str, operation_id: str, args_sha256: str,
-                          result: dict, plan_matches_prepared: bool) -> tuple[str, dict]:
+                          result: dict, plan_matches_prepared: bool, intent: str,
+                          acceptance: dict) -> tuple[str, dict]:
         with self.transaction() as connection:
             prior = self._receipt_in(connection, owner_key=owner_key, project=project,
                                      tool="audiobook_commit_build", operation_id=operation_id,
@@ -1217,6 +1250,13 @@ class ProjectState:
                                (json.dumps({**build, "was_accepted": True}, ensure_ascii=False, separators=(",", ":")), build_id))
             committed = {**result, "head_revision": next_revision, "previous_build_id": previous,
                          "accepted_plan_matches_prepared": plan_matches_prepared}
+            self._put_acceptance_event_in(
+                connection, owner_key=owner_key, project=project, operation_id=operation_id,
+                event={"scope": "book", "book_id": book_id, "namespace": {"kind": "production"},
+                       "build_id": build_id, "intent": intent, "acceptance": acceptance,
+                       "previous_head": None if current is None else dict(current),
+                       "head_revision": next_revision},
+            )
             self._put_receipt_in(connection, owner_key=owner_key, project=project,
                                  tool="audiobook_commit_build", operation_id=operation_id,
                                  args_sha256=args_sha256, result=committed)
