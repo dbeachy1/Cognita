@@ -153,7 +153,7 @@ def _inspect(service: BookService) -> dict:
     return service.inspect(request)
 
 
-def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks, *, publish=False, authorization_id="test-auth"):
+def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, chunks, *, publish=False, authorization_id="test-auth", request_limit=100):
     inspected = _inspect(service)
     request = PrepareRequest.model_validate({
         "project": "fixture", "operation_id": operation_id, "chapter_id": "ch1",
@@ -163,7 +163,7 @@ def _prepare_test_plan(service, operation_id, prose, tagged, expected_revision, 
         "expected_manifest_revision": expected_revision,
         "scope": {"kind": "test", "authorization_id": authorization_id},
         "speech_selection_confirmed": True,
-        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "request_limit": {"value": request_limit, "unit": "unicode_codepoints"},
         "expected_settings_sha256": None, "production_target": None,
         "chunks": chunks, "publish_bookmarks_to_working_tagged_docx": publish,
     })
@@ -1061,7 +1061,122 @@ def test_book_accepts_current_chapter_rollback_and_historical_book_rollback(tmp_
     assert book_state["current_outputs_stale"] is True
 
 
-def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
+def _collect_chapter_text_pages(service, query, *, expected_texts, cap):
+    pages = []
+    collected = {chunk_id: {name: "" for name in ("prompt", "spoken_text")} for chunk_id in expected_texts}
+    cursor = None
+    for _ in range(100):
+        arguments = dict(query)
+        if cursor is not None:
+            arguments["cursor"] = cursor
+        page = service.get_chapter(GetChapterRequest.model_validate(arguments))
+        pages.append(page)
+        assert sum(len(item[name]["text"]) for item in page["returned_texts"]
+                   for name in ("prompt", "spoken_text")) <= cap
+        assert len(page["chunks"]) + len(page["takes"]) + len(page["candidate_build_ids"]) <= query.get("limit", 100)
+        page_take_ids = {take["take_id"] for take in page["takes"]}
+        for chunk in page["chunks"]:
+            assert set(chunk["take_ids"]) <= page_take_ids
+            assert set(chunk["reusable_take_ids"]) <= page_take_ids
+        for item in page["returned_texts"]:
+            for name in ("prompt", "spoken_text"):
+                field = item[name]
+                expected = expected_texts[item["chunk_id"]][name]
+                prior = collected[item["chunk_id"]][name]
+                assert field["returned_start"] == len(prior)
+                assert field["returned_end"] == len(prior) + len(field["text"])
+                assert field["total_codepoints"] == len(expected)
+                assert field["text_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
+                collected[item["chunk_id"]][name] += field["text"]
+        if not page["has_more"]:
+            assert page["next_cursor"] is None
+            break
+        assert page["next_cursor"] is not None and page["next_cursor"] != cursor
+        cursor = page["next_cursor"]
+    else:
+        pytest.fail("Chapter pagination did not terminate")
+    assert collected == expected_texts
+    return pages
+
+
+@pytest.mark.parametrize("limit", [1, 100])
+@pytest.mark.parametrize("cap", [10, 11])
+def test_chapter_text_budget_keeps_later_chunks_takes_and_candidates_reachable(tmp_path, limit, cap):
+    service, _prose, _tagged = _fixture(tmp_path)
+    prose = tagged = _docx("hello world")
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(prose).hexdigest()
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    chunks = [{"chunk_id": "a", "start": 0, "end": 5, "request_spec": spec},
+              {"chunk_id": "b", "start": 5, "end": 11, "request_spec": spec}]
+    prepared = _prepare_test_plan(service, "paging-first", prose, tagged, None, chunks)
+    takes = [_import_native_take(service, prepared, chunk_id, operation_prefix=f"paging-{chunk_id}")
+             for chunk_id in ("a", "b")]
+    prepared = _prepare_test_plan(service, "paging-reuse", prose, tagged, prepared["manifest_revision"], chunks)
+    request = BuildRequest.model_validate({
+        "project": "fixture", "operation_id": "paging-build", "expected_head_revision": None,
+        "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                  "expected_manifest_revision": prepared["manifest_revision"],
+                  "request_plan_sha256": prepared["request_plan_sha256"],
+                  "takes": [{"chunk_id": take["chunk_id"], "take_id": take["take_id"],
+                             "request_sha256": take["request_sha256"]} for take in takes]},
+        "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+        "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+    })
+    job, _ = service.build(request, owner_key="principal:fixture")
+    service.run_build_job(job["job_id"])
+    built = service.get_job(GetJobRequest(project="fixture", job_id=job["job_id"]))
+    assert built["state"] == "succeeded", built
+    query = {"project": "fixture", "chapter_id": "ch1",
+             "scope": {"kind": "test", "authorization_id": "test-auth"},
+             "snapshot_id": prepared["snapshot_id"], "include_text": True, "max_characters": cap, "limit": limit}
+    expected = {"a": {"prompt": "hello", "spoken_text": "hello"},
+                "b": {"prompt": " world", "spoken_text": " world"}}
+    pages = _collect_chapter_text_pages(service, query, expected_texts=expected, cap=cap)
+    assert [item["chunk_id"] for item in pages[0]["returned_texts"]] == ["a"]
+    assert pages[0]["has_more"]
+    returned_take_ids = [take["take_id"] for page in pages for take in page["takes"]]
+    assert sorted(returned_take_ids) == sorted(take["take_id"] for take in takes)
+    assert [build_id for page in pages for build_id in page["candidate_build_ids"]] == [built["result"]["build_id"]]
+    if limit == 100:
+        final_chunk = next(chunk for chunk in pages[-1]["chunks"] if chunk["chunk_id"] == "b")
+        assert final_chunk["take_ids"] == final_chunk["reusable_take_ids"] == [takes[1]["take_id"]]
+    one_page_query = {**query, "max_characters": 40, "limit": 100}
+    one_page = _collect_chapter_text_pages(service, one_page_query, expected_texts=expected, cap=40)
+    assert len(one_page) == 1
+
+
+def test_chapter_text_default_is_12000_with_shared_prompt_spoken_budget(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path)
+    text = "x" * 7000
+    prose = tagged = _docx(text)
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(prose).hexdigest()
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    prepared = _prepare_test_plan(service, "paging-default", prose, tagged, None, [
+        {"chunk_id": "long", "start": 0, "end": len(text), "request_spec": None},
+    ], request_limit=8000)
+    query = {"project": "fixture", "chapter_id": "ch1",
+             "scope": {"kind": "test", "authorization_id": "test-auth"},
+             "snapshot_id": prepared["snapshot_id"], "include_text": True}
+    expected = {"long": {"prompt": text, "spoken_text": text}}
+    pages = _collect_chapter_text_pages(service, query, expected_texts=expected, cap=12000)
+    assert len(pages) == 2
+    assert len(pages[0]["returned_texts"][0]["prompt"]["text"]) + len(pages[0]["returned_texts"][0]["spoken_text"]["text"]) == 12000
+    assert len(_collect_chapter_text_pages(service, {**query, "max_characters": 40000},
+                                         expected_texts=expected, cap=40000)) == 1
+
+
+@pytest.mark.parametrize("cap", [7, 18, 40])
+def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path, cap):
     service, _, _ = _fixture(tmp_path)
     prose = _docx("repeat  repeat")
     tagged = _tagged_docx_with_audio_tag()
@@ -1108,6 +1223,11 @@ def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
     }))
     assert chapter["returned_texts"][0]["prompt"]["text"] == "repeat [tag] repeat"
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == spoken
+    query = {"project": "fixture", "chapter_id": "ch1",
+             "scope": {"kind": "test", "authorization_id": "test-auth"},
+             "snapshot_id": prepared["snapshot_id"], "include_text": True, "max_characters": cap, "limit": 1}
+    _collect_chapter_text_pages(service, query, cap=cap,
+                               expected_texts={"repeated": {"prompt": "repeat [tag] repeat", "spoken_text": spoken}})
 
 
 def test_find_chunk_maps_tagged_chunk_ranges_into_frozen_spoken_coordinates(tmp_path):
