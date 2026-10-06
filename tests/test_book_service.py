@@ -555,6 +555,49 @@ def test_production_eligibility_keeps_formatting_equivalence_and_rejects_changed
     assert not eligible and reason == "production_not_authorized"
 
 
+def test_production_refuses_unsupported_docx_structure_but_inspect_reports_warning(tmp_path):
+    """Tables stay visible as diagnostics and cannot pass production equivalence."""
+    service, state, stored, settings_path, _layout_path, _chapter_state_path, prose, tagged, settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+
+    def with_table(raw: bytes) -> bytes:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            parts = {name: archive.read(name) for name in archive.namelist()}
+        document_xml = parts["word/document.xml"]
+        table = (
+            b'<w:tbl><w:tr><w:tc><w:p><w:r><w:t>'
+            b'unrepresented spoken table text'
+            b'</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+        )
+        parts["word/document.xml"] = document_xml.replace(b"<w:sectPr/>", table + b"<w:sectPr/>")
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name, content in parts.items():
+                archive.writestr(name, content)
+        return output.getvalue()
+
+    changed_prose, changed_tagged = with_table(prose), with_table(tagged)
+    assert project_docx_pair(changed_prose, changed_tagged).prose_projection_sha256 == (
+        project_docx_pair(prose, tagged).prose_projection_sha256
+    )
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(changed_prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(changed_tagged)
+
+    inspected = _inspect(service)
+    assert inspected["warnings"] and inspected["warnings"][0]["code"] == "unsupported_structure"
+    layout = service._enabled_layout()[2]
+    chapter = service._chapter(layout, "ch1")
+    assert service._production_snapshot_eligible(state, layout, chapter, stored) == (
+        False, "unsupported_docx_structure",
+    )
+    with pytest.raises(BookServiceError) as denied:
+        _prepare_production_context(
+            service, stored, settings_path, settings, settings["request_spec"]["context_fields"],
+        )
+    assert denied.value.reason == "unsupported_docx_structure"
+
+
 def test_production_eligibility_rejects_changed_approved_prose(tmp_path):
     service, state, stored, _settings_path, _layout_path, _chapter_state_path, _prose, _tagged, _settings = (
         _production_prepared_fixture(tmp_path)

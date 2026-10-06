@@ -642,6 +642,11 @@ class BookService:
             prose = _read_bytes(self.root, chapter.working_filepath)
             tagged = _read_bytes(self.root, chapter.tagged_filepath)
             projected = project_docx_pair(prose, tagged)
+            if projected.unsupported:
+                raise BookServiceError(
+                    "unsupported_docx_structure",
+                    "Production cannot use registered DOCX sources with unsupported structures.",
+                )
             chapter_state = validate_chapter_state(_read_bytes(self.root, chapter.chapter_state_filepath))
             if chapter_state.chapter_id != chapter.chapter_id or chapter_state.layout_revision != layout.layout_revision:
                 raise BookServiceError("configuration_conflict", "Chapter editorial state is bound to another layout revision.")
@@ -1116,6 +1121,11 @@ class BookService:
         production_settings_sha256: str | None = None
         prepared_production_target: dict[str, Any] | None = None
         if isinstance(request.scope, dto.ProductionScope):
+            if projected.unsupported:
+                raise BookServiceError(
+                    "unsupported_docx_structure",
+                    "Production cannot use registered DOCX sources with unsupported structures.",
+                )
             authorization = layout.production_authorization
             if authorization is None or authorization.revoked or not authorization.completed_book:
                 raise BookServiceError("production_not_authorized", "Production requires an active completed-book authorization.")
