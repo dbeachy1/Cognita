@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
 import httpx
 import pytest
@@ -41,10 +42,10 @@ def host(tmp_path):
     return LocalEngineHost(CognitaConfig(), registry, core)
 
 
-async def _post(host, message):
+async def _post(host, message, *, headers=None):
     transport = httpx.ASGITransport(app=host.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://fixture") as client:
-        return await client.post("/engine/fixture/mcp", json=message)
+        return await client.post("/engine/fixture/mcp", json=message, headers=headers)
 
 
 @pytest.mark.asyncio
@@ -81,6 +82,58 @@ async def test_gateway_catalog_and_source_reads_work_during_postgres_outage(host
         "Chapters/1/chapter.docx", "Chapters/1/chapter_audio-tags.docx",
     }
     assert not (host.registry.get("fixture").documents_dir / ".cognita-storage").exists()
+
+
+@pytest.mark.asyncio
+async def test_prepare_receipt_is_principal_scoped_and_permission_precedes_replay(host, monkeypatch):
+    inspected = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_inspect_chapter",
+        "arguments": {
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        },
+    }))
+    view = json.loads(inspected.json()["result"]["content"][0]["text"])["data"]
+    documents = host.registry.get("fixture").documents_dir
+    prose = (documents / "Chapters/1/chapter.docx").read_bytes()
+    tagged = (documents / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    args = {
+        "project": "fixture", "operation_id": "one-prepare", "chapter_id": "ch1",
+        "document_view_id": view["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None,
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "chunk-1", "start": 0, "end": 5, "request_spec": None}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }
+    message = _rpc("tools/call", {"name": "audiobook_prepare_chapter", "arguments": args})
+    owner_headers = {"x-cognita-principal-id": "alice"}
+    first = await _post(host, message, headers=owner_headers)
+    first_payload = json.loads(first.json()["result"]["content"][0]["text"])
+    assert first_payload["status"] == "success" and first_payload["replayed"] is False
+
+    replay = await _post(host, message, headers=owner_headers)
+    replay_payload = json.loads(replay.json()["result"]["content"][0]["text"])
+    assert replay_payload["status"] == "success" and replay_payload["replayed"] is True
+
+    monkeypatch.setattr(host, "_connector_write_denial", lambda *_args, **_kwargs: {
+        "reason": "read_only", "message": "The connector is read-only.",
+    })
+    denied = await _post(host, message, headers={
+        **owner_headers, "x-cognita-connector-id": "read-only-connector",
+    })
+    denied_payload = json.loads(denied.json()["result"]["content"][0]["text"])
+    assert denied_payload["status"] == "error" and denied_payload["reason"] == "read_only"
+
+    monkeypatch.setattr(host, "_connector_write_denial", lambda *_args, **_kwargs: None)
+    other_owner = await _post(host, message, headers={"x-cognita-principal-id": "bob"})
+    other_payload = json.loads(other_owner.json()["result"]["content"][0]["text"])
+    assert other_payload["status"] == "error" and other_payload["reason"] == "stale_manifest"
 
 
 def test_book_wire_capture_suppresses_source_and_malformed_bodies():

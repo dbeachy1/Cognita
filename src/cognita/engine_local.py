@@ -219,6 +219,15 @@ class LocalEngineHost(
             self.core.set_book_index_admission_provider(
                 lambda project, sources: self.book_index_admission_for(project, sources)
             )
+        if hasattr(self.core, "set_book_index_provenance_recorder"):
+            self.core.set_book_index_provenance_recorder(
+                lambda project, source_path, doc_id, extracted_sha256,
+                       raw_sha256, extraction_version:
+                    self.record_book_index_provenance_for(
+                        project, source_path, doc_id, extracted_sha256,
+                        raw_sha256, extraction_version,
+                    )
+            )
         # One admission queue per host, shared by every project and connector.
         # AssetService remains project-scoped for authorization and path rules.
         self.ocr_capacity_gate = SchedulerOCRCapacityGate(
@@ -623,6 +632,14 @@ class LocalEngineHost(
 
     def book_index_provenance_is_current(self, project: Project, record) -> bool:
         return self.book_service_for(project).index_provenance_is_current(record)
+
+    def record_book_index_provenance_for(
+        self, project: Project, source_path: str, doc_id: str,
+        extracted_sha256: str, raw_sha256: str, extraction_version: str,
+    ):
+        return self.book_service_for(project).record_index_provenance(
+            source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
+        )
 
     def book_index_admission_for(self, project_or_name, sources) -> frozenset[str]:
         project = (self.registry.get(project_or_name)

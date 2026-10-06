@@ -125,8 +125,8 @@ async def test_connector_scoped_catalog_and_projects(env):
     app, connector_id, _selected_id, token, _seen = env
     listed = await _post(app, connector_id, token, _rpc("tools/list"))
     tools = listed.json()["result"]["tools"]
-    # 13.0.1: 40 Knowledge + 17 Workspace/bridge tools; Workspace is on by default.
-    assert listed.status_code == 200 and len(tools) == 57
+    # Audiobook M1 adds four book and three project-storage tools; Workspace is on by default.
+    assert listed.status_code == 200 and len(tools) == 64
     # Workspace tools are principal-scoped, not project-scoped, so they carry no
     # `project` argument; every Knowledge tool but the two catalog tools does.
     project_tools = [tool for tool in tools
@@ -154,8 +154,8 @@ async def test_retired_v3_fails_closed_and_current_catalog_is_bound(env):
 
     listed = await _post(app, connector_id, token, _rpc("tools/list"))
     tools = listed.json()["result"]["tools"]
-    # 13.0.1: 40 Knowledge + 17 Workspace/bridge tools; Workspace is on by default.
-    assert listed.status_code == 200 and len(tools) == 57
+    # Audiobook M1 adds four book and three project-storage tools; Workspace is on by default.
+    assert listed.status_code == 200 and len(tools) == 64
     assert all("outputSchema" in tool for tool in tools)
 
     current = await _post(app, connector_id, token, _rpc(
