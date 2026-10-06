@@ -1025,11 +1025,18 @@ class BookService:
         source_status = "not_prepared"
         if snapshot_id:
             try:
-                source_status = (
-                    "eligible" if hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
-                    == result_data.get("snapshot_prose_sha256") else "changed"
-                )
-            except BookServiceError:
+                current_raw = hashlib.sha256(_read_bytes(self.root, chapter.working_filepath)).hexdigest()
+                if current_raw != result_data.get("snapshot_prose_sha256"):
+                    source_status = "changed"
+                elif isinstance(scope, dto.ProductionScope):
+                    chapter_state = validate_chapter_state(_read_bytes(self.root, chapter.chapter_state_filepath))
+                    source_status = "eligible" if (
+                        chapter_state.editorial_status == "approved"
+                        and chapter_state.approved_source_raw_sha256 == current_raw
+                    ) else "unapproved"
+                else:
+                    source_status = "eligible"
+            except (BookServiceError, ValueError):
                 source_status = "blocked"
         metadata: list[tuple[str, Any]] = [
             *(("chunk", item) for item in chunks), *(("take", item) for item in takes),

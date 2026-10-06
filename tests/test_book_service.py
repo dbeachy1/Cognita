@@ -767,6 +767,7 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
         "snapshot_id": snapshot_id, "include_text": True,
     }))
     assert chapter["accepted_build_id"] == candidate["build_id"]
+    assert chapter["source_status"] == "eligible"
     assert chapter["takes"][0]["take_id"] == take["take_id"]
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
     first_metadata_page = service.get_chapter(GetChapterRequest.model_validate({
