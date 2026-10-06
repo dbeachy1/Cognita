@@ -1597,8 +1597,10 @@ class BookService:
                 staging, ffprobe=probe, raw_format=raw_format,
                 provider_format_evidence=None if raw_format is None else raw_format["provider_format_evidence"],
             )
-            if pinned["provenance"] == "native_generation" and not inspection.native_pcm:
-                raise BookServiceError("native_pcm_required", "The imported media is not verified native PCM.")
+            # ``native_generation`` identifies the provider-originated file;
+            # it does not turn a detected compressed object into PCM.  Keep
+            # that immutable original for test/audit reads, while production
+            # assembly below requires verified native PCM facts.
             if pinned["provenance"] == "test_mp3" and (
                 inspection.native_pcm or inspection.media.codec != "mp3" or inspection.media.encoding != "compressed"
             ):
@@ -1766,6 +1768,8 @@ class BookService:
             ):
                 raise BookServiceError("stale_dependency", "A selected take is not a matching native frozen chunk take.")
             media = take.get("media", {})
+            if media.get("encoding") not in {"signed_integer", "float"}:
+                raise BookServiceError("native_pcm_required", "Production assembly requires verified native PCM takes.")
             current_target = dto.ProductionTarget.model_validate({
                 "sample_rate_hz": media.get("sample_rate_hz"), "channels": media.get("channels"),
                 "encoding": media.get("encoding"), "storage_bits": media.get("storage_bits"),

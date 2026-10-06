@@ -609,7 +609,7 @@ def test_project_mp3_import_uses_detected_facts_and_preserves_original_bytes(tmp
     assert source.read_bytes() == original
 
 
-def test_native_generation_label_cannot_admit_detected_compressed_mp3(tmp_path, monkeypatch):
+def test_native_generation_mp3_is_retained_but_production_pcm_build_rejects_it(tmp_path, monkeypatch):
     service, prose, tagged = _fixture(tmp_path)
     generation, _raw_format = _completed_raw_generation(service, prose, tagged)
     source = tmp_path / "Audiobook/Chapters/1/mislabelled.mp3"
@@ -635,8 +635,25 @@ def test_native_generation_label_cannot_admit_detected_compressed_mp3(tmp_path, 
     queued, _ = service.import_audio(request, owner_key="principal:fixture")
     service.run_import_job(queued["job_id"])
     result = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
-    assert result["state"] == "failed" and result["error"]["reason"] == "native_pcm_required"
+    assert result["state"] == "succeeded", result
+    take = result["result"]["take"]
+    assert take["media"]["encoding"] == "compressed" and take["provenance"] == "native_generation"
     assert source.read_bytes() == original
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    snapshot = state.snapshot(take["snapshot_id"])
+    assert snapshot is not None
+    with pytest.raises(BookServiceError) as rejected:
+        service.build(BuildRequest.model_validate({
+            "project": "fixture", "operation_id": "reject-compressed-production", "expected_head_revision": None,
+            "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": take["snapshot_id"],
+                      "expected_manifest_revision": snapshot["manifest_revision"],
+                      "request_plan_sha256": snapshot["payload"]["result"]["request_plan_sha256"],
+                      "takes": [{"chunk_id": take["chunk_id"], "take_id": take["take_id"], "request_sha256": take["request_sha256"]}]},
+            "mode": "production_pcm", "outputs": {"master": True}, "gaps": [],
+            "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"},
+        }), owner_key="principal:fixture")
+    assert rejected.value.reason == "native_pcm_required"
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
