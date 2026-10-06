@@ -760,6 +760,23 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert chapter["accepted_build_id"] == candidate["build_id"]
     assert chapter["takes"][0]["take_id"] == take["take_id"]
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
+    first_metadata_page = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "snapshot_id": snapshot_id, "limit": 1,
+    }))
+    assert len(first_metadata_page["chunks"]) == 1 and first_metadata_page["has_more"]
+    next_metadata_page = service.get_chapter(GetChapterRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "snapshot_id": snapshot_id, "limit": 1, "cursor": first_metadata_page["next_cursor"],
+    }))
+    assert next_metadata_page["takes"] == [take]
+    with pytest.raises(BookServiceError) as cross_namespace:
+        service.get_chapter(GetChapterRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1", "snapshot_id": snapshot_id,
+        }))
+    assert cross_namespace.value.reason == "snapshot_not_found"
     located = service.find_chunk(FindChunkRequest.model_validate({
         "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 0.0},
     }))

@@ -33,7 +33,7 @@ from .media import MediaValidationError, inspect_media_file
 from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave, production_mp3_argv
 from .jobs import ProcessRunnerError, ffprobe_json, run_process
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
-from .read_helpers import ReadCursorError, parse_read_cursor, read_cursor, text_page
+from .read_helpers import ReadCursorError, parse_read_cursor, read_cursor, spoken_interval, text_page
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
 from ..parsing import compute_doc_id
@@ -1005,7 +1005,7 @@ class BookService:
             namespace.get("current_snapshot_id") if namespace else None
         )
         stored = state.snapshot(snapshot_id) if snapshot_id else None
-        if stored is not None and stored["chapter_id"] != chapter.chapter_id:
+        if stored is not None and (stored["chapter_id"] != chapter.chapter_id or stored["scope_key"] != scope_key):
             raise BookServiceError("snapshot_not_found", "The snapshot does not belong to this chapter.")
         snap = stored["payload"] if stored else {}
         result_data = snap.get("result", {})
@@ -1031,24 +1031,49 @@ class BookService:
                 )
             except BookServiceError:
                 source_status = "blocked"
+        metadata: list[tuple[str, Any]] = [
+            *(("chunk", item) for item in chunks), *(("take", item) for item in takes),
+            *(("candidate", item["build_id"]) for item in candidates),
+        ]
+        view = canonical_json_sha256({
+            "chapter": chapter.chapter_id, "scope": scope_key, "snapshot": snapshot_id,
+            "manifest": namespace.get("manifest_revision") if namespace else None,
+            "media": namespace.get("media_revision") if namespace else 0,
+            "head": namespace.get("head_revision") if namespace else None,
+            "metadata": [(kind, item if isinstance(item, str) else item.get("chunk_id", item.get("take_id")))
+                         for kind, item in metadata],
+        })
+        limit = request.limit if "limit" in request.model_fields_set else 100
+        offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
+        if offset > len(metadata):
+            raise BookServiceError("invalid_cursor", "The chapter cursor is invalid or stale.")
+        page_metadata = metadata[offset:offset + limit]
+        page_chunks = [dict(item) for kind, item in page_metadata if kind == "chunk"]
+        page_takes = [item for kind, item in page_metadata if kind == "take"]
+        page_take_ids = {item["take_id"] for item in page_takes}
+        for item in page_chunks:
+            item["take_ids"] = [take_id for take_id in item.get("take_ids", []) if take_id in page_take_ids]
+            item["reusable_take_ids"] = [take_id for take_id in item.get("reusable_take_ids", []) if take_id in page_take_ids]
+        page_candidates = [item for kind, item in page_metadata if kind == "candidate"]
         returned_texts: list[dict[str, Any]] = []
         if "include_text" in request.model_fields_set and request.include_text and stored is not None:
             speech_text = snap.get("speech_text", "")
+            spoken_text = snap.get("spoken_projection", "")
             cap = request.max_characters if "max_characters" in request.model_fields_set else 40000
             remaining = cap
-            for chunk in chunks:
-                text = speech_text[chunk["start"]:chunk["end"]]
-                if len(text) > remaining:
+            for chunk in page_chunks:
+                prompt = speech_text[chunk["start"]:chunk["end"]]
+                try:
+                    spoken = spoken_interval(speech_text, spoken_text, chunk["start"], chunk["end"])
+                except ValueError as exc:
+                    raise BookServiceError("state_unavailable", "Frozen speech projection is malformed.") from exc
+                if len(prompt) + len(spoken) > remaining:
                     break
-                prompt = text
-                returned_texts.append({
-                    "chunk_id": chunk["chunk_id"],
-                    "prompt": {"text": prompt, "returned_start": 0, "returned_end": len(prompt),
-                               "total_codepoints": len(prompt), "text_sha256": hashlib.sha256(prompt.encode()).hexdigest()},
-                    "spoken_text": {"text": text, "returned_start": 0, "returned_end": len(text),
-                                    "total_codepoints": len(text), "text_sha256": hashlib.sha256(text.encode()).hexdigest()},
-                })
-                remaining -= len(text)
+                returned_texts.append({"chunk_id": chunk["chunk_id"],
+                                       "prompt": text_page(prompt, 0, len(prompt)),
+                                       "spoken_text": text_page(spoken, 0, len(spoken))})
+                remaining -= len(prompt) + len(spoken)
+        next_offset = offset + len(page_metadata)
         return {
             "chapter_id": chapter.chapter_id,
             "namespace": scope.model_dump(mode="json"),
@@ -1064,12 +1089,13 @@ class BookService:
             "accepted_snapshot_id": head["accepted_snapshot_id"] if head else None,
             "accepted_request_plan_sha256": head["accepted_plan_sha256"] if head else None,
             "production_settings_sha256": snap.get("production_settings_sha256"),
-            "candidate_build_ids": [item["build_id"] for item in candidates],
+            "candidate_build_ids": page_candidates,
             "accepted_plan_matches_prepared": (bool(head["accepted_plan_matches_prepared"]) if head else None),
             "current_outputs_stale": bool(head and (head["accepted_snapshot_id"] != snapshot_id or not head["accepted_plan_matches_prepared"])),
             "source_status": source_status,
-            "chunks": chunks, "takes": takes, "returned_texts": returned_texts,
-            "has_more": False, "next_cursor": None,
+            "chunks": page_chunks, "takes": page_takes, "returned_texts": returned_texts,
+            "has_more": next_offset < len(metadata),
+            "next_cursor": _cursor(view, next_offset) if next_offset < len(metadata) else None,
         }
 
     def find_chunk(self, request: dto.FindChunkRequest) -> dict[str, Any]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import hashlib
 import json
 
@@ -18,6 +19,33 @@ def text_page(text: str, start: int, maximum: int) -> dict[str, object]:
         "text": text[start:end], "returned_start": start, "returned_end": end,
         "total_codepoints": len(text), "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
     }
+
+
+def spoken_interval(speech_text: str, spoken_text: str, start: int, end: int) -> str:
+    """Return a speech interval with only the frozen added-tag deletions removed.
+
+    Prepared snapshots retain both projections.  Their relationship is a
+    deletion-only transform, so equal blocks map exact code-point boundaries
+    and deleted tag spans collapse at one spoken boundary.  A different
+    transform is malformed historical evidence rather than a cue to read live
+    Word bytes.
+    """
+    if not (0 <= start <= end <= len(speech_text)):
+        raise ValueError("invalid frozen speech interval")
+    boundaries: list[int | None] = [None] * (len(speech_text) + 1)
+    matcher = difflib.SequenceMatcher(a=speech_text, b=spoken_text, autojunk=False)
+    for kind, left_start, left_end, right_start, right_end in matcher.get_opcodes():
+        if kind == "equal":
+            for offset in range(left_end - left_start + 1):
+                boundaries[left_start + offset] = right_start + offset
+        elif kind == "delete":
+            for offset in range(left_start, left_end + 1):
+                boundaries[offset] = right_start
+        else:
+            raise ValueError("frozen spoken projection is not a tag deletion transform")
+    if boundaries[start] is None or boundaries[end] is None:
+        raise ValueError("frozen projection boundaries are unavailable")
+    return spoken_text[int(boundaries[start]):int(boundaries[end])]
 
 
 def read_cursor(view: str, record_offset: int, text_offset: int = 0) -> str:
@@ -42,4 +70,4 @@ def parse_read_cursor(cursor: str, view: str) -> tuple[int, int]:
         raise ReadCursorError("cursor does not belong to this immutable read") from exc
 
 
-__all__ = ["ReadCursorError", "parse_read_cursor", "read_cursor", "text_page"]
+__all__ = ["ReadCursorError", "parse_read_cursor", "read_cursor", "spoken_interval", "text_page"]
