@@ -68,6 +68,13 @@ class Client:
                 "cache_hit": self.counts[name] > 1 and not self.broken_cache}
 
 
+def _write_release_identity(repo):
+    identity = repo / "src" / "cognita" / "release_identity.py"
+    identity.parent.mkdir(parents=True, exist_ok=True)
+    identity.write_text(
+        f"COMBINED_CONTRACT_VERSION = {PUBLIC_CONTRACT_VERSION}\n", encoding="utf-8")
+
+
 def receipts(monkeypatch, *, changed=None):
     rows = {row.path: {"sha256": row.sha256, "atime_ns": 1, "mtime_ns": 2, "ctime_ns": 3}
             for row in load_manifest()}
@@ -253,10 +260,7 @@ def test_provisioning_failure_prevents_ocr_calls(monkeypatch):
 def test_host_explicitly_provisions_installed_fixtures_and_removes_copied_runner(
         tmp_path, monkeypatch, mode, exit_code):
     from scripts import kei_http_selftest as host
-    identity = tmp_path / "src" / "cognita" / "release_identity.py"
-    identity.parent.mkdir(parents=True)
-    identity.write_text(
-        f"COMBINED_CONTRACT_VERSION = {PUBLIC_CONTRACT_VERSION}\n", encoding="utf-8")
+    _write_release_identity(tmp_path)
     commands, inputs = [], []
     def command(args, *unused):
         commands.append(args)
@@ -468,6 +472,7 @@ def test_cache_check_allows_absent_invocation_binding_and_search_uses_distinctiv
 def test_owned_failure_logs_are_captured_before_cleanup_without_masking_result(
         tmp_path, monkeypatch, capture, exit_code, log_failure):
     from scripts import kei_http_selftest as host
+    _write_release_identity(tmp_path)
     commands = []
     def command(args, *unused):
         commands.append(args)
