@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from cognita.books.models import InspectRequest, PrepareRequest
+from cognita.books.models import InspectRequest, PrepareRequest, RecordGenerationRequest
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState, ProjectStateError
 import cognita.books.service as service_module
@@ -291,3 +291,39 @@ def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_
     assert set(service.index_admitted_doc_ids(candidates, "workflow")) == {
         ids["Project Files/workflow.md"],
     }
+
+
+def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    inspected = _inspect(service)
+    spec = {
+        "provider": "synthetic", "route": "fixture", "model_id": "model",
+        "voice_id": "voice", "parameters": {}, "context_fields": {},
+    }
+    prepared, replayed = service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "prepare-generation", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "chunk-1", "start": 0, "end": 5, "request_spec": spec}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }), owner_key="principal:fixture")
+    assert not replayed
+    change = {
+        "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+        "chunk_id": "chunk-1", "expected_manifest_revision": prepared["manifest_revision"],
+        "request": {"prompt_sha256": prepared["chunks"][0]["prompt_sha256"], "spec": spec},
+    }
+    request = RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "reserve-generation", "change": change,
+    })
+    first, replayed = service.record_generation(request, owner_key="principal:fixture")
+    assert not replayed
+    generation = first["generation"]
+    assert generation["state"] == "reserved" and generation["media_registered"] is False
+    again, replayed = service.record_generation(request, owner_key="principal:fixture")
+    assert replayed and again == first

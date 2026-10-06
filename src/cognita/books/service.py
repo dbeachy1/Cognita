@@ -26,7 +26,7 @@ from .config import (
 from .configuration import (
     BINDING_PATH, LAYOUT_PATH, STATE_ROOT, BookConfigSnapshot, load_book_config,
 )
-from .fingerprint import canonical_json_sha256
+from .fingerprint import canonical_json_sha256, request_fingerprint
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
@@ -768,8 +768,14 @@ class BookService:
                 raise BookServiceError("publication_failed", "The immutable source snapshot could not be staged.") from exc
         chunks: list[dict[str, Any]] = []
         plan_rows: list[dict[str, Any]] = []
+        requested_chunks = {item.chunk_id: item for item in request.chunks}
         for order, item in enumerate(ranges):
             text = projected.speech_text[item.start:item.end]
+            requested = requested_chunks[item.chunk_id]
+            request_spec = (
+                _data(requested.request_spec)
+                if requested.request_spec is not None else None
+            )
             chunk = {
                 "chunk_id": item.chunk_id, "snapshot_id": snapshot_id, "order": order,
                 "start": item.start, "end": item.end, "bookmark": f"cognita_{item.chunk_id}",
@@ -777,8 +783,11 @@ class BookService:
                 "codepoint_count": item.codepoint_count, "limit_count": item.limit_count,
                 "prompt_sha256": item.prompt_sha256,
                 "spoken_text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                "request_sha256": None,
-                "request_spec": None,
+                "request_sha256": (
+                    request_fingerprint(text, requested.request_spec)
+                    if requested.request_spec is not None else None
+                ),
+                "request_spec": request_spec,
                 "replaces_chunk_ids": [], "replaced_by_chunk_ids": [],
                 "opening_phrase": text[:120], "closing_phrase": text[-120:],
                 "take_ids": [], "accepted_take_id": None,
@@ -955,6 +964,78 @@ class BookService:
         if result["next_offset"] is None:
             result["next_offset"] = offset + len(base64.b64decode(result["content_base64"]))
         return result
+
+    def record_generation(
+        self, request: dto.RecordGenerationRequest, *, owner_key: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist generation evidence; this method never calls a provider."""
+        state, _, layout = self._enabled_layout()
+        change = request.change
+        args_sha256 = canonical_json_sha256({
+            "project": request.project,
+            "change": _data(change),
+        })
+        if isinstance(change, dto.UpdateGenerationChange):
+            raise BookServiceError(
+                "validation_failed",
+                "Generation evidence updates are not implemented until their CAS transition table is durable.",
+            )
+        chapter = self._chapter(layout, change.chapter_id)
+        stored = state.snapshot(change.snapshot_id)
+        if stored is None or stored["chapter_id"] != chapter.chapter_id:
+            raise BookServiceError("not_prepared", "The requested frozen chapter snapshot is unavailable.")
+        if stored["manifest_revision"] != change.expected_manifest_revision:
+            raise BookServiceError("stale_manifest", "The chapter manifest changed before generation reservation.")
+        snapshot = stored["payload"]
+        chunk = next(
+            (item for item in snapshot.get("result", {}).get("chunks", [])
+             if item.get("chunk_id") == change.chunk_id),
+            None,
+        )
+        if chunk is None:
+            raise BookServiceError("validation_failed", "The chunk is not part of the frozen snapshot.")
+        supplied_request = _data(change.request)
+        if (chunk.get("prompt_sha256") != change.request.prompt_sha256
+                or chunk.get("request_sha256") is None
+                or chunk.get("request_spec") != supplied_request["spec"]):
+            raise BookServiceError(
+                "request_hash_mismatch",
+                "The generation request must exactly match the frozen chunk prompt and request specification.",
+            )
+        try:
+            scope = json.loads(stored["scope_key"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BookServiceError("state_unavailable", "The frozen snapshot has an invalid scope binding.") from exc
+        now = datetime.now(timezone.utc).isoformat()
+        generation = dto.GenerationRecord.model_validate({
+            "generation_record_id": str(uuid.uuid4()), "scope": scope,
+            "chapter_id": chapter.chapter_id, "snapshot_id": change.snapshot_id,
+            "chunk_id": change.chunk_id, "generation_revision": 1, "state": "reserved",
+            "request_sha256": chunk["request_sha256"], "request": supplied_request,
+            "provider_ids": {}, "provider_response_metadata": {}, "cost": None,
+            "failure": None, "media_registered": False, "take_id": None,
+            "import_job_id": None, "created_at": now, "updated_at": now,
+        }, strict=True).model_dump(mode="json", exclude_unset=True)
+        record = {
+            "generation_record_id": generation["generation_record_id"],
+            "chapter_id": chapter.chapter_id, "scope_key": stored["scope_key"],
+            "snapshot_id": change.snapshot_id, "chunk_id": change.chunk_id,
+            "generation_revision": generation["generation_revision"],
+            "state": generation["state"], "request_sha256": generation["request_sha256"],
+            "payload_json": json.dumps(generation, ensure_ascii=False, separators=(",", ":")),
+            "created_at": now, "updated_at": now,
+        }
+        try:
+            disposition, result = state.reserve_generation(
+                record=record, owner_key=owner_key, project=self.project_name,
+                tool="audiobook_record_generation", operation_id=request.operation_id,
+                args_sha256=args_sha256,
+            )
+        except ProjectStateError as exc:
+            if "operation_id_conflict" in str(exc):
+                raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.") from exc
+            raise BookServiceError("state_unavailable", "Generation state could not be persisted.") from exc
+        return result, disposition == "replay"
 
     def set_folder_indexing(
         self, *, path: str, indexed: bool, operation_id: str,

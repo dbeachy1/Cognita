@@ -133,6 +133,7 @@ class ProjectState:
             state._validate_marker()
             state._validate_database()
             state._ensure_indexed_role_schema()
+            state._ensure_generation_schema()
             return state
         except ProjectStateError:
             raise
@@ -169,6 +170,7 @@ class ProjectState:
         state = cls(project_root, timeout=timeout)
         state._create_schema()
         state._ensure_indexed_role_schema()
+        state._ensure_generation_schema()
         marker = {
             "schema_version": SCHEMA_VERSION,
             "database": DATABASE_FILENAME,
@@ -380,6 +382,73 @@ class ProjectState:
                 )
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("indexed role provenance schema is unavailable") from exc
+
+    def _ensure_generation_schema(self) -> None:
+        """Create the append-only generation authority for existing book state."""
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_generations (
+                        generation_record_id TEXT PRIMARY KEY,
+                        chapter_id TEXT NOT NULL,
+                        scope_key TEXT NOT NULL,
+                        snapshot_id TEXT NOT NULL,
+                        chunk_id TEXT NOT NULL,
+                        generation_revision INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        request_sha256 TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS book_generations_chapter_updated "
+                    "ON book_generations(chapter_id, updated_at, generation_record_id)"
+                )
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("generation state schema is unavailable") from exc
+
+    def reserve_generation(
+        self, *, record: dict, owner_key: str, project: str, tool: str,
+        operation_id: str, args_sha256: str,
+    ) -> tuple[str, dict]:
+        """Reserve an immutable provider request with receipt-first replay."""
+        with self.transaction() as connection:
+            prior = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts "
+                "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (owner_key, project, tool, operation_id),
+            ).fetchone()
+            if prior is not None:
+                if prior["args_sha256"] != args_sha256:
+                    raise ProjectStateError("operation_id_conflict")
+                return "replay", json.loads(prior["payload_json"])
+            connection.execute(
+                "INSERT INTO book_generations(generation_record_id,chapter_id,scope_key,snapshot_id,"
+                "chunk_id,generation_revision,state,request_sha256,payload_json,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (record["generation_record_id"], record["chapter_id"], record["scope_key"],
+                 record["snapshot_id"], record["chunk_id"], record["generation_revision"],
+                 record["state"], record["request_sha256"], record["payload_json"],
+                 record["created_at"], record["updated_at"]),
+            )
+            result = {"generation": json.loads(record["payload_json"])}
+            connection.execute(
+                "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) "
+                "VALUES(?,?,?,?,?,?)",
+                (owner_key, project, tool, operation_id, args_sha256,
+                 json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+            )
+            return "committed", result
+
+    def generation(self, generation_record_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM book_generations WHERE generation_record_id=?",
+                (generation_record_id,),
+            ).fetchone()
+        return None if row is None else json.loads(row["payload_json"])
 
     def put_indexed_role_provenance(self, record: IndexedRoleProvenance) -> None:
         """Atomically replace the derived admission facts for one source path."""
