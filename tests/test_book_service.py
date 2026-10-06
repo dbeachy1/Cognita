@@ -2551,6 +2551,50 @@ def test_invalid_captured_chapter_annotation_blocks_before_legacy_docx_extractio
     assert projection.paragraphs  # Source projection was available; binding blocked publication.
 
 
+def test_captured_chapter_annotation_errors_name_original_source_locations(tmp_path):
+    """Annotation validation reports the caller's exact binding field."""
+    from cognita.parsing import parse_file
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    raw = _docx_paragraphs("alpha bravo charlie")
+    source = tmp_path / "Chapters/1/chapter.docx"
+    source.write_bytes(raw)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(raw)
+    projection = parse_docx(raw)
+    paragraph = projection.paragraphs[0]
+    state_path = tmp_path / "Chapters/1/chapter.json"
+    base = json.loads(state_path.read_text(encoding="utf-8"))
+
+    def checked_span(start: int, end: int) -> dict:
+        return {
+            "paragraph_id": paragraph.paragraph_id, "start": start, "end": end,
+            "expected_text_sha256": hashlib.sha256(paragraph.text[start:end].encode("utf-8")).hexdigest(),
+            "reason": "editorial",
+        }
+
+    cases = [
+        ([{**checked_span(0, 5), "paragraph_id": "missing"}], "index_annotations.spans[0].paragraph_id"),
+        ([checked_span(0, len(paragraph.text) + 1)], "index_annotations.spans[0].start/end"),
+        ([{**checked_span(0, 5), "expected_text_sha256": "0" * 64}],
+         "index_annotations.spans[0].expected_text_sha256"),
+        ([checked_span(2, 5), checked_span(1, 4)],
+         f"index_annotations.spans[0] overlaps {paragraph.paragraph_id}:2-5"),
+    ]
+    for spans, expected in cases:
+        state = dict(base)
+        state["index_annotations"] = {
+            "source_raw_sha256": hashlib.sha256(raw).hexdigest(),
+            "extraction_version": "cognita-docx-v1", "spans": spans,
+        }
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        with pytest.raises(BookServiceError, match=expected.replace("[", r"\[").replace("]", r"\]")):
+            parse_file(
+                source, tmp_path,
+                captured_content=lambda path, suffix, captured: service.index_captured_content(path, suffix, captured),
+            )
+
+
 @pytest.mark.parametrize("editorial_status", ["draft", "approved"])
 def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_path, editorial_status):
     from cognita.parsing import parse_file

@@ -435,25 +435,41 @@ class BookService:
         if annotations.extraction_version != PROJECTION_VERSION:
             raise BookServiceError("validation_failed", "Invalid index_annotations.extraction_version for captured chapter source.")
         paragraphs = {item.paragraph_id: item for item in projection.paragraphs}
-        spans_by_paragraph: dict[str, list[Any]] = {}
-        for span in annotations.spans:
+        spans_by_paragraph: dict[str, list[tuple[int, Any]]] = {}
+        for index, span in enumerate(annotations.spans):
+            location = f"index_annotations.spans[{index}]"
             paragraph = paragraphs.get(span.paragraph_id)
             if paragraph is None:
-                raise BookServiceError("validation_failed", f"Index annotation paragraph is unknown: {span.paragraph_id}.")
+                raise BookServiceError(
+                    "validation_failed",
+                    f"Invalid {location}.paragraph_id: {span.paragraph_id} is unknown.",
+                )
             if span.start < 0 or span.end > len(paragraph.text):
-                raise BookServiceError("validation_failed", f"Index annotation range is outside {span.paragraph_id}.")
+                raise BookServiceError(
+                    "validation_failed",
+                    f"Invalid {location}.start/end for {span.paragraph_id}:{span.start}-{span.end}.",
+                )
             actual = hashlib.sha256(paragraph.text[span.start:span.end].encode("utf-8")).hexdigest()
             if actual != span.expected_text_sha256:
-                raise BookServiceError("validation_failed", f"Index annotation text does not match {span.paragraph_id}:{span.start}-{span.end}.")
-            spans_by_paragraph.setdefault(span.paragraph_id, []).append(span)
+                raise BookServiceError(
+                    "validation_failed",
+                    f"Invalid {location}.expected_text_sha256 for {span.paragraph_id}:{span.start}-{span.end}.",
+                )
+            spans_by_paragraph.setdefault(span.paragraph_id, []).append((index, span))
         retained: list[str] = []
         for paragraph in projection.paragraphs:
-            spans = sorted(spans_by_paragraph.get(paragraph.paragraph_id, ()), key=lambda item: (item.start, item.end))
+            spans = sorted(
+                spans_by_paragraph.get(paragraph.paragraph_id, ()),
+                key=lambda item: (item[1].start, item[1].end),
+            )
             previous = 0
             pieces: list[str] = []
-            for span in spans:
+            for index, span in spans:
                 if span.start < previous:
-                    raise BookServiceError("validation_failed", f"Index annotation ranges overlap in {paragraph.paragraph_id}.")
+                    raise BookServiceError(
+                        "validation_failed",
+                        f"Invalid index_annotations.spans[{index}] overlaps {paragraph.paragraph_id}:{span.start}-{span.end}.",
+                    )
                 pieces.append(paragraph.text[previous:span.start])
                 previous = span.end
             pieces.append(paragraph.text[previous:])
