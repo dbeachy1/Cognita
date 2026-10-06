@@ -28,6 +28,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_asset_info",
         "get_asset",
         "ocr_asset",
+        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk",
+        "list_project_files", "read_project_file",
     }
 )
 
@@ -62,6 +64,7 @@ MUTATING_TOOLS: frozenset[str] = frozenset(
         "update_asset_metadata",
         "reindex_assets",
         "remove_asset",
+        "audiobook_prepare_chapter", "set_folder_indexing",
     }
 )
 

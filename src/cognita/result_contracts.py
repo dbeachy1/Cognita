@@ -17,6 +17,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError
 
 from .strict_result_schemas import build_adapter_schemas, build_schemas
+from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "reindex_documents", "find_literal", "copy_document", "copy_directory",
     "remove_directory", "put_asset", "update_asset_metadata", "search_assets",
     "list_assets", "get_asset_info", "get_asset", "reindex_assets", "remove_asset", "ocr_asset",
+    "audiobook_inspect_chapter", "audiobook_prepare_chapter",
+    "audiobook_get_chapter", "audiobook_find_chunk",
+    "set_folder_indexing", "list_project_files", "read_project_file",
     "read_document", "list_backups", "diff_backup", "get_self_test_plan",
     "edit_document", "edit_document_batch", "insert_in_document", "restore_backup",
     "batch", "list_projects",
@@ -42,6 +46,7 @@ MUTATING_TOOLS = frozenset({
     "copy_document", "copy_directory", "remove_directory", "put_asset",
     "update_asset_metadata", "reindex_assets", "remove_asset", "edit_document", "edit_document_batch",
     "insert_in_document", "restore_backup",
+    "audiobook_prepare_chapter", "set_folder_indexing",
 })
 
 OUTPUT_SCHEMAS_BY_TOOL = build_schemas(MUTATING_TOOLS)
@@ -169,7 +174,7 @@ def build_tool_result(
         payload = _fallback(
             tool_name,
             mutating=(
-                tool_name in (MUTATING_TOOLS | ADAPTER_MUTATING_TOOLS)
+                tool_name in (MUTATING_TOOLS | ADAPTER_MUTATING_TOOLS | ALL_ADDITIVE_MUTATING_TOOLS)
                 if mutating is None else mutating
             ),
             correlation_id=cid,

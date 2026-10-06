@@ -38,6 +38,7 @@ import re as re
 import shutil as shutil
 import socket as socket
 import time as time
+import uuid as uuid
 from dataclasses import dataclass as dataclass
 from datetime import datetime as datetime
 from pathlib import Path
@@ -108,6 +109,18 @@ from .parsing import (
     parse_file as parse_file,
 )
 from .readonly import MUTATING_TOOLS
+from .books import models as book_dto
+from .books.configuration import load_book_config
+from .books.policy import BookMutationPolicy, EffectiveIndexPolicy
+from .books.schemas import (
+    ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES,
+    BOOK_MUTATING_TOOLS, PROJECT_STORAGE_MUTATING_TOOLS,
+    error_envelope as book_error_envelope,
+    success_envelope as book_success_envelope,
+)
+from .books.service import BookService, BookServiceError
+from .books.state import ProjectState, ProjectStateError
+from .books.storage import ProjectFileError
 from .source_mount_guard import SourceMountGuard
 from .registry import Project, Registry
 from .retrieval import RetrievalCore
@@ -197,6 +210,15 @@ class LocalEngineHost(
         self._asset_reconcile_tasks: dict[str, asyncio.Task] = {}
         self.watcher = None  # WatcherManager, set by startup() when enabled (M4)
         self._asset_services: dict[tuple[str, str | None], AssetService] = {}
+        self._book_services: dict[str, BookService] = {}
+        if hasattr(self.core, "set_effective_index_policy_provider"):
+            self.core.set_effective_index_policy_provider(
+                lambda name: self.effective_index_policy_for(name)
+            )
+        if hasattr(self.core, "set_book_index_admission_provider"):
+            self.core.set_book_index_admission_provider(
+                lambda project, sources: self.book_index_admission_for(project, sources)
+            )
         # One admission queue per host, shared by every project and connector.
         # AssetService remains project-scoped for authorization and path rules.
         self.ocr_capacity_gate = SchedulerOCRCapacityGate(
@@ -370,11 +392,13 @@ class LocalEngineHost(
         arguments: dict | None = None,
         *,
         trusted_connector_id: str | None = None,
+        trusted_principal_id: str | None = None,
     ):
         """Direct tool dispatch for the admin API (it replaced the 3.x worker
         client, which 14.0.0 removed with the worker engine)."""
         return await self._dispatch(
-            project, tool, arguments or {}, trusted_connector_id=trusted_connector_id
+            project, tool, arguments or {}, trusted_connector_id=trusted_connector_id,
+            trusted_principal_id=trusted_principal_id,
         )
 
     # ---------------- ASGI app (the wire protocol) ----------------
@@ -425,11 +449,13 @@ class LocalEngineHost(
                 trusted_project_key_project = (
                     request.headers.get("x-cognita-project-key-project") or None
                 )
+                trusted_principal_id = request.headers.get("x-cognita-principal-id") or None
                 try:
                     payload = await self._dispatch(
                         project, tool, args,
                         trusted_connector_id=trusted_connector_id,
                         trusted_project_key_project=trusted_project_key_project,
+                        trusted_principal_id=trusted_principal_id,
                     )
                 except KeyError:
                     return JSONResponse({"jsonrpc": "2.0", "id": msg_id,
@@ -455,7 +481,7 @@ class LocalEngineHost(
                 result = build_tool_result(
                     tool, candidate if isinstance(candidate, dict) else {},
                     is_error=is_error, extra_content=extras,
-                    mutating=tool in MUTATING_TOOLS,
+                    mutating=tool in MUTATING_TOOLS or tool in ALL_ADDITIVE_MUTATING_TOOLS,
                 )
                 # MCP marks a failing tool on the result itself. On 2026-08-29,
                 # an error status buried only in the text of an HTTP 200 response
@@ -486,6 +512,12 @@ class LocalEngineHost(
                 project.name,
                 dimensions=self.config.embedding_dimensions,
             )
+            policy_callbacks = {}
+            asset_parameters = inspect.signature(AssetService).parameters
+            if "book_mutation_policy" in asset_parameters:
+                policy_callbacks["book_mutation_policy"] = lambda: self.book_mutation_policy_for(project)
+            if "effective_index_policy" in asset_parameters:
+                policy_callbacks["effective_index_policy"] = lambda: self.effective_index_policy_for(project)
             service = AssetService(
                 project,
                 repository,
@@ -497,9 +529,206 @@ class LocalEngineHost(
                 connector_id=trusted_connector_id,
                 ocr_service=self.ocr_service,
                 scheduler=self.scheduler,
+                **policy_callbacks,
             )
             self._asset_services[key] = service
         return service
+
+    def project_state_for(self, project: Project) -> ProjectState | None:
+        """Discover existing source-side authority without initializing it."""
+        return ProjectState.discover(project.documents_dir)
+
+    def book_config_snapshot_for(self, project: Project):
+        state = self.project_state_for(project)
+        return load_book_config(project.documents_dir, state)
+
+    def read_registered_file(self, project: Project, relative_path: str) -> tuple[bytes, str]:
+        from .books.service import _read_bytes
+        raw = _read_bytes(project.documents_dir, relative_path)
+        return raw, hashlib.sha256(raw).hexdigest()
+
+    def book_chapter_state_for(self, project: Project, chapter_id: str):
+        from .books.config import validate_chapter_state
+        config = self.book_config_snapshot_for(project)
+        if config.config_state != "enabled" or config.layout is None:
+            raise ProjectStateError("book configuration is not enabled")
+        chapter = next((item for item in config.layout.chapters if item.chapter_id == chapter_id), None)
+        if chapter is None:
+            raise ProjectStateError("chapter is not registered")
+        raw = self.read_registered_file(project, chapter.chapter_state_filepath)[0]
+        try:
+            return validate_chapter_state(raw)
+        except Exception as exc:
+            raise ProjectStateError("chapter state is damaged") from exc
+
+    def production_settings_for(self, project: Project):
+        from .books.config import validate_production_settings
+        config = self.book_config_snapshot_for(project)
+        if config.config_state != "enabled" or config.layout is None:
+            raise ProjectStateError("book configuration is not enabled")
+        relative = config.layout.shared_paths.production_settings_filepath
+        raw = self.read_registered_file(project, relative)[0]
+        try:
+            return validate_production_settings(raw)
+        except Exception as exc:
+            raise ProjectStateError("production settings are damaged") from exc
+
+    def book_service_for(self, project: Project) -> BookService:
+        service = self._book_services.get(project.name)
+        if service is None:
+            service = BookService(
+                project.documents_dir, project.name,
+                state=self.project_state_for(project),
+            )
+            self._book_services[project.name] = service
+        return service
+
+    def effective_index_policy_for(self, project_or_name: Project | str) -> EffectiveIndexPolicy:
+        project = (self.registry.get(project_or_name)
+                   if isinstance(project_or_name, str) else project_or_name)
+        if project is None:
+            raise ProjectStateError("project is not registered")
+        state = self.project_state_for(project)
+        folder = state.folder_policy() if state is not None else None
+        legacy = self.deindexed(project)
+        if legacy.load_error:
+            raise ProjectStateError("legacy per-file exclusion state is damaged")
+        config = load_book_config(project.documents_dir, state)
+        if config.config_state == "configuration_conflict":
+            raise ProjectStateError("book configuration is damaged")
+        layout = config.layout if config.config_state == "enabled" else None
+        from .books.config import FolderRule
+        return EffectiveIndexPolicy(
+            [FolderRule(path=path, indexed=indexed)
+             for path, indexed in (folder.rules if folder else ())],
+            hard_exclusion_roots=(".cognita-storage",),
+            deindexed_paths=legacy.sorted(), book_layout=layout,
+        )
+
+    def book_mutation_policy_for(self, project: Project) -> BookMutationPolicy:
+        state = self.project_state_for(project)
+        config = load_book_config(project.documents_dir, state)
+        return BookMutationPolicy(
+            config.layout, config_state=config.config_state,
+            binding=config.binding if config.config_state == "enabled" else None,
+        )
+
+    def book_index_provenance_for(
+        self, project: Project, source_path: str, doc_id: str,
+        extracted_sha256: str, raw_sha256: str, extraction_version: str,
+    ):
+        return self.book_service_for(project).index_provenance_for(
+            source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
+        )
+
+    def book_index_provenance_is_current(self, project: Project, record) -> bool:
+        return self.book_service_for(project).index_provenance_is_current(record)
+
+    def book_index_admission_for(self, project_or_name, sources) -> frozenset[str]:
+        project = (self.registry.get(project_or_name)
+                   if isinstance(project_or_name, str) else project_or_name)
+        if project is None:
+            return frozenset()
+        return self.book_service_for(project).index_admitted_doc_ids(sources)
+
+    async def _dispatch_book_tool(
+        self, project: Project, tool: str, args: dict, *,
+        trusted_connector_id: str | None,
+        trusted_project_key_project: str | None,
+        trusted_principal_id: str | None,
+    ) -> dict:
+        from .books.schemas import success_envelope, error_envelope
+        request_models = {
+            "audiobook_inspect_chapter": book_dto.InspectRequest,
+            "audiobook_prepare_chapter": book_dto.PrepareRequest,
+            "audiobook_get_chapter": book_dto.GetChapterRequest,
+            "audiobook_find_chunk": book_dto.FindChunkRequest,
+            "set_folder_indexing": book_dto.SetFolderIndexingRequest,
+            "list_project_files": book_dto.ListProjectFilesRequest,
+            "read_project_file": book_dto.ReadProjectFileRequest,
+        }
+        mutating = tool in ALL_ADDITIVE_MUTATING_TOOLS
+        correlation_id = uuid.uuid4().hex
+        try:
+            request_model = request_models[tool].model_validate(args, strict=True)
+            if request_model.project != project.name:
+                raise BookServiceError("project_mismatch", "The request project does not match the authenticated route.")
+            owner_key = (
+                f"principal:{trusted_principal_id}" if trusted_principal_id else
+                f"connector:{trusted_connector_id}" if trusted_connector_id else
+                "principal:local-admin"
+            )
+            service = self.book_service_for(project)
+
+            async def perform() -> dict[str, Any]:
+                if tool == "audiobook_inspect_chapter":
+                    data = service.inspect(request_model)
+                elif tool == "audiobook_prepare_chapter":
+                    data, replayed = service.prepare(request_model, owner_key=owner_key)
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_get_chapter":
+                    data = service.get_chapter(request_model)
+                elif tool == "audiobook_find_chunk":
+                    data = service.find_chunk(request_model)
+                elif tool == "list_project_files":
+                    data = service.list_files(
+                        request_model.path,
+                        recursive=request_model.recursive if "recursive" in request_model.model_fields_set else False,
+                        cursor=request_model.cursor if "cursor" in request_model.model_fields_set else None,
+                        limit=request_model.limit if "limit" in request_model.model_fields_set else 100,
+                        effective_index=self.effective_index_policy_for(project),
+                    )
+                elif tool == "read_project_file":
+                    data = service.read_file(
+                        request_model.path,
+                        offset=request_model.offset if "offset" in request_model.model_fields_set else 0,
+                        max_bytes=request_model.max_bytes if "max_bytes" in request_model.model_fields_set else 262144,
+                        expected_bytes_sha256=(request_model.expected_bytes_sha256
+                                               if "expected_bytes_sha256" in request_model.model_fields_set else None),
+                    )
+                else:
+                    data, replayed = service.set_folder_indexing(
+                        path=request_model.path, indexed=request_model.indexed,
+                        operation_id=request_model.operation_id,
+                        expected_policy_revision=request_model.expected_policy_revision,
+                        owner_key=owner_key,
+                    )
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                return success_envelope(tool, data)
+
+            if not mutating:
+                return await perform()
+            lock = self.core.write_lock(project.name)
+            if not await lock.acquire_within(WRITE_LOCK_WAIT_S):
+                raise BookServiceError("busy", "Another project write is in progress.")
+            try:
+                source_status = self.source_guard.check(project.documents_dir)
+                if source_status.state != "available":
+                    raise BookServiceError("source_unavailable", "The project source is unavailable or reconciling.")
+                if denied := self._connector_write_denial(
+                    project, trusted_connector_id, trusted_project_key_project,
+                ):
+                    raise BookServiceError(denied.get("reason", "permission_denied"), denied.get("message", "Write access is required."))
+                return await perform()
+            finally:
+                await lock.release()
+        except Exception as exc:
+            if isinstance(exc, (BookServiceError, ProjectFileError)):
+                reason = exc.reason
+                message = str(exc)
+                outcome = getattr(exc, "outcome", "not_applied")
+            elif isinstance(exc, (ProjectStateError, OSError)):
+                reason, message, outcome = "state_unavailable", "Durable project state is unavailable.", "outcome_unknown" if mutating else "not_applied"
+            else:
+                # DTO failures and projection exceptions are intentionally
+                # reduced to a bounded, non-content diagnostic.
+                reason = "validation_failed" if isinstance(exc, (ValueError, TypeError)) else "internal_error"
+                message = "The request or source could not be processed safely."
+                outcome = "not_applied"
+            return error_envelope(
+                tool, reason=reason, message=message,
+                operation_outcome=outcome, correlation_id=correlation_id,
+            )
 
     async def _dispatch(
         self,
@@ -509,7 +738,14 @@ class LocalEngineHost(
         *,
         trusted_connector_id: str | None = None,
         trusted_project_key_project: str | None = None,
+        trusted_principal_id: str | None = None,
     ) -> dict:
+        if tool in ALL_ADDITIVE_TOOL_NAMES:
+            return await self._dispatch_book_tool(
+                project, tool, args, trusted_connector_id=trusted_connector_id,
+                trusted_project_key_project=trusted_project_key_project,
+                trusted_principal_id=trusted_principal_id,
+            )
         # 13.0 §4.1: one gate for the whole index tool surface. Every tool
         # reachable here — search, read, write, asset, OCR — needs the store, so
         # a mismatched database is refused once, here, with the reason and the

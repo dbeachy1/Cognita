@@ -117,6 +117,33 @@ def _valid_mcp_resource_path(path: str) -> bool:
     return parse_connector_path(path) is not None
 
 
+def _suppress_wire_bodies(raw: bytes | None) -> bool:
+    """Conservatively suppress captured bodies for source-bearing tools."""
+    if raw is None:
+        return True
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return True
+    from .books.schemas import ALL_ADDITIVE_TOOL_NAMES
+
+    def contains(candidate: Any) -> bool:
+        if isinstance(candidate, list):
+            return any(contains(item) for item in candidate)
+        if not isinstance(candidate, dict):
+            return False
+        if candidate.get("method") == "batch":
+            return True
+        if candidate.get("method") == "tools/call":
+            params = candidate.get("params")
+            if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+                return True
+            return params["name"] in ALL_ADDITIVE_TOOL_NAMES
+        return any(contains(item) for item in candidate.values() if isinstance(item, (dict, list)))
+
+    return contains(value)
+
+
 def _valid_issuer_suffix(path: str) -> bool:
     """Return whether *path* is a non-empty RFC-style issuer path suffix."""
     if not path.startswith("/"):
@@ -2246,6 +2273,9 @@ def create_gateway_app(
         Only when `mcp_wire_capture: true`; never fails the response.
         """
         try:
+            # A malformed exchange may still contain partial source or URL
+            # credentials; classification failure suppresses the bodies.
+            suppress_bodies = _suppress_wire_bodies(raw)
             capture_dir = Path(config.log_dir) / "mcp-wire"
             capture_dir.mkdir(parents=True, exist_ok=True)
             stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + f"{time.time() % 1:.3f}"[1:]
@@ -2256,11 +2286,16 @@ def create_gateway_app(
                 "elapsed_ms": elapsed_ms,
                 "request": {"method": request.method, "path": request.url.path,
                             "headers": _redacted_wire_headers(request.headers),
-                            "body": raw.decode("utf-8", "replace") if raw is not None else None},
+                            "body": (None if suppress_bodies else raw.decode("utf-8", "replace"))
+                                    if raw is not None else None,
+                            "body_suppressed": suppress_bodies,
+                            "body_bytes": len(raw) if raw is not None else None},
                 "response": {"status": response.status_code,
                              "headers": _redacted_wire_headers(response.headers),
                              "body": (body.decode("utf-8", "replace")
-                                      if isinstance(body, (bytes, bytearray)) else None)},
+                                      if not suppress_bodies and isinstance(body, (bytes, bytearray)) else None),
+                             "body_suppressed": suppress_bodies,
+                             "body_bytes": len(body) if isinstance(body, (bytes, bytearray)) else None},
             }
             path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
             log.info("mcp wire captured connector=%s ids=%s file=%s request_bytes=%s response_bytes=%d",

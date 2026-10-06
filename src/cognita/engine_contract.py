@@ -526,6 +526,18 @@ ENGINE_TOOL_DEFS: list[dict] = [
 # Additive 7.1 core-engine surface. The legacy workers engine is filtered by the
 # gateway and never receives these definitions.
 ENGINE_TOOL_DEFS.extend(ASSET_TOOL_DEFS)
+# D4 M1 ships only operations with implemented durable service behavior. The
+# remaining book tools are added by their owning orchestration checkpoint.
+from .books.schemas import book_tool_definitions, project_storage_tool_definitions
+
+_M1_BOOK_TOOLS = {
+    "audiobook_inspect_chapter", "audiobook_prepare_chapter",
+    "audiobook_get_chapter", "audiobook_find_chunk",
+}
+ENGINE_TOOL_DEFS.extend(
+    item for item in book_tool_definitions() if item["name"] in _M1_BOOK_TOOLS
+)
+ENGINE_TOOL_DEFS.extend(project_storage_tool_definitions())
 ENGINE_TOOL_DEFS[:] = [attach_output_schema(tool) for tool in ENGINE_TOOL_DEFS]
 ENGINE_TOOL_DEFS_BY_NAME: dict[str, dict] = {t["name"]: t for t in ENGINE_TOOL_DEFS}
 

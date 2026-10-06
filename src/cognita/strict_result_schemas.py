@@ -80,7 +80,16 @@ BYTE_FACT_PROPERTIES = {
     "content_sha256": NULL_HASH,
 }
 BYTE_FACT_REQUIRED = tuple(BYTE_FACT_PROPERTIES)
-WRITE_RECEIPT = obj({"filepath": S, **BYTE_FACT_PROPERTIES}, ("filepath", *BYTE_FACT_REQUIRED))
+INDEXING_FACT = obj({
+    "state": {"type": "string", "enum": [
+        "pending", "indexed", "stale", "excluded", "blocked", "failed",
+    ]},
+    "job_id": NULL_S,
+    "error": nullable(obj({"code": S, "message": S}, ("code", "message"))),
+}, ("state", "job_id", "error"))
+WRITE_RECEIPT = obj({
+    "filepath": S, **BYTE_FACT_PROPERTIES, "indexing": INDEXING_FACT,
+}, ("filepath", *BYTE_FACT_REQUIRED))
 
 FILE_FACT_PROPERTIES = {
     "on_disk": B, "size_bytes": NNI, "mtime": nullable(S),
@@ -528,10 +537,12 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
                     "previous_content_sha256": HASH}
     add_props = {"chunks_added": NNI, "dedup_skipped": NNI, "category": S,
                  "filepath": S, "source": S, **write_common}
+    add_props["indexing"] = INDEXING_FACT
     add_required = ("chunks_added", "dedup_skipped", "category", "filepath", "source",
                     *BYTE_FACT_REQUIRED, "tier", "semantic_searchable")
     update_props = {"old_chunks_removed": NNI, "new_chunks_added": NNI,
                     "dedup_skipped": NNI, "filepath": S, "source": S, **write_common}
+    update_props["indexing"] = INDEXING_FACT
     update_required = ("old_chunks_removed", "new_chunks_added", "dedup_skipped", "filepath",
                        "source", *BYTE_FACT_REQUIRED, "tier", "semantic_searchable")
 
@@ -636,15 +647,15 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
              "total_matches", "truncated", "matches", "result_key"))),
         "add_document": contract(
             branch("success", add_props, add_required),
-            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS},
+            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS, "indexing": INDEXING_FACT},
                    ("filepath", "old_chunks_removed", "new_chunks_added"))),
         "update_document": contract(
             branch("success", update_props, update_required),
-            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS},
+            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS, "indexing": INDEXING_FACT},
                    ("filepath", "old_chunks_removed", "new_chunks_added"))),
         "add_from_url": contract(
             branch("success", add_props, add_required),
-            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS},
+            branch("success", {"filepath": S, **LEGACY_WRITE_FIELDS, "indexing": INDEXING_FACT},
                    ("filepath", "old_chunks_removed", "new_chunks_added"))),
         "write_documents": contract(branch("success", {"documents_written": NNI, "chunks_indexed": NNI,
             "filepaths": STRINGS, "receipts": arr(WRITE_RECEIPT),
@@ -849,6 +860,19 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
     schemas["list_projects"] = contract(branch("success", {
         "connector": obj({"id": UUID, "name": S}, ("id", "name")), "revision": NNI,
         "projects": arr(project_access)}, ("connector", "revision", "projects")))
+
+    # Generated book/storage envelopes are included in batch child validation.
+    from .books.schemas import (
+        BOOK_OUTPUT_SCHEMAS,
+        PROJECT_STORAGE_OUTPUT_SCHEMAS, PROJECT_STORAGE_MUTATING_TOOLS,
+    )
+    implemented_book_tools = {
+        "audiobook_inspect_chapter", "audiobook_prepare_chapter",
+        "audiobook_get_chapter", "audiobook_find_chunk",
+    }
+    schemas.update({name: schema for name, schema in BOOK_OUTPUT_SCHEMAS.items()
+                    if name in implemented_book_tools})
+    schemas.update(PROJECT_STORAGE_OUTPUT_SCHEMAS)
 
     # Batch child structured content is a discriminated union of every other
     # public result branch.  ``anyOf`` is intentional because extensible error

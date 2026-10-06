@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import sqlite3
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -104,10 +105,12 @@ class ProjectState:
         """
         project_root = Path(project_root)
         state_root = project_root / STATE_DIRECTORY
-        if not state_root.exists():
+        try:
+            state_facts = state_root.lstat()
+        except FileNotFoundError:
             return None
         try:
-            if state_root.is_symlink() or not state_root.is_dir():
+            if stat.S_ISLNK(state_facts.st_mode) or not stat.S_ISDIR(state_facts.st_mode):
                 raise ProjectStateError("reserved project state path is not a directory")
             entries = list(state_root.iterdir())
             if not entries:
@@ -120,7 +123,11 @@ class ProjectState:
                 # of an interrupted first creation. No prior policy can exist.
                 cls._validate_bootstrap(bootstrap)
                 return cls._finish_bootstrap(project_root, timeout=timeout)
-            if not marker.is_file() or not database.is_file():
+            marker_facts = marker.lstat() if marker.exists() else None
+            database_facts = database.lstat() if database.exists() else None
+            if (marker_facts is None or database_facts is None
+                    or stat.S_ISLNK(marker_facts.st_mode) or stat.S_ISLNK(database_facts.st_mode)
+                    or not stat.S_ISREG(marker_facts.st_mode) or not stat.S_ISREG(database_facts.st_mode)):
                 raise ProjectStateError("initialized project state is missing its marker or database")
             state = cls(project_root, timeout=timeout)
             state._validate_marker()
@@ -264,6 +271,20 @@ class ProjectState:
                         payload_json TEXT NOT NULL,
                         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     );
+                    CREATE TABLE IF NOT EXISTS managed_write_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        source_path TEXT NOT NULL,
+                        bytes_sha256 TEXT NOT NULL,
+                        operation_id TEXT,
+                        state TEXT NOT NULL,
+                        error_json TEXT,
+                        doc_id TEXT,
+                        extracted_sha256 TEXT,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(source_path, operation_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS managed_write_jobs_path_updated
+                        ON managed_write_jobs(source_path, updated_at DESC);
                     CREATE TABLE IF NOT EXISTS book_config (
                         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                         book_id TEXT NOT NULL,
@@ -515,6 +536,74 @@ class ProjectState:
             "job_id": row["job_id"], "policy_revision": int(row["revision"]),
             "state": row["state"], "details": json.loads(row["details_json"]),
             "updated_at": row["updated_at"],
+        }
+
+    def begin_managed_write(
+        self, *, job_id: str, source_path: str, bytes_sha256: str,
+        operation_id: str | None,
+    ) -> tuple[str, str]:
+        """Persist pending derived-index status after source bytes are published.
+
+        A supplied operation ID deduplicates retries for one path and payload;
+        callers without one get a new durable job for each published write.
+        """
+        with self.transaction() as connection:
+            if operation_id is not None:
+                prior = connection.execute(
+                    "SELECT job_id,bytes_sha256 FROM managed_write_jobs "
+                    "WHERE source_path=? AND operation_id=?",
+                    (source_path, operation_id),
+                ).fetchone()
+                if prior is not None:
+                    if prior["bytes_sha256"] != bytes_sha256:
+                        raise ProjectStateError("managed_write_operation_conflict")
+                    return "replay", prior["job_id"]
+            connection.execute(
+                "INSERT INTO managed_write_jobs(job_id,source_path,bytes_sha256,operation_id,state) "
+                "VALUES(?,?,?,?, 'pending')",
+                (job_id, source_path, bytes_sha256, operation_id),
+            )
+            return "created", job_id
+
+    def finish_managed_write(
+        self, *, job_id: str, state: str, error: dict | None,
+        doc_id: str | None, extracted_sha256: str | None,
+    ) -> dict:
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT job_id,state,error_json,doc_id,extracted_sha256 "
+                "FROM managed_write_jobs WHERE job_id=?", (job_id,),
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("managed_write_job_not_found")
+            if row["state"] != "pending":
+                # Completion is idempotent only for the same terminal facts.
+                prior_error = json.loads(row["error_json"]) if row["error_json"] else None
+                if (row["state"], prior_error, row["doc_id"], row["extracted_sha256"]) != (
+                    state, error, doc_id, extracted_sha256
+                ):
+                    raise ProjectStateError("managed_write_result_conflict")
+            else:
+                connection.execute(
+                    "UPDATE managed_write_jobs SET state=?,error_json=?,doc_id=?,extracted_sha256=?,"
+                    "updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                    (state, json.dumps(error, sort_keys=True, separators=(",", ":")) if error else None,
+                     doc_id, extracted_sha256, job_id),
+                )
+            return {"state": state, "job_id": job_id, "error": error}
+
+    def managed_write_status(self, source_path: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT state,job_id,error_json FROM managed_write_jobs "
+                "WHERE source_path=? ORDER BY updated_at DESC,rowid DESC LIMIT 1",
+                (source_path,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "state": row["state"], "job_id": row["job_id"],
+            "error": json.loads(row["error_json"]) if row["error_json"] else None,
         }
 
     def receipt(

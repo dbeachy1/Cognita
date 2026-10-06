@@ -96,6 +96,7 @@ from .reading import (
     read_slice,
 )
 from .readonly import MUTATING_TOOLS, READONLY_TOOLS, is_tool_allowed_remote
+from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES
 from .result_contracts import OUTPUT_SCHEMAS_BY_TOOL, attach_output_schema, build_tool_result
 from .selftest import SELFTEST_TOOL_DEF, SELFTEST_TOOL_NAME, select_self_test_plan
 from .toolargs import reject_unknown_arguments, reject_wrong_types, wire_error
@@ -112,6 +113,7 @@ _operations = OperationLog()
 _SKIP_REQUEST_HEADERS = {
     "host", "authorization", "content-length", "connection", "transfer-encoding",
     "x-cognita-connector-id", "x-cognita-project-key-project",
+    "x-cognita-principal-id",
 }
 _SKIP_RESPONSE_HEADERS = {
     "content-length", "connection", "transfer-encoding", "date", "server",
@@ -140,6 +142,15 @@ def _forward_headers(request: Request) -> dict[str, str]:
     )
     if isinstance(project_key_project, str) and project_key_project:
         headers["x-cognita-project-key-project"] = project_key_project
+    principal = getattr(getattr(request, "state", None), "cognita_principal", None)
+    if principal is not None:
+        principal_id = getattr(principal, "principal_id", None)
+        key_id = getattr(principal, "key_id", None)
+        identity = principal_id or key_id
+        if isinstance(identity, str) and identity:
+            # This value comes only from the gateway's authenticated request
+            # state. The caller-supplied header was removed above.
+            headers["x-cognita-principal-id"] = identity
     return headers
 
 
@@ -437,6 +448,9 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "copy_document", "copy_directory", "remove_directory", "put_asset",
     "update_asset_metadata", "search_assets", "list_assets", "get_asset_info",
     "get_asset", "reindex_assets", "ocr_asset", "remove_asset", "read_document", "list_backups", "diff_backup",
+    "audiobook_inspect_chapter", "audiobook_prepare_chapter",
+    "audiobook_get_chapter", "audiobook_find_chunk",
+    "set_folder_indexing", "list_project_files", "read_project_file",
     "get_self_test_plan", "edit_document", "edit_document_batch", "insert_in_document",
     "restore_backup", "batch", "list_projects",
     "workspace_info", "workspace_list_files", "workspace_stat", "workspace_read_file",
@@ -2139,7 +2153,8 @@ async def _intercept(
                 )
                 return _tool_error(msg_id, reason, message)
 
-            if operation_id is not None and tool not in ASSET_MUTATING_TOOLS:
+            if (operation_id is not None and tool not in ASSET_MUTATING_TOOLS
+                    and tool not in ALL_ADDITIVE_MUTATING_TOOLS):
                 # Check after acquiring the project lock as well as the policy
                 # authorization above. Two simultaneous retries must not both
                 # miss an empty cache and then perform the same write serially.
@@ -2195,11 +2210,19 @@ async def _intercept(
             upstream = await _send_buffered(client, request, worker_url, message)
             if isinstance(upstream, Response):
                 return upstream  # worker died mid-request; nothing to remember
-            return _remember_operation(connector_id, project_name, tool, operation_id, Response(
+            forwarded = Response(
                 upstream.content, status_code=upstream.status_code,
                 headers=_response_headers(upstream),
                 media_type=upstream.headers.get("content-type"),
-            ), msg_id, request_digest)
+            )
+            # These mutations carry their receipt and replay authority in the
+            # project's FULL-synchronous state database. The process-local
+            # gateway cache must not strip their operation_id or shadow that
+            # durable authority.
+            if tool in ALL_ADDITIVE_MUTATING_TOOLS:
+                return _rewrite_buffered_response(forwarded)
+            return _remember_operation(connector_id, project_name, tool, operation_id,
+                                       forwarded, msg_id, request_digest)
     return None
 
 
