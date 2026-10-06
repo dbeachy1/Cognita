@@ -237,6 +237,16 @@ class LocalEngineHost(
             self.core.set_book_index_provenance_recorder(
                 lambda project, record: self.record_book_index_provenance_for(project, record)
             )
+        if hasattr(self.core, "set_book_index_skip_provider"):
+            self.core.set_book_index_skip_provider(
+                lambda project, source, doc_id, extracted_sha256:
+                    self.book_index_skip_is_current(project, source, doc_id, extracted_sha256)
+            )
+        if hasattr(self.core, "set_book_index_move_provider"):
+            self.core.set_book_index_move_provider(
+                lambda project, old_source, new_source:
+                    self.book_index_move_requires_capture(project, old_source, new_source)
+            )
         # One admission queue per host, shared by every project and connector.
         # AssetService remains project-scoped for authorization and path rules.
         self.ocr_capacity_gate = SchedulerOCRCapacityGate(
@@ -795,6 +805,26 @@ class LocalEngineHost(
         if project is None:
             return None
         return self.book_service_for(project).record_index_provenance(record)
+
+    def book_index_skip_is_current(
+        self, project: Project | str, source_path: str, doc_id: str, extracted_sha256: str,
+    ) -> bool | None:
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return None
+        return self.book_service_for(project).index_skip_is_current(
+            source_path, doc_id, extracted_sha256,
+        )
+
+    def book_index_move_requires_capture(
+        self, project: Project | str, old_source: str, new_source: str,
+    ) -> bool:
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return False
+        return self.book_service_for(project).index_move_requires_capture(old_source, new_source)
 
     def book_index_admission_for(
         self, project_or_name, sources, retrieval_profile: str | None = None,

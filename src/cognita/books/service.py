@@ -832,6 +832,42 @@ class BookService:
             raise BookServiceError("state_unavailable", "Index provenance could not be persisted.") from exc
         return record if self.index_provenance_is_current(record) else None
 
+    def index_skip_is_current(
+        self, source_path: str, doc_id: str, extracted_sha256: str,
+    ) -> bool | None:
+        """Return currentness for a registered source, else ``None`` for legacy.
+
+        This deliberately does not apply retrieval-profile admission.  Draft
+        chapters and instruction/workflow sources still need their captured
+        evidence refreshed even where a particular search profile omits them.
+        """
+        state = self.discover_state()
+        config = load_book_config(self.root, state)
+        if state is None or config.config_state != "enabled" or config.layout is None:
+            return None
+        if self._registered_role(config.layout, source_path) is None:
+            return None
+        record = state.indexed_role_provenance(source_path)
+        return bool(
+            record is not None
+            and record.doc_id == doc_id
+            and record.extracted_sha256 == extracted_sha256
+            and self.index_provenance_is_current(record)
+        )
+
+    def index_move_requires_capture(self, old_source: str, new_source: str) -> bool:
+        """Keep book-derived identities out of the generic vector move fast path."""
+        state = self.discover_state()
+        config = load_book_config(self.root, state)
+        if state is None or config.config_state != "enabled" or config.layout is None:
+            return False
+        return (
+            self._registered_role(config.layout, old_source) is not None
+            or self._registered_role(config.layout, new_source) is not None
+            or state.indexed_role_provenance(old_source) is not None
+            or state.indexed_role_provenance(new_source) is not None
+        )
+
     def index_admitted_doc_ids(
         self, sources, retrieval_profile: str | None = None,
     ) -> dict[str, dict[str, Any]]:

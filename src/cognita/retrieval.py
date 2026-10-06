@@ -357,6 +357,8 @@ class RetrievalCore:
         self._book_index_capture_provider: Callable[..., Any] | None = None
         self._book_index_currentness_provider: Callable[..., Any] | None = None
         self._book_index_provenance_recorder: Callable[..., Any] | None = None
+        self._book_index_skip_provider: Callable[..., Any] | None = None
+        self._book_index_move_provider: Callable[..., Any] | None = None
         self._write_locks: dict[str, _ProjectWriteLock] = {}
         self._caches: dict[str, QueryCache] = {}
         # Set by the watcher when a project is attached.  A first targeted
@@ -813,7 +815,14 @@ class RetrievalCore:
                         try:
                             # The immediate stat is both the cheap skip and the first
                             # half of the change-during-read guard.
+                            skip_current = (
+                                self._book_index_skip_is_current(
+                                    project, source, known.doc_id,
+                                    getattr(known, "content_hash", ""),
+                                ) if known is not None else None
+                            )
                             if known is not None and known.tier == tier \
+                                    and skip_current is not False \
                                     and self._stat_matches(filepath, known):
                                 summary["skipped"] += 1
                                 continue
@@ -837,11 +846,12 @@ class RetrievalCore:
                                 doc.category = known.category
                             if known is not None and known.tier == tier \
                                     and known.content_hash == doc.content_hash:
-                                self._root_is_safe(project, documents_dir, root_identity)
-                                if not source_is_current():
-                                    raise RuntimeError("source_unavailable")
-                                await self.store.touch_document(
-                                    project, source, doc.file_mtime, doc.file_size
+                                def final_source_guard():
+                                    self._root_is_safe(project, documents_dir, root_identity)
+                                    if not source_is_current():
+                                        raise RuntimeError("source_unavailable")
+                                await self._touch_captured_document(
+                                    project, doc, before_publish=final_source_guard,
                                 )
                                 summary["metadata_refreshed"] += 1
                                 changed = True
@@ -969,6 +979,14 @@ class RetrievalCore:
     def set_book_index_provenance_recorder(self, provider: Callable[..., Any] | None) -> None:
         """Install the host-owned writer for source-bound role provenance."""
         self._book_index_provenance_recorder = provider
+
+    def set_book_index_skip_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned registered-source smart-skip verifier."""
+        self._book_index_skip_provider = provider
+
+    def set_book_index_move_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned guard for book-derived document moves."""
+        self._book_index_move_provider = provider
 
     @staticmethod
     def _policy_allows_source(
@@ -1506,9 +1524,8 @@ class RetrievalCore:
                                     and known.doc_id == parsed.doc.doc_id):
                                 # Touched but content-identical: refresh stat
                                 # metadata only.
-                                await self.store.touch_document(
-                                    project, source, parsed.doc.file_mtime,
-                                    parsed.doc.file_size,
+                                await self._touch_captured_document(
+                                    project, parsed.doc, before_publish=before_publish,
                                 )
                                 summary["skipped"] += 1
                             else:
@@ -1753,7 +1770,14 @@ class RetrievalCore:
                     # the stored row is now the wrong shape.
                     new_tier = policy.tier_for(filepath.suffix)
                     retier = known is not None and known.tier != new_tier
+                    skip_current = (
+                        self._book_index_skip_is_current(
+                            project, source, known.doc_id,
+                            getattr(known, "content_hash", ""),
+                        ) if known is not None else None
+                    )
                     if (not force and not retier and known
+                            and skip_current is not False
                             and self._stat_matches(filepath, known)):
                         await queue.put(("skip", source, None))
                         continue
@@ -2084,6 +2108,9 @@ class RetrievalCore:
             self.readmit(project, new_source)
             policy = extension_policy
             old_doc = await self.store.get_document(project, old_source)
+            requires_captured_move = self._book_index_move_requires_capture(
+                project, old_source, new_source,
+            )
             # The metadata-only fast path is valid only while the tier holds.
             # Crossing a boundary (notes.md -> notes.py) changes the required
             # SHAPE of the row, so it falls through to the reindex below: the
@@ -2091,7 +2118,7 @@ class RetrievalCore:
             # fresh in its new tier. That is what stops orphaned vectors.
             same_tier = (old_doc is not None
                          and old_doc.tier == policy.tier_for(Path(new_source).suffix))
-            if old_doc is not None and same_tier:
+            if old_doc is not None and same_tier and not requires_captured_move:
                 new_doc_id = compute_doc_id(new_source, old_doc.content_hash)
                 try:
                     moved = await self.store.move_document(
@@ -2109,11 +2136,14 @@ class RetrievalCore:
             # and make sure the old source leaves the index.
             await self.store.delete_document(project, old_source)
             doc = await asyncio.to_thread(
-                self._parse, documents_dir / new_source, documents_dir, policy
+                self._parse, documents_dir / new_source, documents_dir, policy, project=project,
             )
             if doc is None:
                 self.query_cache(project).invalidate()
                 return "", 0
+            doc = await self._capture_book_index_document(project, doc)
+            if old_doc is not None:
+                doc.category = old_doc.category
             chunks = await self._index_parsed(project, doc)
             self.query_cache(project).invalidate()
             return doc.doc_id, chunks
@@ -2149,10 +2179,22 @@ class RetrievalCore:
         provider = self._book_index_currentness_provider
         return bool(provider(project, record)) if provider is not None else True
 
-    async def _replace_captured_document(
-        self, project: str, doc: ParsedDocument, records: list[ChunkRecord],
-        *, before_publish: Callable[[], None] | None = None,
-    ) -> None:
+    def _book_index_skip_is_current(
+        self, project: str, source: str, doc_id: str, extracted_sha256: str,
+    ) -> bool | None:
+        provider = self._book_index_skip_provider
+        return provider(project, source, doc_id, extracted_sha256) if provider is not None else None
+
+    def _book_index_move_requires_capture(
+        self, project: str, old_source: str, new_source: str,
+    ) -> bool:
+        provider = self._book_index_move_provider
+        return bool(provider(project, old_source, new_source)) if provider is not None else False
+
+    def _validate_captured_publication(
+        self, project: str, doc: ParsedDocument, *,
+        before_publish: Callable[[], None] | None = None,
+    ) -> object | None:
         record = doc.book_index_record
         policy = self.effective_index_policy_for(project)
         if policy is not None:
@@ -2163,9 +2205,9 @@ class RetrievalCore:
             raise CapturedIndexPublicationError("source_provenance_changed")
         if before_publish is not None:
             before_publish()
-        await self.store.replace_document(
-            project, self._document_record(doc, content=doc.content if doc.is_registered else None), records,
-        )
+        return record
+
+    async def _record_captured_provenance(self, project: str, record: object | None) -> None:
         if record is None:
             return
         recorder = self._book_index_provenance_recorder
@@ -2176,10 +2218,35 @@ class RetrievalCore:
             persisted = await persisted
         if persisted is None:
             # The source/configuration still matched the captured facts; the
-            # durable provenance write itself was unavailable.  Reporting this
+            # durable provenance write itself was unavailable. Reporting this
             # as stale would falsely tell the caller that a new source version
             # superseded the published document.
             raise CapturedIndexPublicationError("provenance_unavailable")
+
+    async def _replace_captured_document(
+        self, project: str, doc: ParsedDocument, records: list[ChunkRecord],
+        *, before_publish: Callable[[], None] | None = None,
+    ) -> None:
+        record = self._validate_captured_publication(
+            project, doc, before_publish=before_publish,
+        )
+        await self.store.replace_document(
+            project, self._document_record(doc, content=doc.content if doc.is_registered else None), records,
+        )
+        await self._record_captured_provenance(project, record)
+
+    async def _touch_captured_document(
+        self, project: str, doc: ParsedDocument, *,
+        before_publish: Callable[[], None] | None = None,
+    ) -> None:
+        """Refresh metadata and the same captured book facts without re-embedding."""
+        record = self._validate_captured_publication(
+            project, doc, before_publish=before_publish,
+        )
+        await self.store.touch_document(
+            project, doc.source, doc.file_mtime, doc.file_size,
+        )
+        await self._record_captured_provenance(project, record)
 
     async def _index_parsed(
         self, project: str, doc: ParsedDocument, *, before_publish: Callable[[], None] | None = None,
