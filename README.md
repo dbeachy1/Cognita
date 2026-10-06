@@ -7,8 +7,8 @@ The Windows installer and web interface are localized into **U.S. English, Spani
 French, German, Italian, and Brazilian Portuguese**.
 
 **Current release downloads:**
-[Windows installer 15.6.0](https://github.com/dbeachy1/Cognita/releases/download/v15.6.0/Cognita-Setup-15.6.0-r4.exe) ·
-[Linux source installer 15.6.0](https://github.com/dbeachy1/Cognita/releases/download/v15.6.0/cognita-src-15.6.0.tar.gz).
+[Windows installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/Cognita-Setup-15.7.0-r1.exe) ·
+[Linux source installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/cognita-src-15.7.0.tar.gz).
 The Linux archive installs Cognita using its release container images.
 
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
@@ -66,7 +66,7 @@ Download `cognita-src-<version>.tar.gz` from the
 new directory and run the installer from there:
 
 ```bash
-mkdir Cognita && tar -xzf cognita-src-15.6.0.tar.gz -C Cognita
+mkdir Cognita && tar -xzf cognita-src-15.7.0.tar.gz -C Cognita
 cd Cognita
 ./cognita install
 ```
