@@ -472,15 +472,22 @@ def main() -> None:
             ffprobe_executable=config.ffprobe_executable,
         )
 
+        leading_gap_frames = 220
+        interchapter_gap_frames = 441
+        internal_gap_frames = 73
+        original_take_frames = 44_100
+        replacement_take_frames = 88_200
         takes_by_chapter = {}
         prepared_by_chapter = {}
         for index, chapter_id in enumerate(("chapter-one", "chapter-two")):
             prepared = prepare_chapter(service, chapter_id, prose_by_chapter[chapter_id],
                                        f"prepare-{chapter_id}-v1", "softly")
             prepared_by_chapter[chapter_id] = prepared
+            assert len(prepared["chunks"]) == 2
             takes_by_chapter[chapter_id] = [
                 make_take(service, prepared, chapter_id, chunk["chunk_id"],
-                          f"{chapter_id}-{chunk['chunk_id']}-v1", index * 10 + part)
+                          f"{chapter_id}-{chunk['chunk_id']}-v1", index * 10 + part,
+                          frames=original_take_frames)
                 for part, chunk in enumerate(prepared["chunks"], start=1)
             ]
 
@@ -489,21 +496,26 @@ def main() -> None:
             first_acceptances[chapter_id] = chapter_build(
                 service, chapter_id, prepared_by_chapter[chapter_id],
                 takes_by_chapter[chapter_id], f"build-{chapter_id}-v1", None,
-                gaps=[{"before_id": f"{chapter_id}-closing", "sample_frames": "73"}],
+                gaps=[{"before_id": f"{chapter_id}-closing", "sample_frames": str(internal_gap_frames)}],
             )
 
         book_gaps = [
-            {"before_id": "chapter-one", "sample_frames": "220"},
-            {"before_id": "chapter-two", "sample_frames": "441"},
+            {"before_id": "chapter-one", "sample_frames": str(leading_gap_frames)},
+            {"before_id": "chapter-two", "sample_frames": str(interchapter_gap_frames)},
         ]
         initial_book = book_build(service, "build-whole-book-v1", None, gaps=book_gaps)
         initial_timeline_path = service.root / initial_book["build"]["timeline_filepath"]
         initial_timeline_bytes = initial_timeline_path.read_bytes()
         initial_book_two_start = next(
             int(entry["start_frame"]) for entry in initial_book["timeline"]["entries"]
-            if entry["source_id"] == "chapter-two"
+            if entry["source_id"] == "chapter-two" and entry["kind"] == "audio"
         )
-        assert initial_book_two_start == 88_934
+        expected_initial_book_two_start = (
+            leading_gap_frames
+            + (original_take_frames + internal_gap_frames + original_take_frames)
+            + interchapter_gap_frames
+        )
+        assert initial_book_two_start == expected_initial_book_two_start == 88_934
         leading_gap = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"], "seconds": 0.0},
@@ -512,14 +524,20 @@ def main() -> None:
                 for match in leading_gap["matches"]] == [("chapter-one", ["chapter-one-opening"], "silence")]
         chapter_one_start = next(
             int(entry["start_frame"]) for entry in initial_book["timeline"]["entries"]
-            if entry["source_id"] == "chapter-one"
+            if entry["source_id"] == "chapter-one" and entry["kind"] == "audio"
         )
         chapter_one_children = next(
             entry["child_entries"] for entry in initial_book["timeline"]["entries"]
-            if entry["source_id"] == "chapter-one"
+            if entry["source_id"] == "chapter-one" and entry["kind"] == "audio"
         )
+        assert chapter_one_start == leading_gap_frames
         internal_gap = next(entry for entry in chapter_one_children if entry["kind"] == "silence")
-        assert int(internal_gap["start_frame"]) == chapter_one_start + 44_100
+        assert int(internal_gap["start_frame"]) == chapter_one_start + original_take_frames
+        expected_interchapter_gap_start = (
+            leading_gap_frames
+            + original_take_frames + internal_gap_frames + original_take_frames
+        )
+        assert expected_interchapter_gap_start == 88_493
         internal_silence = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT, "chapter_id": "chapter-one",
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
@@ -533,7 +551,7 @@ def main() -> None:
         interchapter_gap = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
-                      "seconds": 88_493 / 44_100},
+                      "seconds": expected_interchapter_gap_start / original_take_frames},
         }))
         assert [(match["chapter_id"], match["chunk_ids"], match["segment_kind"])
                 for match in interchapter_gap["matches"]] == [
@@ -543,7 +561,7 @@ def main() -> None:
         filtered_interchapter = service.find_chunk(FindChunkRequest.model_validate({
             "project": PROJECT, "chapter_id": "chapter-two", "limit": 1,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
-                      "seconds": 88_493 / 44_100},
+                      "seconds": expected_interchapter_gap_start / original_take_frames},
         }))
         assert [(match["chapter_id"], match["chunk_ids"])
                 for match in filtered_interchapter["matches"]] == [("chapter-two", ["chapter-two-opening"])]
@@ -551,7 +569,7 @@ def main() -> None:
         cursor_query = FindChunkRequest.model_validate({
             "project": PROJECT, "limit": 1,
             "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
-                      "seconds": 88_493 / 44_100},
+                      "seconds": expected_interchapter_gap_start / original_take_frames},
         })
         cursor_page = service.find_chunk(cursor_query)
         assert cursor_page["next_cursor"] is not None
@@ -609,12 +627,13 @@ def main() -> None:
         assert prior_head["accepted_build_id"] == first_acceptances["chapter-one"]["build"]["build_id"]
         replacement = make_take(
             service, refreshed, "chapter-one", refreshed["chunks"][0]["chunk_id"],
-            "chapter-one-retake-opening", 91, frames=88_200,
+            "chapter-one-retake-opening", 91, frames=replacement_take_frames,
         )
         retake_takes = [replacement, prior_second_take]
         retake_acceptance = chapter_build(
             service, "chapter-one", refreshed, retake_takes,
             "build-chapter-one-retake", first_acceptances["chapter-one"]["commit"]["head_revision"],
+            gaps=[{"before_id": "chapter-one-closing", "sample_frames": str(internal_gap_frames)}],
         )
         assert retake_acceptance["commit"]["head_revision"] == 2
         previous_build = first_acceptances["chapter-one"]["build"]["build_id"]
@@ -636,9 +655,17 @@ def main() -> None:
         )
         second_book_two_start = next(
             int(entry["start_frame"]) for entry in second_book["timeline"]["entries"]
-            if entry["source_id"] == "chapter-two"
+            if entry["source_id"] == "chapter-two" and entry["kind"] == "audio"
         )
-        assert second_book_two_start == 133_034
+        expected_second_book_two_start = (
+            leading_gap_frames
+            + (replacement_take_frames + internal_gap_frames + original_take_frames)
+            + interchapter_gap_frames
+        )
+        assert second_book_two_start == expected_second_book_two_start == 133_034
+        assert second_book_two_start - initial_book_two_start == (
+            replacement_take_frames - original_take_frames
+        )
         assert second_book["dependencies"][1]["chapter_build_id"] == initial_book["dependencies"][1]["chapter_build_id"]
         assert initial_timeline_path.read_bytes() == initial_timeline_bytes
         old_chapter_one_time = service.find_chunk(FindChunkRequest.model_validate({
@@ -664,7 +691,7 @@ def main() -> None:
             service.find_chunk(FindChunkRequest.model_validate({
                 "project": PROJECT, "limit": 1, "cursor": cursor_page["next_cursor"],
                 "query": {"kind": "timestamp", "build_id": initial_book["build"]["build_id"],
-                          "seconds": 88_493 / 44_100},
+                          "seconds": expected_interchapter_gap_start / original_take_frames},
             }))
         except BookServiceError as error:
             assert error.reason == "invalid_cursor"
