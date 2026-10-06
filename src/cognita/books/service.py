@@ -257,6 +257,142 @@ class BookService:
         )
         return current == record
 
+    def index_status(
+        self,
+        request: dto.IndexStatusRequest,
+        *,
+        indexed_sources: set[str] | None,
+        effective_index=None,
+    ) -> dict[str, Any]:
+        """Read registered source/index facts without starting index work.
+
+        The page cursor binds the structural catalog, current layout, and effective
+        folder policy.  A caller must refresh instead of combining two revisions.
+        """
+        state = self.discover_state()
+        config = self.config()
+        if state is None or config.config_state != "enabled" or config.layout is None:
+            raise BookServiceError("configuration_conflict", "Book configuration is not enabled.")
+        layout = config.layout
+        rows: list[tuple[str, str, Any, str]] = []
+        for item in layout.indexed_references:
+            rows.append((item.filepath, item.role, None, "not_applicable"))
+        for item in layout.indexed_instructions:
+            rows.append((item.filepath, item.role, None, "not_applicable"))
+        for item in layout.indexed_workflow_documents:
+            rows.append((item.filepath, item.role, None, "not_applicable"))
+        for chapter in layout.chapters:
+            rows.append((chapter.working_filepath, "chapter_working", chapter, "not_applicable"))
+            if chapter.summary_filepath:
+                rows.append((chapter.summary_filepath, "chapter_summary", chapter, "unapproved"))
+        if "chapter_id" in request.model_fields_set:
+            rows = [row for row in rows if row[2] is not None and row[2].chapter_id == request.chapter_id]
+        if "filepath" in request.model_fields_set:
+            rows = [row for row in rows if row[0] == request.filepath]
+        rows.sort(key=lambda row: row[0].casefold())
+
+        policy = state.folder_policy()
+        pending_jobs = state.pending_policy_jobs()
+        entries: list[dict[str, Any]] = []
+        for path, role, chapter, default_freshness in rows:
+            index_decision = effective_index.decision(path) if effective_index is not None else None
+            effective_rule = "global_inclusion" if index_decision is None else index_decision.reason
+            if index_decision is not None and index_decision.matched_path is not None:
+                effective_rule = f"{effective_rule}:{index_decision.matched_path}"
+            try:
+                raw = _read_bytes(self.root, path)
+                raw_sha = hashlib.sha256(raw).hexdigest()
+                source_error = None
+            except BookServiceError as exc:
+                raw_sha = None
+                source_error = {"code": exc.reason, "message": "registered source is unreadable"}
+            record = state.indexed_role_provenance(path)
+            managed_write = state.managed_write_status(path)
+            chapter_state = None
+            if chapter is not None and raw_sha is not None:
+                try:
+                    chapter_state = validate_chapter_state(
+                        _read_bytes(self.root, chapter.chapter_state_filepath)
+                    )
+                except (BookServiceError, ValueError, ProjectionError):
+                    chapter_state = None
+            editorial_status = chapter_state.editorial_status if chapter_state is not None else None
+            summary_freshness = default_freshness
+            if role == "chapter_summary":
+                if chapter_state is not None and chapter_state.summary is not None and chapter_state.summary.approved:
+                    summary_freshness = "fresh" if record is not None and self.index_provenance_is_current(record) else "stale"
+                elif raw_sha is not None:
+                    summary_freshness = "unapproved"
+                else:
+                    summary_freshness = "stale"
+            pending = next((job for job in pending_jobs if (
+                isinstance(job["details"].get("path"), str)
+                and (not job["details"]["path"] or path == job["details"]["path"]
+                     or path.startswith(job["details"]["path"] + "/"))
+            )), None)
+            if source_error is not None:
+                status, error = "blocked", source_error
+            elif index_decision is not None and not index_decision.indexed:
+                status, error = "excluded", None
+            elif pending is not None:
+                status, error = "pending", {
+                    "code": "index_cleanup_pending",
+                    "message": "derived index cleanup is pending",
+                }
+            elif (managed_write is not None
+                  and managed_write["state"] in {"pending", "blocked", "failed", "stale", "excluded"}):
+                # Publication already saved the source bytes.  Its durable
+                # indexing receipt is more specific than an absent provenance
+                # record and survives an index-store restart.
+                status, error = managed_write["state"], managed_write["error"]
+            elif indexed_sources is None:
+                status, error = "blocked", {
+                    "code": "index_unavailable", "message": "derived index is unavailable",
+                }
+            elif record is None:
+                status, error = "pending", None
+            elif not self.index_provenance_is_current(record):
+                status, error = "stale", {
+                    "code": "source_changed", "message": "indexed source facts are stale",
+                }
+            elif path in indexed_sources:
+                status, error = "indexed", None
+            else:
+                status, error = "pending", None
+            entries.append({
+                "filepath": path, "chapter_id": chapter.chapter_id if chapter else None,
+                "role": role, "index_state": status, "effective_rule": effective_rule,
+                "source_raw_sha256": raw_sha,
+                "indexed_source_raw_sha256": record.raw_sha256 if record else None,
+                "extracted_text_sha256": record.extracted_sha256 if record else None,
+                "source_revision": config.layout_sha256,
+                "indexed_revision": record.layout_sha256 if record else None,
+                "extraction_version": record.extraction_version if record else None,
+                "editorial_status": editorial_status, "summary_freshness": summary_freshness,
+                "last_indexed_at": None, "error": error,
+            })
+
+        cursor_view = canonical_json_sha256({
+            "layout_sha256": config.layout_sha256,
+            "policy_revision": policy.policy_revision,
+            "chapter_id": request.chapter_id if "chapter_id" in request.model_fields_set else None,
+            "filepath": request.filepath if "filepath" in request.model_fields_set else None,
+            "catalog": entries,
+        })
+        limit = request.limit if "limit" in request.model_fields_set else 100
+        offset = _cursor_offset(request.cursor, cursor_view) if "cursor" in request.model_fields_set else 0
+        if offset > len(entries):
+            raise BookServiceError("invalid_cursor", "The status cursor is outside the current catalog.")
+        page = entries[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "policy_revision": policy.policy_revision + 1,
+            "catalog_revision": layout.layout_revision,
+            "entries": page,
+            "has_more": next_offset < len(entries),
+            "next_cursor": _cursor(cursor_view, next_offset) if next_offset < len(entries) else None,
+        }
+
     def record_index_provenance(
         self, source_path: str, doc_id: str, extracted_sha256: str,
         raw_sha256: str, extraction_version: str,

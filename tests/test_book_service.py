@@ -16,6 +16,7 @@ from cognita.books.models import (
     GetChapterRequest,
     GetJobRequest,
     ImportAudioRequest,
+    IndexStatusRequest,
     InspectRequest,
     PrepareRequest,
     RecordGenerationRequest,
@@ -579,3 +580,87 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
     assert chapter["accepted_build_id"] == candidate["build_id"]
     assert chapter["takes"][0]["take_id"] == take["take_id"]
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == "hello"
+
+def test_index_status_reports_pending_and_blocked_registered_sources(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    request = IndexStatusRequest.model_validate({"project": "fixture"})
+    pending = service.index_status(request, indexed_sources=set())
+    assert pending["entries"]
+    assert all(entry["index_state"] == "pending" for entry in pending["entries"])
+    blocked = service.index_status(request, indexed_sources=None)
+    assert all(entry["index_state"] == "blocked" for entry in blocked["entries"])
+    assert all(entry["error"]["code"] == "index_unavailable" for entry in blocked["entries"])
+
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    state.begin_managed_write(
+        job_id="failed-write", source_path="Project Files/ref.md", bytes_sha256="a" * 64,
+        operation_id="write-ref",
+    )
+    state.finish_managed_write(
+        job_id="failed-write", state="failed",
+        error={"code": "index_failed", "message": "Synthetic index failure."},
+        doc_id=None, extracted_sha256=None,
+    )
+    failed = service.index_status(
+        IndexStatusRequest.model_validate({"project": "fixture", "filepath": "Project Files/ref.md"}),
+        indexed_sources=set(),
+    )
+    assert failed["entries"][0]["index_state"] == "failed"
+    assert failed["entries"][0]["error"]["code"] == "index_failed"
+
+
+def test_index_status_binds_pages_and_reports_stale_and_excluded_sources(tmp_path):
+    from cognita.books.policy import EffectiveIndexPolicy
+    from cognita.parsing import parse_file
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    path = "Project Files/ref.md"
+    parsed = parse_file(tmp_path / path, tmp_path)
+    assert parsed is not None
+    raw_sha = hashlib.sha256((tmp_path / path).read_bytes()).hexdigest()
+    assert service.record_index_provenance(
+        path, parsed.doc_id, parsed.content_hash, raw_sha, "fixture-extraction-v1",
+    ) is not None
+
+    first = service.index_status(
+        IndexStatusRequest.model_validate({"project": "fixture", "limit": 1}),
+        indexed_sources={path},
+    )
+    assert len(first["entries"]) == 1 and first["has_more"] is True
+    second = service.index_status(
+        IndexStatusRequest.model_validate({
+            "project": "fixture", "limit": 1, "cursor": first["next_cursor"],
+        }),
+        indexed_sources={path},
+    )
+    assert second["entries"][0]["filepath"] != first["entries"][0]["filepath"]
+
+    (tmp_path / path).write_text("Reference changed", encoding="utf-8")
+    stale = service.index_status(
+        IndexStatusRequest.model_validate({"project": "fixture", "filepath": path}),
+        indexed_sources={path},
+    )
+    assert stale["entries"][0]["index_state"] == "stale"
+    assert stale["entries"][0]["error"]["code"] == "source_changed"
+    with pytest.raises(BookServiceError) as invalid:
+        service.index_status(
+            IndexStatusRequest.model_validate({
+                "project": "fixture", "limit": 1, "cursor": first["next_cursor"],
+            }),
+            indexed_sources={path},
+        )
+    assert invalid.value.reason == "invalid_cursor"
+
+    policy = EffectiveIndexPolicy(
+        [{"path": "Project Files", "indexed": False}],
+        book_layout=service.config().layout,
+    )
+    excluded = service.index_status(
+        IndexStatusRequest.model_validate({"project": "fixture", "filepath": path}),
+        indexed_sources={path}, effective_index=policy,
+    )
+    assert excluded["entries"][0]["index_state"] == "excluded"
+    assert excluded["entries"][0]["effective_rule"] == "folder_exclusion:project files"

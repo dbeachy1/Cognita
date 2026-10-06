@@ -127,7 +127,7 @@ async def test_connector_scoped_catalog_and_projects(env):
     tools = listed.json()["result"]["tools"]
     # Implemented book inspection, generation evidence, raw-import, durable
     # chapter assembly and explicit acceptance plus storage are present.
-    assert listed.status_code == 200 and len(tools) == 71
+    assert listed.status_code == 200 and len(tools) == 72
     # Workspace tools are principal-scoped, not project-scoped, so they carry no
     # `project` argument; every Knowledge tool but the two catalog tools does.
     project_tools = [tool for tool in tools
@@ -155,7 +155,7 @@ async def test_retired_v3_fails_closed_and_current_catalog_is_bound(env):
 
     listed = await _post(app, connector_id, token, _rpc("tools/list"))
     tools = listed.json()["result"]["tools"]
-    assert listed.status_code == 200 and len(tools) == 71
+    assert listed.status_code == 200 and len(tools) == 72
     assert all("outputSchema" in tool for tool in tools)
 
     current = await _post(app, connector_id, token, _rpc(

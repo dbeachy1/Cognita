@@ -895,6 +895,7 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
         "audiobook_record_generation", "audiobook_import_audio",
         "audiobook_build", "audiobook_commit_build",
         "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
+        "book_get_index_status",
     }
     schemas.update({name: schema for name, schema in BOOK_OUTPUT_SCHEMAS.items()
                     if name in implemented_book_tools})

@@ -15,6 +15,7 @@ from cognita.registry import Project, Registry
 from cognita.store import SchemaVersionMismatch, Store
 from cognita.tokens import generate_token, hash_token
 from cognita.retrieval import RetrievalCore
+from cognita.books.state import ProjectState
 
 from retrieval_fakes import HashEmbedder, OverlapReranker
 from test_book_service import _fixture
@@ -28,7 +29,8 @@ def _rpc(method: str, params=None, msg_id=1):
 def host(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
-    _fixture(docs)
+    _fixture(docs, bound=True)
+    ProjectState.initialize(docs)
     registry = Registry(tmp_path / "registry.yaml")
     registry.add(Project(
         name="fixture", documents_dir=docs, data_dir=tmp_path / "data",
@@ -55,7 +57,7 @@ async def test_gateway_catalog_and_source_reads_work_during_postgres_outage(host
     names = {item["name"] for item in listed.json()["result"]["tools"]}
     assert {
         "audiobook_inspect_chapter", "audiobook_prepare_chapter",
-        "audiobook_get_chapter", "audiobook_find_chunk",
+        "audiobook_get_chapter", "audiobook_find_chunk", "book_get_index_status",
         "set_folder_indexing", "list_project_files", "read_project_file",
     }.issubset(names)
 
@@ -73,6 +75,14 @@ async def test_gateway_catalog_and_source_reads_work_during_postgres_outage(host
     assert payload["status"] == "success"
     assert payload["data"]["speech_text"] == "hello"
 
+    status = await _post(host, _rpc("tools/call", {
+        "name": "book_get_index_status", "arguments": {"project": "fixture", "limit": 1},
+    }, msg_id=7))
+    status_payload = json.loads(status.json()["result"]["content"][0]["text"])
+    assert status_payload["status"] == "success"
+    assert status_payload["data"]["entries"][0]["index_state"] == "blocked"
+    assert status_payload["data"]["entries"][0]["error"]["code"] == "index_unavailable"
+
     files = await _post(host, _rpc("tools/call", {
         "name": "list_project_files",
         "arguments": {"project": "fixture", "path": "Chapters/1"},
@@ -82,7 +92,7 @@ async def test_gateway_catalog_and_source_reads_work_during_postgres_outage(host
     assert {item["path"] for item in file_payload["data"]["entries"]} >= {
         "Chapters/1/chapter.docx", "Chapters/1/chapter_audio-tags.docx",
     }
-    assert not (host.registry.get("fixture").documents_dir / ".cognita-storage").exists()
+    assert (host.registry.get("fixture").documents_dir / ".cognita-storage").exists()
 
 
 @pytest.mark.asyncio

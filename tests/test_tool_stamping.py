@@ -107,7 +107,7 @@ async def test_all_descriptions_stamped_writable(env):
     app, tok_rw, _ = env
     tools = await tools_of(app, tok_rw)
     names = {t["name"] for t in tools}
-    assert len(tools) == 57  # 13.0.1: 40 Knowledge + 17 Workspace tools, Workspace on by default
+    assert len(tools) == 72
     assert "edit_document" in names
     for tool in tools:
         assert "folder:" not in tool.get("description", "").lower(), tool["name"]
@@ -137,12 +137,12 @@ async def test_readonly_list_stamped_with_own_name(env):
     tools = await tools_of(app, tok_ro)
     names = {t["name"] for t in tools}
     assert "update_document" in names
-    assert len(tools) == 57  # 13.0.1: 40 Knowledge + 17 Workspace tools, Workspace on by default
+    assert len(tools) == 72
 
 
 def test_public_catalog_has_no_project_or_folder_stamp():
     from cognita.proxy import public_tool_catalog
 
     tools = public_tool_catalog()
-    assert len(tools) == 57
+    assert len(tools) == 72
     assert all("folder:" not in (tool.get("description") or "").lower() for tool in tools)

@@ -28,7 +28,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_asset_info",
         "get_asset",
         "ocr_asset",
-        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk",
+        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk", "book_get_index_status",
         "list_project_files", "read_project_file",
     }
 )
