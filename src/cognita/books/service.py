@@ -1303,6 +1303,11 @@ class BookService:
             "version": version, "query": query_value,
             "chapter_ids": chapter_ids if not isinstance(request.query, dto.TimestampQuery) else [],
             "snapshot_ids": searched_snapshots,
+            "mapping": [
+                (match["snapshot_id"], match["chunk_ids"], match["current_chunk_ids"],
+                 match["current_take_ids"], match["current_mapping_status"])
+                for match in matches
+            ],
         })
         limit = request.limit if "limit" in request.model_fields_set else 50
         offset = _cursor_offset(request.cursor, cursor_view) if "cursor" in request.model_fields_set else 0
