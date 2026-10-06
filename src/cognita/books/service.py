@@ -4836,8 +4836,7 @@ class BookService:
         limit = request.limit if "limit" in request.model_fields_set else 100
         view = canonical_json_sha256({"book": layout.book_id, "layout_revision": layout.layout_revision,
                                       "head": head["head_revision"] if head else None,
-                                      "metadata": [(kind, value if isinstance(value, str) else value.get("chapter_id", value.get("build_id")))
-                                                   for kind, value in metadata]})
+                                      "metadata": metadata})
         offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
         if offset > len(metadata):
             raise BookServiceError("invalid_cursor", "The book cursor is invalid or stale.")
@@ -5090,7 +5089,9 @@ def _unlink_owned_build_stage(path: Path, identity: _OwnedDirectoryIdentity) -> 
         if not identity.matches_file(path):
             raise OSError("owned build stage identity changed or was not captured")
         path.unlink()
-        identity.files.pop(path.name, None)
+        owned_file = identity.files.pop(path.name, None)
+        if owned_file is not None:
+            owned_file.close()
     except FileNotFoundError:
         return
     except (OSError, ValueError) as exc:
@@ -5191,7 +5192,9 @@ def _cleanup_owned_build_files(project_root: Path, directory: Path, identity: _O
             if not identity.matches_file(candidate):
                 raise OSError("owned artifact identity changed or was not captured")
             candidate.unlink()
-            identity.files.pop(candidate.name, None)
+            owned_file = identity.files.pop(candidate.name, None)
+            if owned_file is not None:
+                owned_file.close()
         except FileNotFoundError:
             continue
         except OSError as exc:

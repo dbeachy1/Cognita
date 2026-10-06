@@ -2598,6 +2598,33 @@ def test_get_book_reports_registered_order_and_unready_production_heads(tmp_path
     assert second["chapters_not_ready"] == [{"chapter_id": "ch1", "reason": "no_accepted_production_head"}]
 
 
+def test_get_book_cursor_rejects_changed_accepted_chapter_dependency(tmp_path):
+    service, _state, stored, *_rest = _production_prepared_fixture(tmp_path)
+    prepared = stored["payload"]["result"]
+    first_take = _import_native_take(service, prepared, "main", operation_prefix="book-cursor-first-take")
+    first_head = _build_and_accept_production_chapter(
+        service, prepared, first_take, operation_prefix="book-cursor-first", expected_head=None,
+    )
+    first_page = service.get_book(GetBookRequest.model_validate({
+        "project": "fixture", "book_id": "fixture-book", "limit": 1,
+    }))
+    assert first_page["has_more"] and first_page["next_cursor"]
+    assert first_page["head_revision"] is None
+
+    second_take = _import_native_take(service, prepared, "main", operation_prefix="book-cursor-second-take")
+    second_head = _build_and_accept_production_chapter(
+        service, prepared, second_take, operation_prefix="book-cursor-second", expected_head=1,
+    )
+    assert second_head["accepted_build_id"] != first_head["accepted_build_id"]
+    assert second_head["head_revision"] == 2
+    with pytest.raises(BookServiceError) as stale:
+        service.get_book(GetBookRequest.model_validate({
+            "project": "fixture", "book_id": "fixture-book", "limit": 1,
+            "cursor": first_page["next_cursor"],
+        }))
+    assert stale.value.reason == "invalid_cursor"
+
+
 def test_invalid_binding_fails_closed_instead_of_reentering_bootstrap(tmp_path):
     service, _prose, _tagged = _fixture(tmp_path)
     (tmp_path / ".cognita-book-binding.json").write_text(
@@ -4316,9 +4343,30 @@ def test_owned_build_cleanup_removes_unchanged_created_output(tmp_path):
     owned.write_bytes(b"task-owned")
     identity = service_module._owned_directory_identity(build_dir)
     service_module._capture_owned_build_file(owned, identity)
+    owned_identity = identity.files[owned.name]
     try:
         service_module._cleanup_owned_build_files(tmp_path, build_dir, identity, ("build.json",))
         assert not build_dir.exists()
+        assert owned_identity.handle == -1
+        assert identity.files == {}
+    finally:
+        identity.close()
+
+
+def test_owned_build_stage_cleanup_closes_retained_file_handle(tmp_path):
+    build_dir = tmp_path / "Audiobook/Chapters/1/builds/owned-stage"
+    build_dir.mkdir(parents=True)
+    stage = build_dir / "build.json.stage"
+    stage.write_bytes(b"task-owned")
+    identity = service_module._owned_directory_identity(build_dir)
+    service_module._capture_owned_build_file(stage, identity)
+    owned_identity = identity.files[stage.name]
+    try:
+        service_module._unlink_owned_build_stage(stage, identity)
+        assert not stage.exists()
+        assert owned_identity.handle == -1
+        assert identity.files == {}
+        build_dir.rmdir()
     finally:
         identity.close()
 
