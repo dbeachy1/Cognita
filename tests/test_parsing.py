@@ -1,6 +1,8 @@
 """Unit tests for cognita.parsing — format extraction, ids, discovery, excludes."""
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -80,14 +82,14 @@ def test_stat_is_never_newer_than_the_content_it_describes(docs, monkeypatch):
     f = docs / "raced.md"
     f.write_text(original, encoding="utf-8")
     pre_size = f.stat().st_size  # not len(original): Windows writes \n as \r\n
-    real = parsing._EXTRACTORS[".md"]
+    real = parsing._BYTE_EXTRACTORS[".md"]
 
-    def racing_extractor(path):
-        text = real(path)  # the read succeeds...
-        path.write_text(original + "\nappended by a concurrent writer\n", encoding="utf-8")
+    def racing_extractor(raw):
+        text = real(raw)  # parse_file has already captured the source bytes...
+        f.write_text(original + "\nappended by a concurrent writer\n", encoding="utf-8")
         return text  # ...and a write lands before we return
 
-    monkeypatch.setitem(parsing._EXTRACTORS, ".md", racing_extractor)
+    monkeypatch.setitem(parsing._BYTE_EXTRACTORS, ".md", racing_extractor)
     doc = parse_file(f, docs)
 
     assert doc.content.startswith("# Original")
@@ -96,6 +98,77 @@ def test_stat_is_never_newer_than_the_content_it_describes(docs, monkeypatch):
     # which no longer matches disk — that mismatch is what re-reads it next pass.
     assert doc.file_size == pre_size
     assert doc.file_size != f.stat().st_size
+
+
+def test_parse_file_stats_before_one_captured_read(docs, monkeypatch):
+    """Validation and extraction must consume one buffer, not reopen a changed path."""
+    f = docs / "captured.md"
+    original = "# Captured\n\nfirst bytes only\n"
+    replacement = "# Replacement\n\nnew bytes must not be indexed\n"
+    f.write_text(original, encoding="utf-8")
+    before = f.stat()
+    path_type = type(f)
+    original_read_bytes = path_type.read_bytes
+    reads: list[Path] = []
+
+    def replace_after_capture(path):
+        if path == f:
+            reads.append(path)
+            raw = original_read_bytes(path)
+            f.write_text(replacement, encoding="utf-8")
+            return raw
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(path_type, "read_bytes", replace_after_capture)
+    parsed = parse_file(f, docs)
+
+    assert reads == [f]
+    assert parsed.content == original
+    assert parsed.content_hash == hashlib.sha256(original.encode()).hexdigest()
+    assert parsed.file_size == before.st_size
+    assert parsed.file_size != f.stat().st_size
+
+
+def test_parse_file_docx_matches_existing_office_extractor(docs):
+    """The BytesIO path preserves the established DOCX heading/table shape."""
+    import docx
+    from cognita.parsing import _extract_docx
+
+    path = docs / "office.docx"
+    document = docx.Document()
+    document.add_heading("A heading", level=2)
+    document.add_paragraph("ordinary paragraph")
+    table = document.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "left"
+    table.rows[0].cells[1].text = "right"
+    document.save(path)
+
+    assert parse_file(path, docs).content == _extract_docx(path)
+
+
+def test_parse_file_xlsx_and_pptx_match_existing_office_extractors(docs):
+    """All Office loaders accept the captured in-memory source stream."""
+    import openpyxl
+    from pptx import Presentation
+    from cognita.parsing import _extract_pptx, _extract_xlsx
+
+    xlsx_path = docs / "sheet.xlsx"
+    workbook = openpyxl.Workbook()
+    workbook.active.title = "Data"
+    workbook.active.append(["name", "count"])
+    workbook.active.append(["bolt", 4])
+    workbook.save(xlsx_path)
+    workbook.close()
+
+    pptx_path = docs / "slides.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide.shapes.title.text = "Title"
+    slide.placeholders[1].text = "body"
+    presentation.save(pptx_path)
+
+    assert parse_file(xlsx_path, docs).content == _extract_xlsx(xlsx_path)
+    assert parse_file(pptx_path, docs).content == _extract_pptx(pptx_path)
 
 
 def test_empty_file_parses_to_none(docs):

@@ -179,11 +179,12 @@ def compute_doc_id(source: str, content_hash: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Format extractors: Path -> text
+# Format extractors.  parse_file uses byte-backed bodies below; path wrappers
+# remain narrow compatibility helpers for direct diagnostics/tests.
 # ---------------------------------------------------------------------------
 
 
-def _read_text(filepath: Path) -> str:
+def _read_text_bytes(raw: bytes) -> str:
     """Decode a text file, sniffing the BOM before assuming UTF-8.
 
     This was `read_text(encoding="utf-8", errors="ignore")` with no sniff, which
@@ -204,7 +205,6 @@ def _read_text(filepath: Path) -> str:
     defensively afterwards so a mis-sniffed file degrades to bad text rather than
     to a failed transaction.
     """
-    raw = filepath.read_bytes()
     # Keep the historical BOM behavior for this low-level compatibility helper
     # (some callers use it to inspect UTF-16 exports), while all UTF-8 indexing
     # uses the shared 9.2 tolerant view below.
@@ -236,20 +236,29 @@ def _read_text(filepath: Path) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _validate_text_bytes(filepath: Path) -> None:
+def _read_text(filepath: Path) -> str:
+    """Compatibility helper for callers that intentionally parse a path."""
+    return _read_text_bytes(filepath.read_bytes())
+
+
+def _validate_text_bytes(raw: bytes) -> None:
     """Reject incompatible/binary bytes before a text extractor can mutate them."""
-    view = classify_text_bytes(filepath.read_bytes())
+    view = classify_text_bytes(raw)
     if not view.accepted:
         raise ValueError(f"{view.reason}: {view.message}")
 
 
-def _extract_markdown(filepath: Path) -> str:
-    content = _read_text(filepath)
+def _extract_markdown_bytes(raw: bytes) -> str:
+    content = _read_text_bytes(raw)
     # Strip YAML frontmatter, as 3.x did — metadata noise, not prose.
     frontmatter = re.match(r"^---\n(.*?)\n---\n", content, re.DOTALL)
     if frontmatter:
         content = content[frontmatter.end():]
     return content
+
+
+def _extract_markdown(filepath: Path) -> str:
+    return _extract_markdown_bytes(filepath.read_bytes())
 
 
 # PDFium is not thread-safe (pypdfium2 README, "Incompatibility with Threading"), and
@@ -261,7 +270,7 @@ def _extract_markdown(filepath: Path) -> str:
 _PDFIUM_LOCK = threading.Lock()
 
 
-def _extract_pdf(filepath: Path) -> str:
+def _extract_pdf_bytes(data: bytes, *, name: str) -> str:
     """PDF text through pypdfium2 (DESIGN-14.0 §1). Shape unchanged from the PyMuPDF
     version: "[Page N]\\n<text>" per page that has text, N counting skipped pages,
     joined by a blank line.
@@ -274,11 +283,8 @@ def _extract_pdf(filepath: Path) -> str:
     import pypdfium2 as pdfium  # imported lazily; keeps the import off the startup path
     import pypdfium2.raw as pdfium_raw
 
-    name = filepath.name
-    # The whole file, read by us and closed at once. `data` must stay alive until
-    # the document is closed: PDFium reads from this buffer, it does not copy it.
-    with open(filepath, "rb") as fh:
-        data = fh.read()
+    # `data` must stay alive until the document is closed: PDFium reads from
+    # this buffer, it does not copy it.
     with _PDFIUM_LOCK:
         # Loaded through the raw API, not PdfDocument(path_or_stream). pypdfium2
         # 5.13 treats "failed to load" and "loaded, zero pages" alike: it raises
@@ -334,18 +340,26 @@ def _extract_pdf(filepath: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_json(filepath: Path) -> str:
-    raw = _read_text(filepath)
+def _extract_pdf(filepath: Path) -> str:
+    return _extract_pdf_bytes(filepath.read_bytes(), name=filepath.name)
+
+
+def _extract_json_bytes(raw: bytes) -> str:
+    text = _read_text_bytes(raw)
     try:
-        return json.dumps(json.loads(raw), indent=2, ensure_ascii=False)
+        return json.dumps(json.loads(text), indent=2, ensure_ascii=False)
     except json.JSONDecodeError:
-        return raw
+        return text
 
 
-def _extract_docx(filepath: Path) -> str:
+def _extract_json(filepath: Path) -> str:
+    return _extract_json_bytes(filepath.read_bytes())
+
+
+def _extract_docx_bytes(raw: bytes) -> str:
     import docx
 
-    doc = docx.Document(filepath)
+    doc = docx.Document(io.BytesIO(raw))
     parts = []
     for para in doc.paragraphs:
         text = para.text.strip()
@@ -366,10 +380,14 @@ def _extract_docx(filepath: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_xlsx(filepath: Path) -> str:
+def _extract_docx(filepath: Path) -> str:
+    return _extract_docx_bytes(filepath.read_bytes())
+
+
+def _extract_xlsx_bytes(raw: bytes) -> str:
     import openpyxl
 
-    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
     parts = []
     try:
         for sheet_name in wb.sheetnames:
@@ -384,10 +402,14 @@ def _extract_xlsx(filepath: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_pptx(filepath: Path) -> str:
+def _extract_xlsx(filepath: Path) -> str:
+    return _extract_xlsx_bytes(filepath.read_bytes())
+
+
+def _extract_pptx_bytes(raw: bytes) -> str:
     from pptx import Presentation
 
-    prs = Presentation(filepath)
+    prs = Presentation(io.BytesIO(raw))
     parts = []
     for i, slide in enumerate(prs.slides):
         texts = [
@@ -402,17 +424,25 @@ def _extract_pptx(filepath: Path) -> str:
     return "\n\n".join(parts)
 
 
-def _extract_csv(filepath: Path) -> str:
-    rows = list(csv.reader(io.StringIO(_read_text(filepath))))
+def _extract_pptx(filepath: Path) -> str:
+    return _extract_pptx_bytes(filepath.read_bytes())
+
+
+def _extract_csv_bytes(raw: bytes) -> str:
+    rows = list(csv.reader(io.StringIO(_read_text_bytes(raw))))
     return "\n".join(" | ".join(row) for row in rows)
 
 
-def _extract_ipynb(filepath: Path) -> str:
-    raw = _read_text(filepath)
+def _extract_csv(filepath: Path) -> str:
+    return _extract_csv_bytes(filepath.read_bytes())
+
+
+def _extract_ipynb_bytes(raw: bytes) -> str:
+    text = _read_text_bytes(raw)
     try:
-        nb = json.loads(raw)
+        nb = json.loads(text)
     except json.JSONDecodeError:
-        return raw
+        return text
     parts = []
     for cell in nb.get("cells", []):
         source = cell.get("source", "")
@@ -427,18 +457,24 @@ def _extract_ipynb(filepath: Path) -> str:
     return "\n\n".join(parts)
 
 
-_EXTRACTORS = {
-    ".md": _extract_markdown,
-    ".txt": _read_text,
-    ".pdf": _extract_pdf,
-    ".json": _extract_json,
-    ".xml": _read_text,
-    ".docx": _extract_docx,
-    ".xlsx": _extract_xlsx,
-    ".pptx": _extract_pptx,
-    ".csv": _extract_csv,
-    ".ipynb": _extract_ipynb,
-    **{ext: _read_text for ext in CODE_LANGUAGES},
+def _extract_ipynb(filepath: Path) -> str:
+    return _extract_ipynb_bytes(filepath.read_bytes())
+
+
+# parse_file owns a single captured source buffer, so index extraction never
+# validates one read and extracts another.
+_BYTE_EXTRACTORS = {
+    ".md": _extract_markdown_bytes,
+    ".txt": _read_text_bytes,
+    ".pdf": _extract_pdf_bytes,
+    ".json": _extract_json_bytes,
+    ".xml": _read_text_bytes,
+    ".docx": _extract_docx_bytes,
+    ".xlsx": _extract_xlsx_bytes,
+    ".pptx": _extract_pptx_bytes,
+    ".csv": _extract_csv_bytes,
+    ".ipynb": _extract_ipynb_bytes,
+    **{ext: _read_text_bytes for ext in CODE_LANGUAGES},
 }
 
 
@@ -495,11 +531,11 @@ def parse_file(
     tier = policy.tier_for(suffix)
     if tier is None:
         raise ValueError(f"Unsupported format: {suffix}")
-    extractor = _EXTRACTORS.get(suffix)
+    extractor = _BYTE_EXTRACTORS.get(suffix)
     if extractor is None:
         if tier != TIER_REGISTERED:
             raise ValueError(f"Unsupported format: {suffix}")
-        extractor = _read_text
+        extractor = _read_text_bytes
     # Stat BEFORE the read, never after. The stat persisted here is exactly what
     # the next smart reindex compares against (RetrievalCore._stat_matches), so it
     # must never describe a NEWER file than the content we actually extracted. A
@@ -508,12 +544,13 @@ def parse_file(
     # as unchanged — a stale row recoverable only by a full_rebuild. Statting first
     # fails the safe way round: a stale stat costs one redundant reindex and heals.
     stat = filepath.stat()
+    raw = filepath.read_bytes()
     # Dedicated binary formats (PDF/Office) run through their parser first;
     # only extensions that promise ordinary text use the conservative byte
     # classifier.
     if suffix not in {".pdf", ".docx", ".xlsx", ".pptx"}:
-        _validate_text_bytes(filepath)
-    content = extractor(filepath)
+        _validate_text_bytes(raw)
+    content = _extract_pdf_bytes(raw, name=filepath.name) if suffix == ".pdf" else extractor(raw)
     if not content or not content.strip():
         return None
     try:
