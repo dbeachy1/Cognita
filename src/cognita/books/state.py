@@ -861,6 +861,53 @@ class ProjectState:
             tuple((row["path"], bool(row["indexed"])) for row in rules),
         )
 
+    def publication(self, journal_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT kind,phase,payload_json FROM publication_journal WHERE journal_id=?", (journal_id,)
+            ).fetchone()
+        return None if row is None else {"kind": row["kind"], "phase": row["phase"],
+                                         "payload": json.loads(row["payload_json"])}
+
+    def begin_publication(self, journal_id: str, kind: str, payload: dict) -> None:
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            row = connection.execute("SELECT kind,payload_json FROM publication_journal WHERE journal_id=?", (journal_id,)).fetchone()
+            if row is None:
+                connection.execute("INSERT INTO publication_journal(journal_id,kind,phase,payload_json) VALUES(?,?,?,?)",
+                                   (journal_id, kind, "prepared", encoded))
+            elif row["kind"] != kind or row["payload_json"] != encoded:
+                raise ProjectStateError("publication journal conflicts with requested move")
+
+    def advance_publication(self, journal_id: str, phase: str) -> None:
+        with self.transaction() as connection:
+            cursor = connection.execute("UPDATE publication_journal SET phase=?,updated_at=CURRENT_TIMESTAMP WHERE journal_id=?", (phase, journal_id))
+            if cursor.rowcount != 1:
+                raise ProjectStateError("publication journal not found")
+
+    def pending_publications(self, kind: str) -> list[dict]:
+        """Return unfinished source-side publications in their durable order."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT journal_id,phase,payload_json FROM publication_journal "
+                "WHERE kind=? AND phase<>? ORDER BY updated_at,journal_id",
+                (kind, "committed"),
+            ).fetchall()
+        return [
+            {"journal_id": row["journal_id"], "phase": row["phase"],
+             "payload": json.loads(row["payload_json"])}
+            for row in rows
+        ]
+
+    def delete_publication(self, journal_id: str) -> None:
+        """Retire a recovered publication only after its owned facts are restored."""
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM publication_journal WHERE journal_id=?", (journal_id,)
+            )
+            if cursor.rowcount != 1:
+                raise ProjectStateError("publication journal not found")
+
     def set_folder_rule(
         self, path: str, indexed: bool, expected_revision: int,
         *, owner_key: str, project: str, tool: str, operation_id: str,

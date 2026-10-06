@@ -1,7 +1,10 @@
 """Focused tests for the 9.0 engine connector identity/policy seam."""
 
 import asyncio
+import base64
+import hashlib
 import json
+import os
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -309,11 +312,128 @@ async def test_directory_move_preserves_explicit_rules_and_per_file_exclusions(t
     assert host.deindexed(project).sorted() == ["archive/source/nested/note.md"]
     assert state.folder_policy().rules == (("archive/source", False),)
 
+    # A process can die after the receipt transaction but before the final
+    # journal phase.  Reopen proves the receipt and owned target facts, then
+    # completes the journal without attempting to rename the directory back.
+    journal_id = "directory-move:" + hashlib.sha256(
+        (project.name + "\0principal:local-admin\0move-source-1").encode("utf-8")
+    ).hexdigest()
+    state.advance_publication(journal_id, "deindexed_published")
+    reopened_core = _Core()
+    reopened_core._locks[project.name] = _ReentrantLock()
+    reopened = LocalEngineHost(host.config, host.registry, reopened_core)
+    await reopened._recover_directory_move_publications(project)
+    assert state.publication(journal_id)["phase"] == "committed"
+    assert (project.documents_dir / "archive" / "source").is_dir()
+
     replay = await _post(host, project.name, "move_document", args)
     assert replay == payload
     task = host._reindex_tasks.get(project.name)
     if task is not None:
         await task
+
+
+@pytest.mark.asyncio
+async def test_directory_move_recovers_interrupted_rename_before_same_id_retry(tmp_path):
+    """A reopened host restores owned facts before it classifies the old path."""
+    host, project, core = _host(tmp_path)
+    core._locks[project.name] = _ReentrantLock()
+    source = project.documents_dir / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "note.md").write_text("fixture", encoding="utf-8")
+    state = ProjectState.initialize(project.documents_dir)
+    state.set_folder_rule(
+        "source", False, 0, owner_key="principal:local-admin", project=project.name,
+        tool="set_folder_indexing", operation_id="disable-source", args_sha256="a" * 64,
+        result={"path": "source"},
+    )
+    legacy = host.deindexed(project)
+    legacy.add("source/nested/note.md")
+    old_bytes = legacy.owned_bytes()
+    staged, _ = legacy.rebased_paths("source", "archive/source")
+    new_bytes = legacy.serialized(staged)
+    args = {
+        "filepath": "source", "new_filepath": "archive/source",
+        "expected_policy_revision": 1, "operation_id": "interrupted-move",
+    }
+    args_sha256 = hashlib.sha256(json.dumps({
+        "filepath": "source", "new_filepath": "archive/source",
+        "expected_policy_revision": 1,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    journal_id = "directory-move:test-interrupted"
+    state.begin_publication(journal_id, "directory_move", {
+        "old": "source", "new": "archive/source",
+        "owner_key": "principal:local-admin", "operation_id": args["operation_id"],
+        "args_sha256": args_sha256,
+        "old_deindexed": base64.b64encode(old_bytes).decode(),
+        "old_deindexed_sha256": hashlib.sha256(old_bytes).hexdigest(),
+        "new_deindexed": base64.b64encode(new_bytes).decode(),
+        "new_deindexed_sha256": hashlib.sha256(new_bytes).hexdigest(),
+        "directory_identity": list((source.stat().st_dev, source.stat().st_ino)),
+    })
+    target = project.documents_dir / "archive" / "source"
+    target.parent.mkdir()
+    os.replace(source, target)
+    state.advance_publication(journal_id, "renamed")
+    legacy.publish_owned_bytes(hashlib.sha256(old_bytes).hexdigest(), new_bytes)
+    state.advance_publication(journal_id, "deindexed_published")
+
+    # The durable prepared journal is a hard temporary exclusion for both
+    # prefixes, before a watcher or query can publish either one.
+    assert host.effective_index_policy_for(project).decision("source/nested/note.md").indexed is False
+    assert host.effective_index_policy_for(project).decision("archive/source/nested/note.md").indexed is False
+
+    reopened_core = _Core()
+    reopened_core._locks[project.name] = _ReentrantLock()
+    reopened = LocalEngineHost(host.config, host.registry, reopened_core)
+    await reopened._recover_directory_move_publications(project)
+    assert source.is_dir()
+    assert not target.exists()
+    assert reopened.deindexed(project).sorted() == ["source/nested/note.md"]
+    assert not state.pending_publications("directory_move")
+
+    replay = await _post(reopened, project.name, "move_document", args)
+    assert replay["status"] == "success"
+    assert target.is_dir()
+    assert reopened.deindexed(project).sorted() == ["archive/source/nested/note.md"]
+    task = reopened._reindex_tasks.get(project.name)
+    if task is not None:
+        await task
+
+
+@pytest.mark.asyncio
+async def test_directory_move_failed_rename_leaves_exact_old_per_file_decision(tmp_path, monkeypatch):
+    """The journal is staged, but a failed rename cannot publish rebased paths."""
+    host, project, core = _host(tmp_path)
+    core._locks[project.name] = _ReentrantLock()
+    source = project.documents_dir / "source"
+    source.mkdir()
+    (source / "note.md").write_text("fixture", encoding="utf-8")
+    state = ProjectState.initialize(project.documents_dir)
+    state.set_folder_rule(
+        "source", False, 0, owner_key="principal:local-admin", project=project.name,
+        tool="set_folder_indexing", operation_id="disable-source", args_sha256="a" * 64,
+        result={"path": "source"},
+    )
+    host.deindexed(project).add("source/note.md")
+    original_replace = os.replace
+
+    def fail_directory_rename(old, new):
+        if Path(old) == source:
+            raise OSError("simulated rename failure")
+        return original_replace(old, new)
+
+    monkeypatch.setattr("cognita.engine_documents.os.replace", fail_directory_rename)
+    payload = await _post(host, project.name, "move_document", {
+        "filepath": "source", "new_filepath": "archive/source",
+        "expected_policy_revision": 1, "operation_id": "failed-move",
+    })
+    assert payload["status"] == "error"
+    assert source.is_dir()
+    assert not (project.documents_dir / "archive" / "source").exists()
+    assert host.deindexed(project).sorted() == ["source/note.md"]
+    assert state.folder_policy().rules == (("source", False),)
+    assert not state.pending_publications("directory_move")
 
 
 @pytest.mark.asyncio

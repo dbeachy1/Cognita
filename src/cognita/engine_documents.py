@@ -6,6 +6,7 @@ operation state; this class adds no fields or lifecycle behavior.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -1364,6 +1365,86 @@ class EngineDocumentOperations:
                 }
         return None
 
+    @staticmethod
+    def _directory_journal_bytes(payload: dict, name: str) -> bytes:
+        encoded = payload.get(name)
+        digest = payload.get(name + "_sha256")
+        if not isinstance(encoded, str) or not isinstance(digest, str):
+            raise ProjectStateError("directory move journal is incomplete")
+        try:
+            value = base64.b64decode(encoded.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, ValueError) as exc:
+            raise ProjectStateError("directory move journal bytes are invalid") from exc
+        if hashlib.sha256(value).hexdigest() != digest:
+            raise ProjectStateError("directory move journal bytes do not match their digest")
+        return value
+
+    async def _recover_directory_move_publications(self, project: Project) -> None:
+        """Finish a receipt or reverse only an interrupted owned directory move.
+
+        A prepared journal blocks both prefixes through the effective policy.
+        Recovery either proves that the receipt made the move authoritative, or
+        restores the directory identity and exact preimage before allowing a
+        retry.  Ambiguous paths and changed decision bytes deliberately stay
+        blocked rather than guessing which external writer won.
+        """
+        state = self.project_state_for(project)
+        if state is None:
+            return
+        pending = state.pending_publications("directory_move")
+        if not pending:
+            return
+        docs = Path(project.documents_dir).resolve()
+        legacy = self.deindexed(project)
+        for entry in pending:
+            payload = entry["payload"]
+            old_rel, new_rel = payload.get("old"), payload.get("new")
+            identity = payload.get("directory_identity")
+            if (not isinstance(old_rel, str) or not isinstance(new_rel, str)
+                    or not isinstance(identity, (list, tuple)) or len(identity) != 2):
+                raise ProjectStateError("directory move journal metadata is invalid")
+            old_t, new_t = (docs / old_rel).resolve(), (docs / new_rel).resolve()
+            if (not old_t.is_relative_to(docs) or not new_t.is_relative_to(docs)
+                    or old_t == new_t):
+                raise ProjectStateError("directory move journal escaped the project")
+            old_bytes = self._directory_journal_bytes(payload, "old_deindexed")
+            new_bytes = self._directory_journal_bytes(payload, "new_deindexed")
+            old_digest = hashlib.sha256(old_bytes).hexdigest()
+            new_digest = hashlib.sha256(new_bytes).hexdigest()
+            owner_key = payload.get("owner_key")
+            operation_id = payload.get("operation_id")
+            args_sha256 = payload.get("args_sha256")
+            receipt = None
+            if all(isinstance(item, str) and item for item in (owner_key, operation_id, args_sha256)):
+                receipt = state.receipt(
+                    owner_key=owner_key, project=project.name, tool="move_document",
+                    operation_id=operation_id,
+                )
+                if receipt is not None and receipt[0] != args_sha256:
+                    raise ProjectStateError("directory move receipt conflicts with journal")
+            current = legacy.owned_bytes()
+            old_is_owned = old_t.is_dir() and (old_t.stat().st_dev, old_t.stat().st_ino) == tuple(identity)
+            new_is_owned = new_t.is_dir() and (new_t.stat().st_dev, new_t.stat().st_ino) == tuple(identity)
+            if receipt is not None:
+                if not new_is_owned or old_t.exists() or hashlib.sha256(current).hexdigest() != new_digest:
+                    raise ProjectStateError("completed directory move journal is not coherent")
+                state.advance_publication(entry["journal_id"], "committed")
+                continue
+            if old_is_owned and not new_t.exists():
+                if hashlib.sha256(current).hexdigest() == new_digest:
+                    legacy.publish_owned_bytes(new_digest, old_bytes)
+                elif hashlib.sha256(current).hexdigest() != old_digest:
+                    raise ProjectStateError("directory move recovery found changed per-file exclusions")
+            elif new_is_owned and not old_t.exists():
+                if hashlib.sha256(current).hexdigest() not in {old_digest, new_digest}:
+                    raise ProjectStateError("directory move recovery found changed per-file exclusions")
+                await asyncio.to_thread(os.replace, str(new_t), str(old_t))
+                if hashlib.sha256(current).hexdigest() == new_digest:
+                    legacy.publish_owned_bytes(new_digest, old_bytes)
+            else:
+                raise ProjectStateError("directory move recovery cannot prove directory ownership")
+            state.delete_publication(entry["journal_id"])
+
     async def _move_directory(
         self, project: Project, args: dict, old_t: Path, new_t: Path,
     ) -> dict:
@@ -1399,6 +1480,8 @@ class EngineDocumentOperations:
         try:
             prior_state = self.project_state_for(project)
             if prior_state is not None:
+                async with self.core.write_lock(project.name):
+                    await self._recover_directory_move_publications(project)
                 receipt = prior_state.receipt(
                     owner_key=owner_key, project=project.name, tool="move_document",
                     operation_id=operation_id,
@@ -1455,6 +1538,15 @@ class EngineDocumentOperations:
                 return {"status": "error", "reason": "state_unavailable",
                         "message": "Folder policy state is unavailable; directory move was not started."}
 
+            # A retry may race a process restart after the initial preflight.
+            # Resolve its own interrupted publication before classifying the
+            # source, so an old path restored by recovery is usable again.
+            try:
+                await self._recover_directory_move_publications(project)
+            except ProjectStateError:
+                return {"status": "error", "reason": "state_unavailable",
+                        "message": "An interrupted directory move must be reconciled before retry."}
+
             receipt = state.receipt(
                 owner_key=owner_key, project=project.name, tool="move_document",
                 operation_id=operation_id,
@@ -1479,9 +1571,29 @@ class EngineDocumentOperations:
                 return {"status": "error", "reason": "policy_conflict",
                         "message": "Destination already has an explicit folder policy rule."}
             try:
-                legacy.rebase_prefix(old_rel, new_rel)
+                staged_paths, _moved = legacy.rebased_paths(old_rel, new_rel)
+                old_deindexed = legacy.owned_bytes()
             except DeindexedPathsError as exc:
                 return {"status": "error", "reason": "policy_conflict", "message": str(exc)}
+            new_deindexed = (legacy.serialized(staged_paths)
+                             if staged_paths != legacy.paths() else old_deindexed)
+            journal_id = "directory-move:" + hashlib.sha256(
+                (project.name + "\0" + owner_key + "\0" + operation_id).encode("utf-8")
+            ).hexdigest()
+            try:
+                state.begin_publication(journal_id, "directory_move", {
+                    "old": old_rel, "new": new_rel,
+                    "owner_key": owner_key, "operation_id": operation_id,
+                    "args_sha256": args_sha256,
+                    "old_deindexed": base64.b64encode(old_deindexed).decode("ascii"),
+                    "old_deindexed_sha256": hashlib.sha256(old_deindexed).hexdigest(),
+                    "new_deindexed": base64.b64encode(new_deindexed).decode("ascii"),
+                    "new_deindexed_sha256": hashlib.sha256(new_deindexed).hexdigest(),
+                    "directory_identity": list((old_t.stat().st_dev, old_t.stat().st_ino)),
+                })
+            except ProjectStateError:
+                return {"status": "error", "reason": "state_unavailable",
+                        "message": "Directory move journal could not be prepared."}
             # Same-filesystem os.replace supplies the only supported byte move.
             # State updates immediately follow while the project write lock blocks
             # watcher publication.  If either durable publication step fails,
@@ -1490,6 +1602,11 @@ class EngineDocumentOperations:
             try:
                 new_t.parent.mkdir(parents=True, exist_ok=True)
                 await asyncio.to_thread(os.replace, str(old_t), str(new_t))
+                state.advance_publication(journal_id, "renamed")
+                legacy.publish_owned_bytes(
+                    hashlib.sha256(old_deindexed).hexdigest(), new_deindexed,
+                )
+                state.advance_publication(journal_id, "deindexed_published")
                 result = {
                     "status": "success", "filepath": old_rel,
                     "new_filepath": new_rel, "kind": "directory",
@@ -1503,14 +1620,13 @@ class EngineDocumentOperations:
                 )
                 if disposition != "committed":
                     raise ProjectStateError(f"unexpected directory move state: {disposition}")
+                state.advance_publication(journal_id, "committed")
             except (OSError, ProjectStateError) as exc:
                 restored = False
                 try:
-                    if new_t.is_dir() and not old_t.exists():
-                        await asyncio.to_thread(os.replace, str(new_t), str(old_t))
-                        legacy.rebase_prefix(new_rel, old_rel)
-                        restored = True
-                except (OSError, DeindexedPathsError):
+                    await self._recover_directory_move_publications(project)
+                    restored = not state.pending_publications("directory_move")
+                except (OSError, ProjectStateError, DeindexedPathsError):
                     restored = False
                 return {"status": "error", "reason": "state_unavailable",
                         "message": ("Directory move was rolled back after durable policy publication failed."

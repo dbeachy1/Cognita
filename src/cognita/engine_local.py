@@ -280,6 +280,16 @@ class LocalEngineHost(
                 # Before the boot-time reindex below, or that walk would run
                 # against an unloaded list and re-index every de-indexed file.
                 self.deindexed(project)
+                # A directory rename changes two source-side authorities.  Do
+                # not let schema setup, a watcher, or reconciliation observe a
+                # half-published move; recovery either finishes its receipt or
+                # restores the owned preimage before those paths can publish.
+                try:
+                    async with self.core.write_lock(project.name):
+                        await self._recover_directory_move_publications(project)
+                except ProjectStateError as exc:
+                    log.error("Directory move recovery remains blocked project=%s error=%s",
+                              project.name, type(exc).__name__)
                 await self.store.ensure_project(project.name)
                 # Complete committed source-side policy changes before the
                 # watcher can publish derived rows.  A crash or PG outage leaves
@@ -659,9 +669,18 @@ class LocalEngineHost(
             raise ProjectStateError("book configuration is damaged")
         layout = config.layout if config.config_state == "enabled" else None
         from .books.config import FolderRule
+        rules = {path: indexed for path, indexed in (folder.rules if folder else ())}
+        if state is not None:
+            # Until recovery proves an interrupted directory move coherent,
+            # neither its former nor its proposed prefix may become a derived
+            # search/watch/index publication path.
+            for entry in state.pending_publications("directory_move"):
+                payload = entry["payload"]
+                for path in (payload.get("old"), payload.get("new")):
+                    if isinstance(path, str) and path:
+                        rules[path] = False
         return EffectiveIndexPolicy(
-            [FolderRule(path=path, indexed=indexed)
-             for path, indexed in (folder.rules if folder else ())],
+            [FolderRule(path=path, indexed=indexed) for path, indexed in rules.items()],
             hard_exclusion_roots=(".cognita-storage",),
             deindexed_paths=legacy.sorted(), book_layout=layout,
         )

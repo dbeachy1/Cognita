@@ -37,6 +37,7 @@ exclusion is never silent, exactly as 5.0 §10 requires of sync-conflict skips.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -140,6 +141,20 @@ class DeindexedPaths:
         malformed legacy file is a hard stop because accepting its historical
         empty fallback would silently re-admit files during a directory move.
         """
+        updated, changed = self.rebased_paths(old_prefix, new_prefix)
+        if not changed:
+            return 0
+        self._paths = updated
+        self._save()
+        return changed
+
+    def rebased_paths(self, old_prefix: str, new_prefix: str) -> tuple[set[str], int]:
+        """Preview a prefix move without publishing the decision file.
+
+        Directory moves stage this result in the project-state journal before a
+        filesystem rename.  Keeping this pure is what prevents a failed rename
+        from making a still-old path lose its explicit exclusion.
+        """
         current = self.paths()
         if self.load_error is not None:
             raise DeindexedPathsError("per-file exclusion state is unreadable")
@@ -148,22 +163,64 @@ class DeindexedPaths:
         if not old_prefix or not new_prefix:
             raise ValueError("directory prefixes must be nonempty")
         old_marker = old_prefix + "/"
-        rebased: dict[str, str] = {
-            source: new_prefix + source[len(old_prefix):]
+        rebased = {
+            new_prefix + source[len(old_prefix):]
             for source in current
             if source == old_prefix or source.startswith(old_marker)
         }
         if not rebased:
-            return 0
-        unaffected = current.difference(rebased)
-        collisions = sorted(set(rebased.values()).intersection(unaffected))
+            return set(current), 0
+        unaffected = current.difference(
+            source for source in current
+            if source == old_prefix or source.startswith(old_marker)
+        )
+        collisions = sorted(rebased.intersection(unaffected))
         if collisions:
             raise DeindexedPathsError(
                 "directory move would overwrite existing per-file exclusions"
             )
-        self._paths = unaffected.union(rebased.values())
-        self._save()
-        return len(rebased)
+        return unaffected.union(rebased), len(rebased)
+
+    @staticmethod
+    def serialized(paths: set[str]) -> bytes:
+        return (json.dumps({"version": FORMAT_VERSION, "paths": sorted(paths)}, indent=2)
+                + "\n").encode("utf-8")
+
+    def owned_bytes(self) -> bytes:
+        """Read the exact on-disk authority after validating the loaded list."""
+        self.paths()
+        if self.load_error is not None:
+            raise DeindexedPathsError("per-file exclusion state is unreadable")
+        return self.path.read_bytes() if self.path.is_file() else b""
+
+    def publish_owned_bytes(self, expected_sha256: str, payload: bytes) -> None:
+        """Atomically replace only the version whose digest the caller pinned."""
+        current = self.path.read_bytes() if self.path.is_file() else b""
+        if hashlib.sha256(current).hexdigest() != expected_sha256:
+            raise DeindexedPathsError("per-file exclusion state changed externally")
+        if current == payload:
+            return
+        if not payload:
+            # An absent decision file is the exact empty preimage.  This branch
+            # is only reached when the journal owns the current nonempty bytes.
+            if self.path.exists():
+                self.path.unlink()
+            self._paths = set()
+            return
+        try:
+            decoded = json.loads(payload.decode("utf-8"))
+            listed = decoded["paths"] if isinstance(decoded, dict) else decoded
+            if not isinstance(listed, list):
+                raise ValueError("paths is not a list")
+            next_paths = {str(item) for item in listed}
+        except (UnicodeDecodeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            raise DeindexedPathsError("staged per-file exclusions are invalid") from exc
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".move.tmp")
+        tmp.write_bytes(payload)
+        os.replace(tmp, self.path)
+        self._paths = next_paths
+        self.load_error = None
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
