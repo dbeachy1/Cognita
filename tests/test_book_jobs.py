@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
+import struct
 from pathlib import Path
 
 import pytest
@@ -79,7 +81,10 @@ async def test_ffprobe_json_validates_process_output(tmp_path: Path, monkeypatch
     media.write_bytes(b"fixture")
 
     async def fake_run_process(*args: object, **kwargs: object) -> ProcessResult:
-        del args, kwargs
+        argv = args[0]
+        assert isinstance(argv, list)
+        assert argv[argv.index("-protocol_whitelist") + 1] == "file"
+        assert argv[argv.index("-format_whitelist") + 1] == "wav,mp3"
         return ProcessResult(0, b"not-json", b"", False, False, 0.01, False, False)
 
     monkeypatch.setattr("cognita.books.jobs.run_process", fake_run_process)
@@ -89,3 +94,22 @@ async def test_ffprobe_json_validates_process_output(tmp_path: Path, monkeypatch
             media,
             timeout_seconds=3,
         )
+
+
+@pytest.mark.skipif(shutil.which("ffprobe") is None, reason="ffprobe is available in the packaged Linux service")
+@pytest.mark.asyncio
+async def test_ffprobe_rejects_local_playlist_referencing_outside_media(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside_media = tmp_path / "outside.wav"
+    fmt = struct.pack("<HHIIHH", 1, 1, 8_000, 16_000, 2, 16)
+    samples = struct.pack("<hh", 100, -100)
+    fmt_chunk = b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    data_chunk = b"data" + struct.pack("<I", len(samples)) + samples
+    body = b"WAVE" + fmt_chunk + data_chunk
+    outside_media.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    playlist = allowed / "untrusted.m3u"
+    playlist.write_text(f"#EXTM3U\n{outside_media}\n", encoding="utf-8")
+
+    with pytest.raises(ProcessRunnerError, match="exited with status"):
+        await ffprobe_json(shutil.which("ffprobe") or "", playlist, timeout_seconds=10)

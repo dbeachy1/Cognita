@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass
@@ -30,6 +31,15 @@ class ProcessResult:
     elapsed_seconds: float
     timed_out: bool
     cancelled: bool
+
+
+@dataclass(frozen=True)
+class PacketFact:
+    size_bytes: int
+    data_sha256: str
+
+
+_PACKET_SHA256 = re.compile(r"^(?:SHA256:)?([0-9a-fA-F]{64})$")
 
 
 async def _drain_limited(reader: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
@@ -185,7 +195,8 @@ async def ffprobe_json(
         raise ProcessRunnerError("invalid_process_request", "ffprobe input must be an existing absolute local file")
     result = await run_process(
         [
-            str(executable), "-v", "error", "-show_format", "-show_streams",
+            str(executable), "-v", "error", "-protocol_whitelist", "file",
+            "-format_whitelist", "wav,mp3", "-show_format", "-show_streams",
             "-of", "json", str(filepath),
         ],
         timeout_seconds=timeout_seconds,
@@ -208,3 +219,58 @@ async def ffprobe_json(
     if not isinstance(value, dict):
         raise ProcessRunnerError("invalid_tool_output", "ffprobe JSON root must be an object")
     return value
+
+
+async def ffprobe_packet_facts(
+    executable: str | Path,
+    filepath: str | Path,
+    *,
+    timeout_seconds: float = 60.0,
+    cancel_event: asyncio.Event | None = None,
+) -> tuple[PacketFact, ...]:
+    """Read ordered audio-packet sizes and SHA-256 values for stream-copy proof."""
+    local_file = Path(filepath)
+    if not local_file.is_absolute() or not local_file.is_file():
+        raise ProcessRunnerError("invalid_process_request", "Packet inspection requires an existing absolute local file")
+    result = await run_process(
+        [
+            str(executable), "-v", "error", "-protocol_whitelist", "file",
+            "-format_whitelist", "mp3", "-select_streams", "a:0", "-show_packets",
+            "-show_entries", "packet=size,data_hash", "-show_data_hash", "sha256",
+            "-of", "json", str(local_file),
+        ],
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=16 * 1024 * 1024,
+        cancel_event=cancel_event,
+    )
+    if result.cancelled:
+        raise ProcessRunnerError("cancelled", "ffprobe packet inspection was cancelled")
+    if result.timed_out:
+        raise ProcessRunnerError("tool_timeout", "ffprobe packet inspection exceeded its time limit")
+    if result.returncode != 0:
+        message = result.stderr.decode("utf-8", errors="replace")[-2_000:]
+        raise ProcessRunnerError("tool_failed", f"ffprobe exited with status {result.returncode}: {message}")
+    if result.stdout_truncated:
+        raise ProcessRunnerError("tool_output_limit", "ffprobe packet facts exceeded the bounded output limit")
+    try:
+        value = json.loads(result.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ProcessRunnerError("invalid_tool_output", "ffprobe did not return valid packet JSON") from exc
+    packets = value.get("packets") if isinstance(value, dict) else None
+    if not isinstance(packets, list) or not packets:
+        raise ProcessRunnerError("invalid_tool_output", "ffprobe did not return any audio packets")
+    facts: list[PacketFact] = []
+    for packet in packets:
+        if not isinstance(packet, Mapping):
+            raise ProcessRunnerError("invalid_tool_output", "ffprobe packet entry must be an object")
+        size = packet.get("size")
+        if isinstance(size, str) and size.isdecimal():
+            size = int(size)
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise ProcessRunnerError("invalid_tool_output", "ffprobe packet size must be a positive integer")
+        raw_hash = packet.get("data_hash")
+        match = _PACKET_SHA256.fullmatch(raw_hash) if isinstance(raw_hash, str) else None
+        if match is None:
+            raise ProcessRunnerError("invalid_tool_output", "ffprobe packet has no valid SHA-256 data hash")
+        facts.append(PacketFact(size, match.group(1).lower()))
+    return tuple(facts)
