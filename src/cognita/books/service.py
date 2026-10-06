@@ -1380,11 +1380,15 @@ class BookService:
             return any(BookService._metadata_contains(item, expected) for item in value)
         return False
 
-    def _import_paths(self, layout, chapter, job_id: str, take_id: str, *, raw_pcm: bool) -> tuple[Path, Path, str]:
+    def _import_paths(self, layout, chapter, job_id: str, take_id: str, *, media_kind: str) -> tuple[Path, Path, str]:
         staging_root = self.root / STATE_ROOT / "audiobook-staging"
         staging_root.mkdir(mode=0o700, exist_ok=True)
         staging = staging_root / f"{job_id}.part"
-        extension = "pcm" if raw_pcm else "wav"
+        extensions = {"raw_pcm": "pcm", "headered_pcm": "wav", "mp3": "mp3"}
+        try:
+            extension = extensions[media_kind]
+        except KeyError as exc:
+            raise BookServiceError("unsupported_media", "The imported media kind is not supported.") from exc
         relative = f"{chapter.audio_root}/takes/{take_id}/native.{extension}"
         target = _path(self.root, relative, allow_missing=True)
         return staging, target, relative
@@ -1416,7 +1420,7 @@ class BookService:
             raise BookServiceError("insufficient_storage", "The import would exceed the configured audiobook media quota.")
 
     def import_audio(self, request: dto.ImportAudioRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
-        """Reserve a durable project-file PCM import; worker execution is separate.
+        """Reserve a durable guarded import; worker execution is separate.
 
         URL and workspace bytes are intentionally not accepted until their
         respective guarded transfer boundaries are installed.  In particular,
@@ -1425,9 +1429,7 @@ class BookService:
         state, _, layout = self._enabled_layout()
         if not isinstance(request.source, dto.ProjectAudioSource):
             raise BookServiceError("source_unavailable", "This installation currently supports authorized project-file audio imports only.")
-        if "source_format" not in request.model_fields_set:
-            raise BookServiceError("native_pcm_required", "Headerless raw PCM imports require an explicit RawFormat.")
-        raw_format = request.source_format
+        raw_format = request.source_format if "source_format" in request.model_fields_set else None
         args_sha256 = canonical_json_sha256({
             "project": request.project, "generation_record_id": request.generation_record_id,
             "expected_generation_revision": request.expected_generation_revision,
@@ -1453,7 +1455,15 @@ class BookService:
         facts = source_path.stat(follow_symlinks=False)
         if not stat.S_ISREG(facts.st_mode):
             raise BookServiceError("source_unavailable", "The project-file source is not a regular file.")
-        if not self._metadata_contains(generation["provider_response_metadata"], raw_format.provider_format_evidence):
+        stored_scope = generation["scope"]
+        scope = json.loads(stored_scope) if isinstance(stored_scope, str) else stored_scope
+        if scope.get("kind") == "production" and request.provenance != "native_generation":
+            raise BookServiceError("native_pcm_required", "Production imports require verified native-generation PCM.")
+        if request.provenance in {"test_mp3", "derived_audio"} and scope.get("kind") != "test":
+            raise BookServiceError("permission_denied", "Lossy and derived media are available only in an authorized test namespace.")
+        if raw_format is not None and not self._metadata_contains(
+            generation["provider_response_metadata"], raw_format.provider_format_evidence
+        ):
             raise BookServiceError("media_mismatch", "RawFormat provider evidence is not present in saved generation evidence.")
         job_id, take_id = str(uuid.uuid4()), str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -1466,7 +1476,8 @@ class BookService:
             "chunk_id": generation["chunk_id"], "request_sha256": generation["request_sha256"],
             "source_kind": "project_file", "source_filepath": request.source.filepath,
             "expected_sha256": request.source.expected_sha256, "provenance": request.provenance,
-            "source_format": _data(raw_format), "take_id": take_id, "created_at": now,
+            "source_format": _data(raw_format) if raw_format is not None else None,
+            "take_id": take_id, "created_at": now,
         }
         pinned_sha256 = canonical_json_sha256(pinned)
         try:
@@ -1527,8 +1538,8 @@ class BookService:
         try:
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
-            _, target, _ = self._import_paths(layout, chapter, job["job_id"], pinned["take_id"], raw_pcm=True)
-            for artifact in (target, target.with_suffix(".wav"), target.parent / "take.json"):
+            take_root = _path(self.root, f"{chapter.audio_root}/takes/{pinned['take_id']}", allow_missing=True)
+            for artifact in (*take_root.glob("native.*"), take_root / "take.json"):
                 artifact.unlink(missing_ok=True)
         except (BookServiceError, OSError, KeyError, TypeError):
             # The subsequent durable failure remains authoritative. Never
@@ -1564,44 +1575,75 @@ class BookService:
             source = _path(self.root, pinned["source_filepath"])
             source_size = source.stat(follow_symlinks=False).st_size
             self._available_import_space(layout, chapter, source_size)
-            staging, target, relative = self._import_paths(layout, chapter, job_id, pinned["take_id"], raw_pcm=True)
-            wrapper_staging = staging.with_suffix(".wav.part")
-            canonical_staging = staging.with_suffix(".canonical.pcm")
-            wrapper_target = target.with_suffix(".wav")
-            wrapper_relative = f"{chapter.audio_root}/takes/{pinned['take_id']}/native.wav"
+            # The staging object is deliberately independent of its eventual
+            # extension; detected facts below choose the immutable take name.
+            staging, _, _ = self._import_paths(
+                layout, chapter, job_id, pinned["take_id"], media_kind="raw_pcm"
+            )
             self._stream_project_audio(pinned["source_filepath"], staging, pinned["expected_sha256"],
                                        source_size=source_size, job_id=job_id)
+            raw_format = pinned.get("source_format")
+            probe = None
+            if pinned["provenance"] in {"test_mp3", "derived_audio"}:
+                _, ffprobe = self._registered_media_executables()
+                probe = asyncio.run(ffprobe_json(ffprobe, staging, timeout_seconds=60.0))
             inspection = inspect_media_file(
-                staging, raw_format=pinned["source_format"],
-                provider_format_evidence=pinned["source_format"]["provider_format_evidence"],
+                staging, ffprobe=probe, raw_format=raw_format,
+                provider_format_evidence=None if raw_format is None else raw_format["provider_format_evidence"],
             )
-            if not inspection.native_pcm:
+            if pinned["provenance"] == "native_generation" and not inspection.native_pcm:
                 raise BookServiceError("native_pcm_required", "The imported media is not verified native PCM.")
-            raw = pinned["source_format"]
-            target_format = dto.ProductionTarget.model_validate({
-                "sample_rate_hz": raw["sample_rate_hz"], "channels": raw["channels"],
-                "encoding": raw["encoding"], "storage_bits": raw["storage_bits"],
-                "valid_bits": raw["valid_bits"], "mp3_bitrate_kbps": 1,
-            }, strict=True)
-            with canonical_staging.open("xb") as canonical_output:
-                assembled = assemble_pcm_stream(
-                    [PcmSource(pinned["take_id"], staging, inspection)], [], target_format, canonical_output,
-                )
-                canonical_output.flush()
-                os.fsync(canonical_output.fileno())
-            wrapped = wrap_pcm_as_wave(canonical_staging, wrapper_staging, target_format, assembled)
-            canonical_staging.unlink()
+            if pinned["provenance"] == "test_mp3" and (
+                inspection.native_pcm or inspection.media.codec != "mp3" or inspection.media.encoding != "compressed"
+            ):
+                raise BookServiceError("media_mismatch", "test_mp3 provenance requires actual FFprobe-verified MP3 media.")
+            if pinned["provenance"] == "derived_audio" and inspection.native_pcm:
+                raise BookServiceError("media_mismatch", "derived_audio provenance requires detected derived media, not caller labels.")
+            if inspection.native_pcm:
+                media_kind = "raw_pcm" if inspection.media.container == "raw_pcm" else "headered_pcm"
+            elif inspection.media.codec == "mp3" and inspection.media.encoding == "compressed":
+                media_kind = "mp3"
+            else:
+                raise BookServiceError("unsupported_media", "Only verified PCM WAVE/RF64 or MP3 media is supported by this import.")
+            staging, target, relative = self._import_paths(
+                layout, chapter, job_id, pinned["take_id"], media_kind=media_kind
+            )
+            wrapper_staging: Path | None = None
+            canonical_staging: Path | None = None
+            wrapper_target: Path | None = None
+            wrapper_relative: str | None = None
+            wrapped = None
+            if inspection.native_pcm and inspection.media.container == "raw_pcm":
+                wrapper_staging = staging.with_suffix(".wav.part")
+                canonical_staging = staging.with_suffix(".canonical.pcm")
+                wrapper_target = target.with_suffix(".wav")
+                wrapper_relative = f"{chapter.audio_root}/takes/{pinned['take_id']}/native.wav"
+                raw = inspection.media.model_dump(mode="json")
+                target_format = dto.ProductionTarget.model_validate({
+                    "sample_rate_hz": raw["sample_rate_hz"], "channels": raw["channels"],
+                    "encoding": raw["encoding"], "storage_bits": raw["storage_bits"],
+                    "valid_bits": raw["valid_bits"], "mp3_bitrate_kbps": 1,
+                }, strict=True)
+                with canonical_staging.open("xb") as canonical_output:
+                    assembled = assemble_pcm_stream(
+                        [PcmSource(pinned["take_id"], staging, inspection)], [], target_format, canonical_output,
+                    )
+                    canonical_output.flush()
+                    os.fsync(canonical_output.fileno())
+                wrapped = wrap_pcm_as_wave(canonical_staging, wrapper_staging, target_format, assembled)
+                canonical_staging.unlink()
             if before_finalize is not None:
                 before_finalize()
                 finalization_started = True
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if target.exists() or wrapper_target.exists():
+            if target.exists() or (wrapper_target is not None and wrapper_target.exists()):
                 raise BookServiceError("job_failed", "The immutable take path already exists.")
             os.replace(staging, target)
             staging = None
             published_paths.append(target)
-            os.replace(wrapper_staging, wrapper_target)
-            published_paths.append(wrapper_target)
+            if wrapper_staging is not None and wrapper_target is not None:
+                os.replace(wrapper_staging, wrapper_target)
+                published_paths.append(wrapper_target)
             now = datetime.now(timezone.utc).isoformat()
             take = dto.TakeRecord.model_validate({
                 "take_id": pinned["take_id"], "namespace": generation["scope"],
@@ -1610,7 +1652,7 @@ class BookService:
                 "request_sha256": pinned["request_sha256"], "filepath": relative,
                 "bytes_sha256": inspection.bytes_sha256, "size_bytes": inspection.size_bytes,
                 "media": inspection.media.model_dump(mode="json"), "provenance": pinned["provenance"],
-                "assembly_derivative": {
+                "assembly_derivative": None if wrapped is None or wrapper_relative is None else {
                     "filepath": wrapper_relative, "bytes_sha256": wrapped.bytes_sha256,
                     "media": wrapped.media.model_dump(mode="json"),
                 },
@@ -1623,13 +1665,15 @@ class BookService:
             completed["state"] = "completed"
             state.finish_import_success(job_id=job_id, generation_payload=completed, take_payload=take)
             registered = True
-        except (BookServiceError, MediaValidationError, AssemblyError, OSError, ProjectStateError) as exc:
+        except (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, OSError, ProjectStateError) as exc:
             if isinstance(exc, MediaValidationError):
                 reason, message = exc.code, exc.message
             elif isinstance(exc, BookServiceError):
                 reason, message = exc.reason, str(exc)
             elif isinstance(exc, ProjectStateError) and str(exc) == "cancel_requested":
                 reason, message = "cancelled", "The import was cancelled before it could be finalized."
+            elif isinstance(exc, ProcessRunnerError):
+                reason, message = exc.code, exc.message
             else:
                 reason, message = "job_failed", "The local import could not complete safely."
             if not registered:

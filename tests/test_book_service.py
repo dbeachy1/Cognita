@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import struct
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -43,6 +44,18 @@ def _docx(text: str) -> bytes:
         archive.writestr("[Content_Types].xml", b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
         archive.writestr("word/document.xml", xml)
     return output.getvalue()
+
+
+def _wav_pcm(samples: bytes, *, channels: int = 1, rate: int = 8000) -> bytes:
+    """Small native WAVE fixture; the service must retain these bytes verbatim."""
+    bits = 16
+    frame_bytes = channels * bits // 8
+    fmt = struct.pack("<HHIIHH", 1, channels, rate, rate * frame_bytes, frame_bytes, bits)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(samples)) + samples
+    if len(samples) & 1:
+        body += b"\x00"
+    return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
 def _fixture(root, *, bound: bool = False) -> tuple[BookService, bytes, bytes]:
@@ -509,6 +522,52 @@ def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
         "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
     }))["generations"][0]
     assert generation_after["media_registered"] is True and generation_after["take_id"] == take["take_id"]
+
+
+def test_headered_pcm_import_detects_format_rejects_conflicting_rawformat_and_retains_bytes(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    samples = struct.pack("<hhhh", 1, -2, 3, -4)
+    original = _wav_pcm(samples)
+    source = tmp_path / "Audiobook/Chapters/1/provider-output.wav"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(original)
+    digest = hashlib.sha256(original).hexdigest()
+    conflicting = {**raw_format, "channels": 2}
+    rejected = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "import-wav-conflict",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.wav", "expected_sha256": digest},
+        "provenance": "native_generation", "source_format": conflicting,
+    })
+    failed_job, _ = service.import_audio(rejected, owner_key="principal:fixture")
+    service.run_import_job(failed_job["job_id"])
+    failed = service.get_job(GetJobRequest(project="fixture", job_id=failed_job["job_id"]))
+    assert failed["state"] == "failed" and failed["error"]["reason"] == "media_mismatch"
+    assert source.read_bytes() == original
+
+    generation_after = service.get_generations(GetGenerationsRequest.model_validate({
+        "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
+    }))["generations"][0]
+    accepted = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "import-wav-detected",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation_after["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.wav", "expected_sha256": digest},
+        "provenance": "native_generation",
+    })
+    queued, _ = service.import_audio(accepted, owner_key="principal:fixture")
+    service.run_import_job(queued["job_id"])
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "succeeded", completed
+    take = completed["result"]["take"]
+    assert take["filepath"].endswith("/native.wav")
+    assert take["media"]["container"] == "wav"
+    assert take["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
+    assert take["assembly_derivative"] is None
+    assert (tmp_path / take["filepath"]).read_bytes() == original
+    assert source.read_bytes() == original
 
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
