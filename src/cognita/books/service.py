@@ -1148,17 +1148,24 @@ class BookService:
                             and (after is None or text[end:end+len(after)] == after)):
                         chunks = snapshot.get("result", {}).get("chunks", [])
                         overlapping = [c["chunk_id"] for c in chunks if c["start"] < end and c["end"] > at]
+                        head = state.chapter_head(chapter_id, scope_key) if state else None
+                        matched_build_id = head["accepted_build_id"] if head else None
+                        current_takes = state.takes(chapter_id=chapter_id, snapshot_id=snapshot_id) if state else []
+                        matching_takes = [take["take_id"] for take in current_takes
+                                          if take.get("chunk_id") in overlapping]
                         matches.append({
                             "chapter_id": chapter_id, "snapshot_id": snapshot_id,
                             "chunk_ids": overlapping, "occurrence_start": at,
                             "occurrence_end": end, "coordinate_projection": "spoken_text_codepoints",
                             "excerpt": text[max(0, at-80):min(len(text), end+80)],
-                            "matched_build_id": None, "matched_take_ids": [],
+                            "matched_build_id": matched_build_id, "matched_take_ids": matching_takes,
                             "segment_kind": "speech", "current_chunk_ids": overlapping,
-                            "current_take_ids": [], "lineage": [],
-                            "current_mapping_status": "not_checked", "match_mode": "literal",
+                            "current_take_ids": matching_takes, "lineage": [],
+                            "current_mapping_status": "present" if overlapping else "missing", "match_mode": "literal",
                         })
                     start = at + max(1, len(query))
+        if not isinstance(request.query, dto.TimestampQuery):
+            version = canonical_json_sha256({"projection": "spoken-text-v1", "snapshots": searched_snapshots})
         cursor_view = canonical_json_sha256({
             "version": version, "query": query_value,
             "chapter_ids": chapter_ids if not isinstance(request.query, dto.TimestampQuery) else [],
