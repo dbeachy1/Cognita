@@ -536,7 +536,7 @@ async def test_single_file_final_policy_change_refuses_captured_publication(tmp_
     outcome = await task
 
     assert outcome is not None and not outcome.indexed
-    assert outcome.exclusion_reason == "policy_excluded"
+    assert outcome.exclusion_reason == "folder_exclusion"
     assert store.writes == []
 
 

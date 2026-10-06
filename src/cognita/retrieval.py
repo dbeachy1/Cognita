@@ -2130,8 +2130,10 @@ class RetrievalCore:
     ) -> None:
         record = doc.book_index_record
         policy = self.effective_index_policy_for(project)
-        if policy is not None and not policy.decision(doc.source, globally_eligible=True).indexed:
-            raise CapturedIndexPublicationError("policy_excluded")
+        if policy is not None:
+            decision = policy.decision(doc.source, globally_eligible=True)
+            if not decision.indexed:
+                raise CapturedIndexPublicationError(decision.reason)
         if record is not None and not self._book_index_currentness(project, record):
             raise CapturedIndexPublicationError("source_provenance_changed")
         if before_publish is not None:

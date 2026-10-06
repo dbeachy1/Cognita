@@ -2547,7 +2547,7 @@ def test_invalid_captured_chapter_annotation_blocks_before_legacy_docx_extractio
             tmp_path / "Chapters/1/chapter.docx", tmp_path,
             captured_content=lambda path, suffix, raw: service.index_captured_content(path, suffix, raw),
         )
-    assert raised.value.reason == "stale_file"
+    assert raised.value.reason == "validation_failed"
     assert projection.paragraphs  # Source projection was available; binding blocked publication.
 
 
