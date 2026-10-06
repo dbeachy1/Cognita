@@ -1089,6 +1089,81 @@ def _commit_book(service, operation_id, build_id, expected_head, intent):
     }), owner_key="principal:fixture")[0]
 
 
+def _persist_book_timeline_fixture(service, state, chapter_build_id, *, build_id, nested):
+    """Persist a small book build through the same state job/build authority."""
+    chapter_build = state.build(chapter_build_id)
+    assert chapter_build is not None
+    output = next(item for item in chapter_build["result"]["outputs"] if item["kind"] == "pcm_master")
+    dependency = {
+        "chapter_id": "ch1", "chapter_build_id": chapter_build_id,
+        "chapter_head_revision": 1, "snapshot_id": chapter_build["snapshot_id"],
+        "request_plan_sha256": chapter_build["request_plan_sha256"],
+    }
+    target = service_module.dto.ProductionTarget.model_validate(
+        json.loads((service.root / "Project Files/production-settings.json").read_text(encoding="utf-8"))["production_target"],
+        strict=True,
+    )
+    frames = int(output["media"]["frame_count"])
+    entry = {"source_id": "ch1", "kind": "audio", "start_frame": "0", "end_frame": str(frames),
+             "source_bytes_sha256": output["bytes_sha256"],
+             "source_samples_sha256": output["media"]["canonical_sample_sha256"]}
+    if nested:
+        entry.update(service._pinned_chapter_timeline(state, dependency, target=target, expected_frames=frames))
+    relative = f"Audiobook/Books/{build_id}"
+    directory = service.root / relative
+    directory.mkdir(parents=True)
+    timeline = {"sample_rate_hz": target.sample_rate_hz, "channels": target.channels,
+                "encoding": target.encoding, "storage_bits": target.storage_bits,
+                "frame_count": str(frames), "entries": [entry]}
+    (directory / "timeline.json").write_text(json.dumps(timeline), encoding="utf-8")
+    result = {"kind": "build", "build_id": build_id, "scope": "book", "namespace": {"kind": "production"},
+              "source_snapshot_ids": [dependency["snapshot_id"]],
+              "input_take_ids": chapter_build["input_take_ids"], "chapter_dependencies": [dependency],
+              "request_plan_sha256": None, "outputs": [output],
+              "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": "0" * 64,
+              "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                             "sample_or_packet_verification": True, "errors": []},
+              "needs_listening_review": True}
+    job_id = f"{build_id}-job"
+    state.reserve_build_job(
+        job={"job_id": job_id, "payload": {"scope": "book"},
+             "created_at": datetime.now(timezone.utc).isoformat(), "pinned_inputs_sha256": "0" * 64},
+        owner_key="principal:fixture", project="fixture", operation_id=f"{build_id}-reserve", args_sha256="0" * 64,
+    )
+    assert state.claim_build_job(job_id) is not None
+    state.finish_build_success(job_id=job_id, build={
+        "scope": "book", "build_id": build_id, "book_id": "fixture-book",
+        "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
+        "dependencies": [dependency], "result": result,
+    })
+    return result
+
+
+def test_book_timestamp_uses_pinned_child_identity_and_old_dependency_fallback(tmp_path):
+    service, state, stored, _settings_path, _layout_path, _chapter_path, _prose, _tagged, _settings = (
+        _production_prepared_fixture(tmp_path)
+    )
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="book-timeline")
+    accepted = _build_and_accept_production_chapter(
+        service, prepared, take, operation_prefix="book-timeline", expected_head=None,
+    )
+    chapter_build_id = accepted["accepted_build_id"]
+    for build_id, nested in (("book-nested", True), ("book-old", False)):
+        result = _persist_book_timeline_fixture(
+            service, state, chapter_build_id, build_id=build_id, nested=nested,
+        )
+        match = service.find_chunk(FindChunkRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "query": {"kind": "timestamp", "build_id": result["build_id"], "seconds": 0.0},
+        }))["matches"][0]
+        assert match["matched_build_id"] == result["build_id"]
+        assert match["chapter_id"] == "ch1" and match["snapshot_id"] == prepared["snapshot_id"]
+        assert match["chunk_ids"] == ["main"]
+        assert match["matched_take_ids"] == [take["take_id"]]
+        assert match["current_take_ids"] == [take["take_id"]]
+
+
 def test_direct_take_associations_keep_history_separate_from_current_head(tmp_path):
     service, state, stored, settings_path, *_rest, settings = _production_prepared_fixture(tmp_path)
     old_plan = stored["payload"]["result"]

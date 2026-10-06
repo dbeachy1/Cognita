@@ -2460,6 +2460,102 @@ class BookService:
             checked[chunk["chunk_id"]] = "present" if present else "missing"
         return checked, identity
 
+    @staticmethod
+    def _timeline_frame(value: Any, *, field: str) -> int:
+        if isinstance(value, bool) or not (
+            isinstance(value, int) or (isinstance(value, str) and value.isdecimal())
+        ):
+            raise BookServiceError("state_unavailable", f"The immutable timeline has an invalid {field}.")
+        return int(value)
+
+    def _pinned_chapter_timeline(
+        self, state: ProjectState, dependency: dict[str, Any], *, target: dto.ProductionTarget,
+        global_start: int = 0, expected_frames: int | None = None,
+    ) -> dict[str, Any]:
+        """Return one validated immutable chapter timeline bound to a book dependency.
+
+        New book timelines serialize this mapping below their top-level chapter
+        entry.  The same reader is intentionally retained for older top-only
+        book timelines, whose exact dependency is the only historical fallback.
+        """
+        chapter_id = dependency.get("chapter_id")
+        chapter_build_id = dependency.get("chapter_build_id")
+        snapshot_id = dependency.get("snapshot_id")
+        if not all(isinstance(value, str) and value for value in (chapter_id, chapter_build_id, snapshot_id)):
+            raise BookServiceError("state_unavailable", "A pinned book dependency is malformed.")
+        build = state.build(chapter_build_id)
+        if (build is None or build.get("scope") != "chapter" or build.get("chapter_id") != chapter_id
+                or build.get("snapshot_id") != snapshot_id or not isinstance(build.get("scope_key"), str)):
+            raise BookServiceError("state_unavailable", "A pinned chapter build is unavailable or inconsistent.")
+        try:
+            namespace = json.loads(build["scope_key"])
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise BookServiceError("state_unavailable", "A pinned chapter build namespace is malformed.") from exc
+        if namespace != {"kind": "production"}:
+            raise BookServiceError("state_unavailable", "A production book dependency has a non-production chapter namespace.")
+        selected = self._selected_chunk_takes(
+            state, build, chapter_id=chapter_id, scope_key=build["scope_key"],
+        )
+        output = next((item for item in build.get("result", {}).get("outputs", [])
+                       if item.get("kind") == "pcm_master"), None)
+        timeline_path = build.get("result", {}).get("timeline_filepath")
+        if not isinstance(output, dict) or not isinstance(timeline_path, str):
+            raise BookServiceError("state_unavailable", "A pinned chapter build lacks its PCM timeline facts.")
+        try:
+            timeline = json.loads(_path(self.root, timeline_path).read_text(encoding="utf-8"))
+            rate = int(timeline["sample_rate_hz"])
+            channels = int(timeline["channels"])
+            encoding = timeline["encoding"]
+            bits = int(timeline["storage_bits"])
+            frame_count = self._timeline_frame(timeline["frame_count"], field="frame_count")
+            entries = timeline["entries"]
+            media = output["media"]
+        except (BookServiceError, OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise BookServiceError("state_unavailable", "A pinned chapter timeline could not be read.") from exc
+        if (not isinstance(entries, list) or rate != target.sample_rate_hz or channels != target.channels
+                or encoding != target.encoding or bits != target.storage_bits
+                or any(media.get(key) != value for key, value in (
+                    ("sample_rate_hz", rate), ("channels", channels),
+                    ("encoding", encoding), ("storage_bits", bits), ("frame_count", frame_count),
+                ))):
+            raise BookServiceError("state_unavailable", "Pinned chapter media facts do not match its immutable timeline.")
+        if expected_frames is not None and frame_count != expected_frames:
+            raise BookServiceError("state_unavailable", "A pinned chapter timeline does not fill its book interval.")
+        snapshot = state.snapshot(snapshot_id)
+        chunks = (snapshot or {}).get("payload", {}).get("result", {}).get("chunks", [])
+        chunk_ids = {item.get("chunk_id") for item in chunks}
+        cursor = 0
+        child_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise BookServiceError("state_unavailable", "A pinned chapter timeline entry is malformed.")
+            source_id, kind = entry.get("source_id"), entry.get("kind")
+            start = self._timeline_frame(entry.get("start_frame"), field="entry start")
+            end = self._timeline_frame(entry.get("end_frame"), field="entry end")
+            if (not isinstance(source_id, str) or not source_id or kind not in {"audio", "silence"}
+                    or start != cursor or end <= start):
+                raise BookServiceError("state_unavailable", "A pinned chapter timeline has non-contiguous entries.")
+            cursor = end
+            child = {"source_id": source_id, "kind": kind,
+                     "start_frame": str(global_start + start), "end_frame": str(global_start + end)}
+            if kind == "audio":
+                take_id = selected.get(source_id)
+                take = state.take(take_id) if take_id else None
+                samples_sha256 = entry.get("source_samples_sha256", entry.get("canonical_sample_sha256"))
+                if (source_id not in chunk_ids or take is None
+                        or entry.get("source_bytes_sha256") != take.get("bytes_sha256")
+                        or samples_sha256 != take.get("media", {}).get("canonical_sample_sha256")):
+                    raise BookServiceError("state_unavailable", "A pinned chapter audio entry lacks its selected take facts.")
+                child.update({"take_id": take_id,
+                              "source_bytes_sha256": entry["source_bytes_sha256"],
+                              "source_samples_sha256": samples_sha256})
+            child_entries.append(child)
+        if cursor != frame_count:
+            raise BookServiceError("state_unavailable", "A pinned chapter timeline does not cover its retained PCM master.")
+        return {"chapter_id": chapter_id, "chapter_build_id": chapter_build_id,
+                "snapshot_id": snapshot_id, "namespace": namespace,
+                "child_entries": child_entries}
+
     def find_chunk(self, request: dto.FindChunkRequest) -> dict[str, Any]:
         state = self.discover_state()
         matches: list[dict[str, Any]] = []
@@ -2513,18 +2609,6 @@ class BookService:
             build = state.build(request.query.build_id) if state is not None else None
             if build is None:
                 raise BookServiceError("file_not_found", "The requested immutable build does not exist.")
-            matched_takes: dict[str, str] = {}
-            current_takes: dict[str, str] = {}
-            if build.get("scope") == "chapter":
-                matched_takes = self._selected_chunk_takes(
-                    state, build, chapter_id=build["chapter_id"], scope_key=build["scope_key"],
-                )
-                head = state.chapter_head(build["chapter_id"], build["scope_key"])
-                current_heads.append((build["chapter_id"], build["scope_key"], head))
-                current_takes = self._selected_chunk_takes(
-                    state, state.build(head["accepted_build_id"]) if head else None,
-                    chapter_id=build["chapter_id"], scope_key=build["scope_key"],
-                )
             result = build.get("result", {})
             timeline_path = result.get("timeline_filepath")
             if not isinstance(timeline_path, str):
@@ -2539,38 +2623,155 @@ class BookService:
             version = canonical_json_sha256({"build_id": request.query.build_id, "timeline": timeline})
             if frame >= int(timeline["frame_count"]):
                 raise BookServiceError("past_end", "The timestamp is at or after the immutable timeline end.")
+
+            def chapter_mapping(entry: dict[str, Any], start: int, end: int) -> dict[str, Any]:
+                """Read nested facts, or the exact retained dependency for old books."""
+                chapter_id = entry.get("source_id")
+                dependency = next((item for item in build.get("dependencies", [])
+                                   if item.get("chapter_id") == chapter_id), None)
+                if not isinstance(dependency, dict):
+                    raise BookServiceError("state_unavailable", "A book chapter timeline entry has no pinned dependency.")
+                child_entries = entry.get("child_entries")
+                if child_entries is None:
+                    dependency_build = state.build(dependency["chapter_build_id"])
+                    pcm_output = next((item for item in (dependency_build or {}).get("result", {}).get("outputs", [])
+                                       if item.get("kind") == "pcm_master"), None)
+                    if not isinstance(pcm_output, dict):
+                        raise BookServiceError("state_unavailable", "A retained book dependency lacks its PCM output facts.")
+                    target = dto.ProductionTarget.model_validate({
+                        "sample_rate_hz": timeline["sample_rate_hz"], "channels": timeline["channels"],
+                        "encoding": timeline["encoding"], "storage_bits": timeline["storage_bits"],
+                        "valid_bits": pcm_output["media"]["valid_bits"], "mp3_bitrate_kbps": 192,
+                    }, strict=True)
+                    return self._pinned_chapter_timeline(
+                        state, dependency, target=target, global_start=start, expected_frames=end - start,
+                    )
+                mapping = {key: entry.get(key) for key in (
+                    "chapter_id", "chapter_build_id", "snapshot_id", "namespace",
+                )}
+                if (mapping["chapter_id"] != dependency.get("chapter_id")
+                        or mapping["chapter_build_id"] != dependency.get("chapter_build_id")
+                        or mapping["snapshot_id"] != dependency.get("snapshot_id")
+                        or mapping["namespace"] != {"kind": "production"}
+                        or not isinstance(child_entries, list)):
+                    raise BookServiceError("state_unavailable", "A nested book chapter timeline is inconsistent.")
+                mapping["child_entries"] = child_entries
+                return mapping
+
+            def chapter_context(mapping: dict[str, Any], child: dict[str, Any], *, segment_kind: str) -> None:
+                chapter_id = mapping["chapter_id"]
+                chapter_build = state.build(mapping["chapter_build_id"])
+                if (chapter_build is None or chapter_build.get("scope") != "chapter"
+                        or chapter_build.get("chapter_id") != chapter_id
+                        or chapter_build.get("snapshot_id") != mapping["snapshot_id"]
+                        or json.loads(chapter_build.get("scope_key", "{}")) != mapping["namespace"]):
+                    raise BookServiceError("state_unavailable", "A nested book chapter build is unavailable.")
+                matched_takes = self._selected_chunk_takes(
+                    state, chapter_build, chapter_id=chapter_id, scope_key=chapter_build["scope_key"],
+                )
+                source_id = child.get("source_id")
+                if not isinstance(source_id, str) or child.get("kind") != "audio":
+                    raise BookServiceError("state_unavailable", "A nested book timeline lacks a frozen speech entry.")
+                if child.get("take_id") != matched_takes.get(source_id):
+                    raise BookServiceError("state_unavailable", "A nested book timeline take does not match its pinned chapter build.")
+                head = state.chapter_head(chapter_id, chapter_build["scope_key"])
+                current_heads.append((chapter_id, chapter_build["scope_key"], head))
+                current_takes = self._selected_chunk_takes(
+                    state, state.build(head["accepted_build_id"]) if head else None,
+                    chapter_id=chapter_id, scope_key=chapter_build["scope_key"],
+                )
+                if "chapter_id" in request.model_fields_set and request.chapter_id != chapter_id:
+                    return
+                current_ids, current_take_ids, lineage, mapping_status = current_mapping(
+                    [source_id], chapter_id, chapter_build["scope_key"], current_takes,
+                )
+                matches.append({
+                    "chapter_id": chapter_id, "snapshot_id": mapping["snapshot_id"], "chunk_ids": [source_id],
+                    "occurrence_start": None, "occurrence_end": None, "coordinate_projection": "timeline",
+                    "excerpt": f"{segment_kind}:{source_id}", "matched_build_id": request.query.build_id,
+                    "matched_take_ids": [matched_takes[source_id]], "segment_kind": segment_kind,
+                    "current_chunk_ids": current_ids, "current_take_ids": current_take_ids,
+                    "lineage": lineage, "current_mapping_status": mapping_status, "match_mode": "timestamp",
+                })
+
+            def validate_children(mapping: dict[str, Any], start: int, end: int) -> list[dict[str, Any]]:
+                cursor = start
+                children = mapping["child_entries"]
+                for child in children:
+                    if not isinstance(child, dict):
+                        raise BookServiceError("state_unavailable", "A nested book timeline entry is malformed.")
+                    child_start = self._timeline_frame(child.get("start_frame"), field="nested entry start")
+                    child_end = self._timeline_frame(child.get("end_frame"), field="nested entry end")
+                    if child_start != cursor or child_end <= child_start or child_end > end:
+                        raise BookServiceError("state_unavailable", "Nested book timeline entries do not fill their chapter interval.")
+                    cursor = child_end
+                if cursor != end:
+                    raise BookServiceError("state_unavailable", "Nested book timeline entries do not cover their chapter interval.")
+                return children
+
             for position, entry in enumerate(entries):
                 start_frame, end_frame = int(entry["start_frame"]), int(entry["end_frame"])
                 if start_frame <= frame < end_frame:
-                    source_id = entry["source_id"]
-                    chapter_id = build.get("chapter_id") or source_id
-                    if "chapter_id" in request.model_fields_set and request.chapter_id != chapter_id:
-                        continue
-                    source_ids = [source_id]
-                    if entry["kind"] == "silence":
-                        source_ids = [candidate["source_id"] for candidate in (
-                            entries[max(0, position - 1):position] + entries[position + 1:position + 2]
-                        ) if candidate.get("kind") == "audio"]
-                    take_ids = [take_id for chunk_id, take_id in matched_takes.items() if chunk_id in source_ids]
-                    current_take_ids = [take_id for chunk_id, take_id in current_takes.items() if chunk_id in source_ids]
-                    current_ids, lineage, mapping_status = (source_ids if take_ids else []), [], "not_checked"
                     if build.get("scope") == "chapter":
-                        current_ids, current_take_ids, lineage, mapping_status = current_mapping(
-                            source_ids, chapter_id, build["scope_key"], current_takes,
+                        selected = self._selected_chunk_takes(
+                            state, build, chapter_id=build["chapter_id"], scope_key=build["scope_key"],
                         )
-                    matches.append({
-                        "chapter_id": chapter_id, "snapshot_id": (
-                            build.get("snapshot_id") if build.get("scope") == "chapter" else None
-                        ) or "book-build",
-                        "chunk_ids": source_ids if build.get("scope") == "chapter" else [],
-                        "occurrence_start": None, "occurrence_end": None,
-                        "coordinate_projection": "timeline", "excerpt": f"{entry['kind']}:{source_id}",
-                        "matched_build_id": request.query.build_id, "matched_take_ids": take_ids,
-                        "segment_kind": "silence" if entry["kind"] == "silence" else "speech",
-                        "current_chunk_ids": current_ids,
-                        "current_take_ids": current_take_ids, "lineage": lineage, "current_mapping_status": mapping_status,
-                        "match_mode": "timestamp",
-                    })
+                        direct_mapping = {"chapter_id": build["chapter_id"], "chapter_build_id": build["build_id"],
+                                          "snapshot_id": build["snapshot_id"],
+                                          "namespace": json.loads(build["scope_key"])}
+
+                        def direct_speech(value: dict[str, Any]) -> dict[str, Any]:
+                            result = dict(value)
+                            result["take_id"] = selected.get(result.get("source_id"))
+                            return result
+
+                        if entry.get("kind") == "audio":
+                            chapter_context(direct_mapping, direct_speech(entry), segment_kind="speech")
+                        else:
+                            for candidates in (entries[:position][::-1], entries[position + 1:]):
+                                neighbour = next((candidate for candidate in candidates
+                                                  if candidate.get("kind") == "audio"), None)
+                                if neighbour is not None:
+                                    chapter_context(direct_mapping, direct_speech(neighbour), segment_kind="silence")
+                        continue
+                    if entry.get("kind") == "audio":
+                        mapping = chapter_mapping(entry, start_frame, end_frame)
+                    else:
+                        mapping = None
+                    if mapping is not None:
+                        children = validate_children(mapping, start_frame, end_frame)
+                        child = next((item for item in children
+                                      if int(item["start_frame"]) <= frame < int(item["end_frame"])), None)
+                        if child is None:
+                            raise BookServiceError("state_unavailable", "A nested chapter interval could not be resolved.")
+                        if child["kind"] == "audio":
+                            chapter_context(mapping, child, segment_kind="speech")
+                        else:
+                            child_position = children.index(child)
+                            for candidates in (children[:child_position][::-1], children[child_position + 1:]):
+                                neighbour = next((candidate for candidate in candidates
+                                                  if candidate.get("kind") == "audio"), None)
+                                if neighbour is not None:
+                                    chapter_context(mapping, neighbour, segment_kind="silence")
+                    else:
+                        neighbours: list[tuple[dict[str, Any], dict[str, Any]]] = []
+                        for direction in (-1, 1):
+                            index = position + direction
+                            while 0 <= index < len(entries):
+                                candidate = entries[index]
+                                if candidate.get("kind") == "audio":
+                                    candidate_start, candidate_end = int(candidate["start_frame"]), int(candidate["end_frame"])
+                                    candidate_mapping = chapter_mapping(candidate, candidate_start, candidate_end)
+                                    candidate_children = validate_children(candidate_mapping, candidate_start, candidate_end)
+                                    speech = next((value for value in (
+                                        candidate_children[::-1] if direction < 0 else candidate_children
+                                    ) if value.get("kind") == "audio"), None)
+                                    if speech is not None:
+                                        neighbours.append((candidate_mapping, speech))
+                                    break
+                                index += direction
+                        for candidate_mapping, speech in neighbours:
+                            chapter_context(candidate_mapping, speech, segment_kind="silence")
         else:
             if "chapter_id" not in request.model_fields_set:
                 raise BookServiceError("validation_failed", "Quote lookup requires an explicit chapter ID.")
@@ -4134,6 +4335,7 @@ class BookService:
         sources: list[PcmSource] = []
         source_snapshots: list[str] = []
         input_take_ids: list[str] = []
+        child_timelines: dict[str, dict[str, Any]] = {}
         dependencies = [entry["dependency"] for entry in pinned["chapters"]]
         for entry in pinned["chapters"]:
             output = entry["output"]
@@ -4152,8 +4354,13 @@ class BookService:
             sources.append(PcmSource(dependency["chapter_id"], path, inspected))
             source_snapshots.append(dependency["snapshot_id"])
             chapter_build = state.build(dependency["chapter_build_id"])
-            if chapter_build is not None:
-                input_take_ids.extend(chapter_build.get("input_take_ids", []))
+            if chapter_build is None:
+                raise BookServiceError("stale_dependency", "A pinned chapter build is unavailable for book assembly.")
+            input_take_ids.extend(chapter_build.get("input_take_ids", []))
+            child_timelines[dependency["chapter_id"]] = self._pinned_chapter_timeline(
+                state, dependency, target=target,
+                expected_frames=int(inspected.media.frame_count),
+            )
         gaps = [dto.SilenceGap.model_validate(item, strict=True) for item in pinned["gaps"]]
         self._check_pcm_build_preflight(layout, sources, gaps, target, emit_mp3=True)
         _mkdir_safe(self.root, root_relative)
@@ -4175,10 +4382,25 @@ class BookService:
             "duration_seconds": int(assembled.frame_count) / target.sample_rate_hz,
             "canonical_sample_sha256": assembled.samples_sha256,
         }, strict=True).model_dump(mode="json")
+        timeline_entries: list[dict[str, Any]] = []
+        for entry in assembled.timeline.entries:
+            value = _data(entry)
+            if entry.kind == "audio":
+                child = child_timelines.get(entry.source_id)
+                if child is None:
+                    raise BookServiceError("state_unavailable", "A book chapter entry lacks its pinned timeline facts.")
+                child_entries = []
+                for nested in child["child_entries"]:
+                    nested = dict(nested)
+                    nested["start_frame"] = str(int(entry.start_frame) + int(nested["start_frame"]))
+                    nested["end_frame"] = str(int(entry.start_frame) + int(nested["end_frame"]))
+                    child_entries.append(nested)
+                value.update({**child, "child_entries": child_entries})
+            timeline_entries.append(value)
         timeline_value = {"sample_rate_hz": assembled.timeline.sample_rate_hz,
                           "channels": assembled.timeline.channels, "encoding": assembled.timeline.encoding,
                           "storage_bits": assembled.timeline.storage_bits, "frame_count": assembled.timeline.frame_count,
-                          "entries": _data(assembled.timeline.entries)}
+                          "entries": timeline_entries}
         with timeline_stage.open("x", encoding="utf-8") as output:
             json.dump(timeline_value, output, ensure_ascii=False, separators=(",", ":"))
             output.flush()
