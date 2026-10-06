@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import io
 import json
 import struct
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2478,6 +2480,51 @@ async def test_registered_reference_reconcile_persists_refreshed_captured_proven
         content_hash=refreshed.extracted_sha256,
     )
     assert set(service.index_admitted_doc_ids([candidate])) == {refreshed.doc_id}
+
+
+@pytest.mark.parametrize("drift", ["source", "layout"])
+async def test_captured_book_index_refuses_source_or_config_drift_during_embedding(tmp_path, drift):
+    from cognita.retrieval import RetrievalCore
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    class BlockingEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.started, self.release = threading.Event(), threading.Event()
+
+        def embed(self, texts):
+            self.started.set()
+            assert self.release.wait(5)
+            return super().embed(texts)
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    store, embedder = ReconcileStore(), BlockingEmbedder()
+    async def no_existing_document(_project, _source):
+        return None
+    store.get_document = no_existing_document
+    core = RetrievalCore(store, embedder)
+    core.set_book_index_content_provider(lambda _p, source, suffix, raw: service.index_captured_content(source, suffix, raw))
+    core.set_book_index_capture_provider(lambda _p, document: service.capture_index_document(document))
+    core.set_book_index_currentness_provider(lambda _p, record: service.index_provenance_is_current(record))
+    core.set_book_index_provenance_recorder(lambda _p, record: service.record_index_provenance(record))
+    source = tmp_path / "Project Files/ref.md"
+    task = asyncio.create_task(core.index_file("fixture", tmp_path, source))
+    await asyncio.to_thread(embedder.started.wait, 5)
+    if drift == "source":
+        source.write_text("changed after capture", encoding="utf-8")
+    else:
+        layout_path = tmp_path / "Project Files/Book_Layout.json"
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        layout["title"] = "changed after capture"
+        layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    embedder.release.set()
+    outcome = await task
+
+    assert outcome is not None and not outcome.indexed
+    assert outcome.exclusion_reason == "source_provenance_changed"
+    assert store.replacements == []
 
 
 def test_invalid_captured_chapter_annotation_blocks_before_legacy_docx_extraction(tmp_path):
