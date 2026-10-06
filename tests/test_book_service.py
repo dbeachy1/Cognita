@@ -703,14 +703,36 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
                           "channels": 1, "duration": "0.25", "bit_rate": "96000", "nb_frames": "2"}],
              "format": {"format_name": "mp3", "duration": "0.25", "bit_rate": "96000"}}
     async def fake_probe(_executable, _filepath, **_kwargs): return probe
-    async def fake_packets(_executable, _filepath, **_kwargs): return (PacketFact(10, "a" * 64), PacketFact(11, "b" * 64))
+    async def fake_packets(_executable, _filepath, **_kwargs): return (PacketFact(10, "a" * 64),)
     async def fake_run(argv, **_kwargs):
+        if argv[-1] == "-version":
+            return SimpleNamespace(cancelled=False, timed_out=False, returncode=0,
+                                   stdout=b"ffmpeg version 7.1 fixture\n", stderr=b"", stdout_truncated=False)
         Path(argv[-1]).write_bytes(raw)
         return SimpleNamespace(cancelled=False, timed_out=False, returncode=0)
+    from cognita.books.mp3_validation import (
+        Mp3DecoderFileFacts, Mp3DecoderVerification, Mp3DecodedFrame,
+        Mp3Packet, Mp3ToolInvocation,
+    )
+    async def fake_decoder(ffmpeg, ffprobe, source_paths, output_path, **_kwargs):
+        packet = Mp3Packet(0, 10, "a" * 64, 0, 0)
+        source_facts = Mp3DecoderFileFacts(
+            str(source_paths[0]), "mp3", 44_100, 1, 1_152, 1_152 / 44_100,
+            1, 0, 0, (packet,), (Mp3DecodedFrame(0, 0, 1_152),),
+        )
+        output_facts = Mp3DecoderFileFacts(
+            str(output_path), "mp3", 44_100, 1, 1_152, 1_152 / 44_100,
+            1, 0, 0, (packet,), (Mp3DecodedFrame(0, 0, 1_152),),
+        )
+        return Mp3DecoderVerification(
+            "mp3-decoder-v1", "checked", True, True, True, (source_facts,), output_facts,
+            (), (Mp3ToolInvocation("ffmpeg", "output:decode_to_null", (str(ffmpeg), "-version")),),
+        )
     monkeypatch.setattr(service, "_registered_media_executables", lambda: (source, source))
     monkeypatch.setattr(service_module, "ffprobe_json", fake_probe)
     monkeypatch.setattr(service_module, "ffprobe_packet_facts", fake_packets)
     monkeypatch.setattr(service_module, "run_process", fake_run)
+    monkeypatch.setattr(service_module, "verify_chapter_mp3_decoder", fake_decoder)
     imported, _ = service.import_audio(ImportAudioRequest.model_validate({
         "project": "fixture", "operation_id": "test-mp3-import", "generation_record_id": generation["generation_record_id"],
         "expected_generation_revision": generation["generation_revision"],
@@ -737,6 +759,19 @@ def test_test_mp3_stream_copy_build_is_candidate_until_explicit_commit(tmp_path,
     assert candidate["state"] == "succeeded", candidate
     result = candidate["result"]
     assert [item["kind"] for item in result["outputs"]] == ["mp3_download"]
+    build_dir = tmp_path / result["outputs"][0]["filepath"]
+    build_facts = json.loads((build_dir.parent / "build.json").read_text(encoding="utf-8"))
+    timeline = json.loads((build_dir.parent / "timeline.json").read_text(encoding="utf-8"))
+    assert build_facts["recipe"]["tools"]["ffmpeg"]["version"] == "ffmpeg version 7.1 fixture"
+    assert build_facts["recipe"]["settings"]["stream_copy"] is True
+    assert build_facts["recipe"]["processing_argv"]
+    assert timeline["delay_padding_verified"] is True
+    assert timeline["seam_quality_assessed"] is False
+    assert timeline["sample_rate_hz"] == 44_100
+    assert timeline["entries"] == [{"kind": "audio", "source_id": take["chunk_id"],
+                                    "start_frame": 0, "end_frame": 1_152}]
+    assert timeline["decoder_verification"]["output"]["frames"][0]["decoded_end_frame"] == 1152
+    assert timeline["decoder_verification"]["output"]["packets"][0]["data_sha256"] == "a" * 64
     assert state.chapter_head("ch1", snapshot["scope_key"]) is None
     committed, _ = service.commit_build(CommitBuildRequest.model_validate({
         "project": "fixture", "operation_id": "test-mp3-commit", "build_id": result["build_id"],

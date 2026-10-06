@@ -34,6 +34,7 @@ from .assembly import (AssemblyError, Mp3Source, PcmSource, assemble_pcm_stream,
                        production_mp3_argv, build_test_mp3_stream_copy_argv, verify_mp3_packet_copy,
                        write_ffconcat_manifest)
 from .jobs import ProcessRunnerError, ffprobe_json, ffprobe_packet_facts, run_process
+from .mp3_validation import verify_chapter_mp3_decoder
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .read_helpers import (
     ReadCursorError, paired_text_page, parse_read_cursor, read_cursor, spoken_interval, text_page,
@@ -2134,23 +2135,73 @@ class BookService:
         directory = _path(self.root, relative)
         manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
         write_ffconcat_manifest([source.filepath for source in sources], manifest)
-        process = asyncio.run(run_process(build_test_mp3_stream_copy_argv(ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output, metadata=dto.BuildMetadata.model_validate(pinned["metadata"], strict=True)), timeout_seconds=1800.0, cwd=directory))
+        stream_copy_argv = build_test_mp3_stream_copy_argv(
+            ffmpeg, sources, [], scope="chapter", manifest=manifest, destination=output,
+            metadata=dto.BuildMetadata.model_validate(pinned["metadata"], strict=True),
+        )
+        tool_versions = {
+            "ffmpeg": {"executable": str(ffmpeg), "version": asyncio.run(_media_tool_version(ffmpeg))},
+            "ffprobe": {"executable": str(ffprobe), "version": asyncio.run(_media_tool_version(ffprobe))},
+        }
+        process = asyncio.run(run_process(stream_copy_argv, timeout_seconds=1800.0, cwd=directory))
         if process.cancelled: raise BookServiceError("cancelled", "MP3 stream-copy was cancelled.")
         if process.timed_out: raise BookServiceError("tool_timeout", "MP3 stream-copy exceeded its bounded runtime.")
         if process.returncode != 0: raise BookServiceError("tool_failed", "MP3 stream-copy failed.")
         output_probe = asyncio.run(ffprobe_json(ffprobe, output, timeout_seconds=60.0))
         inspected = inspect_media_file(output, ffprobe=output_probe)
         proof = verify_mp3_packet_copy(packet_inputs, asyncio.run(ffprobe_packet_facts(ffprobe, output, timeout_seconds=60.0)))
-        # FFprobe's decoded stream duration is the independent duration/boundary
-        # check; packet equality remains the primary no-conversion proof.
         if inspected.media.codec != "mp3" or inspected.media.duration_seconds <= 0:
             raise BookServiceError("media_mismatch", "Stream-copy output lacks decodable MP3 duration facts.")
+        decoder = asyncio.run(verify_chapter_mp3_decoder(
+            ffmpeg, ffprobe, [source.filepath for source in sources], output,
+            timeout_seconds=300.0,
+        ))
+        if decoder.status != "checked" or not (
+            decoder.packet_order_checked and decoder.decoder_checked and decoder.boundaries_checked
+        ):
+            raise BookServiceError("validation_failed", "MP3 decoder and join-boundary verification did not complete.")
+        decoder_facts = asdict(decoder)
+        for fact, source in zip(decoder_facts["sources"], sources, strict=True):
+            fact["filepath"] = str(source.filepath.relative_to(self.root))
+        decoder_facts["output"]["filepath"] = str(output.relative_to(self.root))
+        recipe = {
+            "recipe_version": 1, "mode": "test_mp3_stream_copy", "scope": "chapter",
+            "inputs": [
+                {"chunk_id": source.source_id, "filepath": str(source.filepath.relative_to(self.root)),
+                 "take_id": take["take_id"], "bytes_sha256": take["bytes_sha256"],
+                 "media": source.inspection.media.model_dump(mode="json")}
+                for source, take in zip(sources, takes, strict=True)
+            ],
+            "output": {"filepath": str(output.relative_to(self.root)), "codec": "mp3",
+                       "encoding": "compressed", "source_bitrate_kbps": pinned["source_bitrate_kbps"]},
+            "settings": {"metadata": pinned["metadata"], "stream_copy": True,
+                         "resample": False, "bitrate_change": False, "master_output": False},
+            "tools": tool_versions,
+            "processing_argv": stream_copy_argv,
+            "packet_copy": asdict(proof),
+            "decoder_verification": decoder_facts,
+        }
+        join_offsets = [boundary.output_decoded_frame_offset for boundary in decoder.join_boundaries]
+        offsets = [0, *join_offsets, decoder.output.decoded_frames]
+        if len(offsets) != len(pinned["chunk_ids"]) + 1 or any(
+            start >= end for start, end in zip(offsets[:-1], offsets[1:], strict=True)
+        ):
+            raise BookServiceError("media_mismatch", "Decoded MP3 join offsets do not map every chunk to a nonempty timeline interval.")
+        timeline_entries = [
+            {"kind": "audio", "source_id": chunk_id, "start_frame": start, "end_frame": end}
+            for chunk_id, start, end in zip(pinned["chunk_ids"], offsets, offsets[1:], strict=True)
+        ]
         timeline = directory / "timeline.json"
-        _write_immutable_json(timeline, {"mode": "test_mp3_stream_copy", "packet_count": proof.packet_count,
-                                         "ordered_packets_sha256": proof.ordered_packets_sha256,
-                                         "duration_seconds": inspected.media.duration_seconds, "delay_padding_verified": False})
-        result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256({"pinned": pinned, "proof": proof.ordered_packets_sha256}), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
-        _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result})
+        _write_immutable_json(timeline, {
+            "mode": "test_mp3_stream_copy", "duration_seconds": decoder.output.decoded_duration_seconds,
+            "sample_rate_hz": decoder.output.sample_rate, "channels": decoder.output.channels,
+            "frame_count": decoder.output.decoded_frames, "entries": timeline_entries,
+            "packet_count": proof.packet_count, "ordered_packets_sha256": proof.ordered_packets_sha256,
+            "delay_padding_verified": decoder.boundaries_checked,
+            "seam_quality_assessed": False, "decoder_verification": decoder_facts,
+        })
+        result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256(recipe), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
+        _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result, "recipe": recipe})
         state.finish_build_success(job_id=job_id, build={"scope": "chapter", "build_id": build_id,
             "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"], "snapshot_id": pinned["snapshot_id"],
             "request_plan_sha256": pinned["request_plan_sha256"], "input_take_ids": pinned["take_ids"],
@@ -2668,6 +2719,19 @@ def _mkdir_safe(root: Path, relative: str) -> None:
             facts = target.lstat()
         if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
             raise BookServiceError("permission_denied", "Managed snapshot directories cannot contain links.")
+
+
+async def _media_tool_version(executable: Path) -> str:
+    """Capture the registered media tool's actual version banner for build provenance."""
+    result = await run_process(
+        [str(executable), "-version"], timeout_seconds=10.0, max_output_bytes=16_384,
+    )
+    if result.cancelled or result.timed_out or result.returncode != 0 or result.stdout_truncated:
+        raise ProcessRunnerError("tool_version_unavailable", "A registered media tool version could not be verified.")
+    banner = (result.stdout or result.stderr).decode("utf-8", errors="replace").splitlines()
+    if not banner or not banner[0].strip():
+        raise ProcessRunnerError("tool_version_unavailable", "A registered media tool returned no version banner.")
+    return banner[0].strip()
 
 
 def _write_immutable_json(path: Path, value: dict[str, Any]) -> None:
