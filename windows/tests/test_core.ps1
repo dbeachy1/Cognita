@@ -92,8 +92,8 @@ Test-Case 'localized helper recovery retains the original technical fix and know
         $p = $j | ConvertFrom-Json
         Assert-Equal $originalFix $p.fix 'diagnostic fix stays English'
         Assert-Equal $originalFix $p.fix_technical 'Setup can show the original fix beside localized recovery'
-        Assert-Match $p.fix_display 'ports dans Options avancées\.' 'specific port recovery is localized'
-        Assert-Equal 'Le port 8675 est utilisé par python.' $p.message_display 'known values are substituted in translated text'
+        Assert-Match $p.fix_display ('ports dans Options avanc' + [char]0xE9 + 'es\.') 'specific port recovery is localized'
+        Assert-Equal ('"Le port 8675 est utilis\u00e9 par python."' | ConvertFrom-Json) $p.message_display 'known values are substituted in translated text'
 
         $j = Format-ProgressJson -Stage 'import' -Title 'Setting up Cognita''s Linux' -State 'failed' -BytesDone $null -BytesTotal $null `
             -Message 'WSL could not start a virtual machine.' -Fix 'Turn on virtualization (Intel VT-x or AMD-V/SVM) in your PC''s BIOS/UEFI settings. On a virtual machine, turn on nested virtualization.' -MessageId 'setup.import.virtualization'
@@ -115,7 +115,7 @@ Test-Case 'localized helper recovery retains the original technical fix and know
             -MessageId 'setup.funnel.enable_required' -Values @{ link = 'https://login.tailscale.com/f/funnel?node=nABC123' }
         $p = $j | ConvertFrom-Json
         Assert-Match $p.message_display 'https://login.tailscale.com/f/funnel\?node=nABC123' 'Funnel owner link remains usable'
-        Assert-Match $p.fix_display 'Réessayer' 'Funnel recovery is localized'
+        Assert-Match $p.fix_display ('R' + [char]0xE9 + 'essayer') 'Funnel recovery is localized'
 
         $j = Format-ProgressJson -Stage 'external' -Title 'External tool' -State 'failed' -BytesDone $null -BytesTotal $null `
             -Message 'tool failed (exit 9)' -Fix 'Run tool --repair --target C:\\data'
