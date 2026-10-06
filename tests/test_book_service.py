@@ -4096,6 +4096,123 @@ def test_index_status_reports_pending_and_blocked_registered_sources(tmp_path):
     assert failed["entries"][0]["error"]["code"] == "index_failed"
 
 
+@pytest.mark.parametrize("change,location,code", [
+    ("source_hash", None, "validation_failed"),
+    ("version", None, "validation_failed"),
+    ("paragraph", "unknown-paragraph", "validation_failed"),
+    ("negative_start", "index_annotations.spans[0].start", "validation_failed"),
+    ("end_outside", None, "validation_failed"),
+    ("text_hash", None, "validation_failed"),
+    ("overlap", None, "validation_failed"),
+    ("end_type", "index_annotations.spans[0].end", "validation_failed"),
+    ("empty_range", "index_annotations.spans[0]", "validation_failed"),
+    ("chapter_binding", "chapter_id", "stale_file"),
+    ("layout_binding", "layout_revision", "stale_file"),
+    ("invalid_json", "line 1, column 2", "validation_failed"),
+])
+def test_index_status_blocks_external_annotation_configuration_edits(tmp_path, change, location, code):
+    from cognita.books.config import validate_chapter_state
+    from cognita.parsing import parse_file
+
+    service, raw, _tagged = _fixture(tmp_path, bound=True)
+    state = ProjectState.initialize(tmp_path)
+    path = "Chapters/1/chapter.docx"
+    configuration = tmp_path / "Chapters/1/chapter.json"
+    chapter_state = json.loads(configuration.read_text(encoding="utf-8"))
+    paragraph_id = parse_docx(raw).paragraphs[0].paragraph_id
+    chapter_state["index_annotations"] = {
+        "source_raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "extraction_version": "cognita-docx-v1",
+        "spans": [{"paragraph_id": paragraph_id, "start": 0, "end": 1,
+                   "expected_text_sha256": hashlib.sha256(b"h").hexdigest(), "reason": "editorial"}],
+    }
+    configuration.write_text(json.dumps(chapter_state), encoding="utf-8")
+    parsed = parse_file(
+        tmp_path / path, tmp_path, captured_content=service.index_captured_content,
+    )
+    assert parsed is not None and parsed.content == "ello"
+    record = service.capture_index_document(parsed).book_index_record
+    assert service.record_index_provenance(record) == record
+    candidate = SimpleNamespace(source=path, doc_id=parsed.doc_id, content_hash=parsed.content_hash)
+    assert set(service.index_admitted_doc_ids([candidate], "editing")) == {parsed.doc_id}
+    request = IndexStatusRequest.model_validate({"project": "fixture", "filepath": path})
+    assert service.index_status(request, indexed_sources={path})["entries"][0]["index_state"] == "indexed"
+
+    # These edits bypass managed writes: status must validate current external
+    # inputs itself, without replacing the old provenance or saving a failure.
+    annotations = chapter_state["index_annotations"]
+    span = annotations["spans"][0]
+    if change == "source_hash":
+        annotations["source_raw_sha256"] = "0" * 64
+    elif change == "version":
+        annotations["extraction_version"] = "unknown-version"
+    elif change == "paragraph":
+        span["paragraph_id"] = "unknown-paragraph"
+    elif change == "negative_start":
+        span["start"] = -1
+    elif change == "end_outside":
+        span["end"] = 100
+    elif change == "text_hash":
+        span["expected_text_sha256"] = "0" * 64
+    elif change == "overlap":
+        annotations["spans"].append(dict(span))
+    elif change == "end_type":
+        span["end"] = True
+    elif change == "empty_range":
+        span["end"] = 0
+    elif change == "chapter_binding":
+        chapter_state["chapter_id"] = "other-chapter"
+    elif change == "layout_binding":
+        chapter_state["layout_revision"] = 2
+    configuration.write_text("{" if change == "invalid_json" else json.dumps(chapter_state), encoding="utf-8")
+
+    annotation_error = None
+    if change in {"source_hash", "version", "paragraph", "end_outside", "text_hash", "overlap"}:
+        with pytest.raises(BookServiceError) as invalid:
+            service._annotation_filtered_text(raw, validate_chapter_state(chapter_state).index_annotations)
+        annotation_error = invalid.value
+    for current in (service, BookService(tmp_path, "fixture")):
+        entry = current.index_status(request, indexed_sources={path})["entries"][0]
+        assert entry["index_state"] == "blocked"
+        assert entry["error"]["code"] == code
+        assert "Chapters/1/chapter.json:" in entry["error"]["message"]
+        if location is not None:
+            assert location in entry["error"]["message"]
+        if annotation_error is not None:
+            assert entry["error"] == {
+                "code": annotation_error.reason,
+                "message": f"Chapters/1/chapter.json: {annotation_error}"[:512],
+            }
+        assert len(entry["error"]["message"]) <= 512
+        if change == "text_hash":
+            assert f"{paragraph_id}:{span['start']}-{span['end']}" in entry["error"]["message"]
+        assert current.index_admitted_doc_ids([candidate], "editing") == {}
+    assert state.indexed_role_provenance(path) == record
+    assert state.managed_write_status(path) is None
+
+
+def test_index_status_reports_exact_external_docx_part_location_without_annotations(tmp_path):
+    from lxml import etree
+
+    service, _raw, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    path = "Chapters/1/chapter.docx"
+
+    def add_table(document):
+        body = document.find(f"{{{W}}}body")
+        table = etree.Element(f"{{{W}}}tbl")
+        body.insert(1, table)
+
+    _rewrite_docx_part(tmp_path / path, add_table)
+    request = IndexStatusRequest.model_validate({"project": "fixture", "filepath": path})
+    for current in (service, BookService(tmp_path, "fixture")):
+        entry = current.index_status(request, indexed_sources=set())["entries"][0]
+        assert entry["index_state"] == "blocked"
+        assert entry["error"]["code"] == "unsupported_docx_structure"
+        assert "word/document.xml:/body/tbl[1]" in entry["error"]["message"]
+        assert len(entry["error"]["message"]) <= 512
+
+
 def test_index_status_binds_pages_and_reports_stale_and_excluded_sources(tmp_path):
     from cognita.books.policy import EffectiveIndexPolicy
     from cognita.parsing import parse_file

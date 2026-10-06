@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
+from pydantic import ValidationError
+
 from . import models as dto
 from .config import (
     BookBinding, BookLayout, validate_chapter_state,
@@ -702,7 +704,34 @@ class BookService:
                     chapter_state = validate_chapter_state(
                         _read_bytes(self.root, chapter.chapter_state_filepath)
                     )
-                except (BookServiceError, ValueError, ProjectionError):
+                    for field, expected in (("chapter_id", chapter.chapter_id), ("layout_revision", layout.layout_revision)):
+                        if getattr(chapter_state, field) != expected:
+                            raise BookServiceError("stale_file", f"{field}: Chapter index configuration is stale.")
+                    if role == "chapter_working":
+                        # External edits have no managed-write receipt.  Consume
+                        # the same captured-source validator before reporting
+                        # pending/stale/indexed; never bless malformed annotations.
+                        self._annotation_filtered_text(raw, chapter_state.index_annotations)
+                except BookServiceError as exc:
+                    source_error = {
+                        "code": exc.reason,
+                        "message": f"{chapter.chapter_state_filepath}: {exc}"[:512],
+                    }
+                except ValidationError as exc:
+                    location = ""
+                    for part in exc.errors(include_url=False, include_context=False, include_input=False)[0]["loc"]:
+                        location += f"[{part}]" if isinstance(part, int) else ("." if location else "") + str(part)
+                    source_error = {
+                        "code": "validation_failed",
+                        "message": f"{chapter.chapter_state_filepath}:{location or '$'}: Invalid chapter index configuration."[:512],
+                    }
+                    chapter_state = None
+                except ValueError as exc:
+                    location = f"line {exc.lineno}, column {exc.colno}" if isinstance(exc, json.JSONDecodeError) else "$"
+                    source_error = {
+                        "code": "validation_failed",
+                        "message": f"{chapter.chapter_state_filepath}:{location}: Invalid chapter index configuration."[:512],
+                    }
                     chapter_state = None
             editorial_status = chapter_state.editorial_status if chapter_state is not None else None
             summary_freshness = default_freshness
