@@ -616,7 +616,9 @@ class ProjectState:
             if job_id is not None:
                 connection.execute(
                     "INSERT INTO policy_jobs(job_id,revision,state,details_json) VALUES(?,?,?,?)",
-                    (job_id, next_revision, "queued", "{}"),
+                    (job_id, next_revision, "queued", json.dumps(
+                        {"path": path, "indexed": indexed}, sort_keys=True, separators=(",", ":")
+                    )),
                 )
             value = dict(result)
             value["policy_revision"] = next_revision
@@ -729,6 +731,19 @@ class ProjectState:
             "state": row["state"], "details": json.loads(row["details_json"]),
             "updated_at": row["updated_at"],
         }
+
+    def pending_policy_jobs(self) -> list[dict]:
+        """Durable derived-index work that must run before watcher publication."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT job_id,revision,state,details_json,updated_at FROM policy_jobs "
+                "WHERE state IN ('queued','running','pending') ORDER BY updated_at,job_id"
+            ).fetchall()
+        return [{
+            "job_id": row["job_id"], "policy_revision": int(row["revision"]),
+            "state": row["state"], "details": json.loads(row["details_json"]),
+            "updated_at": row["updated_at"],
+        } for row in rows]
 
     def begin_managed_write(
         self, *, job_id: str, source_path: str, bytes_sha256: str,

@@ -280,6 +280,10 @@ class LocalEngineHost(
                 # against an unloaded list and re-index every de-indexed file.
                 self.deindexed(project)
                 await self.store.ensure_project(project.name)
+                # Complete committed source-side policy changes before the
+                # watcher can publish derived rows.  A crash or PG outage leaves
+                # only a durable pending job, never an implied completed purge.
+                await self._recover_pending_policy_jobs(project)
                 service = self._asset_service_for(project, None)
                 await service.recover()
                 attached_projects.append(project)
@@ -360,6 +364,51 @@ class LocalEngineHost(
             if ok and not self.probe_ok:
                 log.info("Deep probe: PostgreSQL recovered")
             self.probe_ok = ok
+
+    async def _run_policy_job(
+        self, project: Project, service: BookService, job_id: str,
+        path: str, indexed: bool,
+    ) -> Exception | None:
+        """Apply a committed folder policy to derived rows, truthfully.
+
+        The source-side rule is already authoritative.  This only changes its
+        durable job from pending to a terminal state once the existing targeted
+        reconciler has successfully retired/rebuilt every affected document.
+        """
+        try:
+            service.update_folder_policy_job(job_id, "running", {})
+            summary = await self.core.reconcile_paths(
+                project.name, project.documents_dir, [path or "."],
+            )
+            if summary.get("failed", 0):
+                raise RuntimeError("derived policy reconciliation failed")
+            service.update_folder_policy_job(
+                job_id, "indexed" if indexed else "excluded",
+                {"indexed": summary.get("indexed", 0), "removed": summary.get("removed", 0)},
+            )
+            return None
+        except Exception as exc:
+            try:
+                service.update_folder_policy_job(job_id, "pending", {"error": type(exc).__name__})
+            except BookServiceError:
+                pass
+            return exc
+
+    async def _recover_pending_policy_jobs(self, project: Project) -> None:
+        state = self.project_state_for(project)
+        if state is None:
+            return
+        service = self.book_service_for(project)
+        for job in state.pending_policy_jobs():
+            details = job["details"]
+            path, indexed = details.get("path"), details.get("indexed")
+            if not isinstance(path, str) or not isinstance(indexed, bool):
+                state.update_policy_job(job["job_id"], "pending", {"error": "missing_policy_details"})
+                continue
+            failure = await self._run_policy_job(project, service, job["job_id"], path, indexed)
+            if failure is not None:
+                log.info("Policy purge remains pending project=%s job=%s reason=%s",
+                         project.name, job["job_id"], type(failure).__name__)
 
     async def shutdown(self) -> None:
         if self._probe_task is not None:
@@ -732,39 +781,19 @@ class LocalEngineHost(
                         expected_policy_revision=request_model.expected_policy_revision,
                         owner_key=owner_key,
                     )
-                    if not replayed:
-                        # Policy authority commits before PostgreSQL work.  A
-                        # disabled path is therefore invisible to search as soon
-                        # as this call returns even if physical cleanup cannot
-                        # run.  When the index is healthy, use the existing
-                        # targeted reconciler immediately; it deletes derived
-                        # rows under the path and re-admits only currently
-                        # eligible descendants on an enable.
-                        job_id = data["job_id"]
-                        try:
-                            service.update_folder_policy_job(job_id, "running", {})
-                            dirty_path = request_model.path or "."
-                            summary = await self.core.reconcile_paths(
-                                project.name, project.documents_dir, [dirty_path],
-                            )
-                            if summary.get("failed", 0):
-                                raise RuntimeError("derived policy reconciliation failed")
-                            terminal = "indexed" if request_model.indexed else "excluded"
-                            service.update_folder_policy_job(
-                                job_id, terminal,
-                                {"indexed": summary.get("indexed", 0),
-                                 "removed": summary.get("removed", 0)},
-                            )
-                        except Exception as exc:
-                            # Do not turn a committed source-side exclusion into
-                            # a false success about derived cleanup.  The durable
-                            # job remains pending for startup/reindex recovery.
-                            try:
-                                service.update_folder_policy_job(
-                                    job_id, "pending", {"error": type(exc).__name__},
-                                )
-                            except BookServiceError:
-                                pass
+                    job_id = data["job_id"]
+                    # A replay normally returns the original terminal receipt.
+                    # A pending receipt is different: it means policy committed
+                    # while derived cleanup did not, so reattempt it now instead
+                    # of claiming completion merely because the ID is familiar.
+                    state = service.discover_state()
+                    job = state.policy_job(job_id) if state is not None else None
+                    pending = job is not None and job["state"] in {"queued", "running", "pending"}
+                    if not replayed or pending:
+                        failure = await self._run_policy_job(
+                            project, service, job_id, request_model.path, request_model.indexed,
+                        )
+                        if failure is not None:
                             return error_envelope(
                                 tool, reason="index_cleanup_pending",
                                 message=("Folder policy was committed, but derived index cleanup is "
