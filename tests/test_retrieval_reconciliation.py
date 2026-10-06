@@ -6,6 +6,7 @@ import logging
 import os
 import time
 
+import pytest
 
 from cognita.retrieval import RetrievalCore
 from cognita.store import SourceInfo
@@ -170,6 +171,71 @@ async def test_root_identity_change_blocks_destructive_reconciliation(tmp_path):
     assert result["removed"] == 0
     assert result["failed"] == 1
     assert "note.md" in store.sources
+
+
+@pytest.mark.parametrize("change", ["source_callback", "root_identity"])
+async def test_post_embedding_root_and_source_guards_preserve_previous_rows(tmp_path, change):
+    import asyncio
+    import threading
+
+    documents = tmp_path / "documents"
+    documents.mkdir()
+    note = documents / "note.md"
+    vanished = documents / "vanished.md"
+    note.write_text("previous indexed note", encoding="utf-8")
+    vanished.write_text("previous indexed vanished source", encoding="utf-8")
+    store = ReconcileStore()
+    core = core_for(store)
+    identity = core.attach_root("P", documents)
+    initial = await core.reconcile_paths("P", documents, ["."], root_identity=identity)
+    assert initial["indexed"] == 2
+    previous_sources = dict(store.sources)
+    previous_docs = dict(store.docs)
+    previous_replacements = list(store.replacements)
+    note.write_text("new changed content awaiting publication", encoding="utf-8")
+    vanished.unlink()  # Also exercise a pending deletion in the same batch.
+    started = threading.Event()
+    release = threading.Event()
+    source_safe = True
+
+    class SuspendedEmbedder(HashEmbedder):
+        def embed(self, texts):
+            assert texts == ["new changed content awaiting publication"]
+            started.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("synthetic embedding barrier was not released")
+            return super().embed(texts)
+
+    core.embedder = SuspendedEmbedder()
+    task = asyncio.create_task(core.reconcile_paths(
+        "P", documents, ["."], root_identity=identity, source_is_safe=lambda: source_safe,
+    ))
+    try:
+        assert await asyncio.to_thread(started.wait, 5), "reconciliation did not reach actual embedding"
+        # Planning and the pre-embedding safety check already passed. Change the
+        # existing authority while the real _index_parsed await is suspended.
+        if change == "source_callback":
+            source_safe = False
+        else:
+            documents.rename(tmp_path / "original-documents")
+            documents.mkdir()
+            (documents / "note.md").write_text("replacement root bytes", encoding="utf-8")
+            assert core.capture_root_identity(documents) != identity
+    finally:
+        # The owned worker thread and reconciliation task are always released
+        # and awaited, including failed assertions inside this synthetic race.
+        release.set()
+        result = await asyncio.wait_for(task, timeout=10)
+
+    assert result["indexed"] == result["removed"] == 0
+    note_failure = next(failure for failure in result["failures"] if failure["path"] == "note.md")
+    assert note_failure["retryable"] is True
+    expected_error = "source_unavailable" if change == "source_callback" else "documents root identity changed"
+    assert expected_error in note_failure["error"]
+    assert "note.md" in result["retryable_failures"]
+    assert store.sources == previous_sources and store.docs == previous_docs
+    assert store.replacements == previous_replacements
+    assert store.deleted == [] and store.touched == []
 
 
 async def test_path_escape_is_retryable_and_does_not_touch_store(tmp_path):
