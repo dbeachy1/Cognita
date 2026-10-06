@@ -564,6 +564,27 @@ class BookService:
             raise BookServiceError("configuration_conflict", "Book configuration is not enabled and valid.")
         return state, config, config.layout
 
+    def _authorize_snapshot_read(self, stored: dict[str, Any], chapter_id: str) -> None:
+        """Permit production history or a still-active bound test namespace."""
+        try:
+            scope = json.loads(stored["scope_key"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise BookServiceError("state_unavailable", "The stored snapshot namespace is malformed.") from exc
+        if scope == {"kind": "production"}:
+            return
+        authorization_id = scope.get("authorization_id") if scope.get("kind") == "test" else None
+        config = self.config()
+        authorization = next((item for item in (config.layout.test_authorizations if config.layout else [])
+                              if item.authorization_id == authorization_id and item.chapter_id == chapter_id), None)
+        if authorization is None or authorization.revoked:
+            raise BookServiceError("not_authorized", "The requested test snapshot is no longer authorized.")
+        try:
+            expires_at = datetime.fromisoformat(str(authorization.expires_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise BookServiceError("state_unavailable", "The test authorization expiry is malformed.") from exc
+        if expires_at <= datetime.now(timezone.utc):
+            raise BookServiceError("not_authorized", "The requested test snapshot is no longer authorized.")
+
     def _chapter(self, layout: BookLayout, chapter_id: str):
         for chapter in layout.chapters:
             if chapter.chapter_id == chapter_id:
@@ -1177,6 +1198,7 @@ class BookService:
                 stored = state.snapshot(snapshot_id)
                 if not stored or stored["chapter_id"] != chapter_id:
                     raise BookServiceError("snapshot_not_found", "The requested snapshot is unavailable for this chapter.")
+                self._authorize_snapshot_read(stored, chapter_id)
                 searched_snapshots.append(snapshot_id)
                 snapshot = stored["payload"]
                 text = snapshot.get("spoken_projection", "")
@@ -1187,20 +1209,41 @@ class BookService:
                             and (after is None or text[end:end+len(after)] == after)):
                         chunks = snapshot.get("result", {}).get("chunks", [])
                         overlapping = [c["chunk_id"] for c in chunks if c["start"] < end and c["end"] > at]
-                        head = state.chapter_head(chapter_id, scope_key) if state else None
-                        matched_build_id = head["accepted_build_id"] if head else None
-                        current_takes = state.takes(chapter_id=chapter_id, snapshot_id=snapshot_id) if state else []
+                        search_scope_key = stored["scope_key"]
+                        historical_builds = state.builds(chapter_id=chapter_id, scope_key=search_scope_key)
+                        matched = next((build for build in historical_builds
+                                        if build.get("snapshot_id") == snapshot_id and build.get("was_accepted")), None)
+                        matched_build_id = matched.get("build_id") if matched else None
+                        current_namespace = state.namespace(chapter_id, scope_key) if state else None
+                        current_snapshot = current_namespace.get("current_snapshot_id") if current_namespace else None
+                        current_stored = state.snapshot(current_snapshot) if current_snapshot else None
+                        current_chunks = current_stored["payload"].get("result", {}).get("chunks", []) if current_stored else []
+                        lineage = []
+                        current_ids: list[str] = []
+                        for old_id in overlapping:
+                            mapped = [item["chunk_id"] for item in current_chunks if (
+                                item.get("chunk_id") == old_id or old_id in item.get("replaces_chunk_ids", [])
+                            )]
+                            if mapped != [old_id]:
+                                lineage.append({"old_chunk_id": old_id, "current_chunk_ids": mapped})
+                            current_ids.extend(mapped)
+                        current_ids = list(dict.fromkeys(current_ids))
+                        current_takes = state.takes(chapter_id=chapter_id, snapshot_id=current_snapshot) if current_snapshot else []
                         matching_takes = [take["take_id"] for take in current_takes
-                                          if take.get("chunk_id") in overlapping]
+                                          if take.get("chunk_id") in current_ids]
+                        mapping_status = ("present" if all(len(item["current_chunk_ids"]) == 1 for item in lineage)
+                                          and current_ids else "missing")
+                        if any(len(item["current_chunk_ids"]) > 1 for item in lineage):
+                            mapping_status = "ambiguous"
                         matches.append({
                             "chapter_id": chapter_id, "snapshot_id": snapshot_id,
                             "chunk_ids": overlapping, "occurrence_start": at,
                             "occurrence_end": end, "coordinate_projection": "spoken_text_codepoints",
                             "excerpt": text[max(0, at-80):min(len(text), end+80)],
                             "matched_build_id": matched_build_id, "matched_take_ids": matching_takes,
-                            "segment_kind": "speech", "current_chunk_ids": overlapping,
-                            "current_take_ids": matching_takes, "lineage": [],
-                            "current_mapping_status": "present" if overlapping else "missing", "match_mode": "literal",
+                            "segment_kind": "speech", "current_chunk_ids": current_ids,
+                            "current_take_ids": matching_takes, "lineage": lineage,
+                            "current_mapping_status": mapping_status, "match_mode": "literal",
                         })
                     start = at + max(1, len(query))
         if not isinstance(request.query, dto.TimestampQuery):
