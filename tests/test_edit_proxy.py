@@ -31,6 +31,7 @@ ENGINE_TOOLS = [
         "list_categories", "get_index_stats", "get_reindex_status",
         "evaluate_retrieval", "add_document", "update_document",
         "remove_document", "add_from_url", "reindex_documents",
+        "move_document",
     ]
 ]
 
@@ -51,6 +52,13 @@ def make_fake_worker(seen: list, documents_dir) -> FastAPI:
         args = (params.get("arguments") or {}) if isinstance(params, dict) else {}
         engine = {"status": "success", "old_chunks_removed": 2, "new_chunks_added": 3,
                   "dedup_skipped": 0, "filepath": args.get("filepath", "")}
+        if params.get("name") == "move_document" and "expected_policy_revision" in args:
+            engine = {
+                "status": "success", "filepath": args.get("filepath", ""),
+                "new_filepath": args.get("new_filepath", ""), "kind": "directory",
+                "policy_revision": args["expected_policy_revision"] + 1,
+                "indexing": {"state": "pending", "job_id": "directory-job"},
+            }
         if params.get("name") == "remove_document" and args.get("delete_file"):
             # Deletion snapshots now belong to the engine. This worker double
             # must model that owner rather than relying on a proxy snapshot.
@@ -271,6 +279,27 @@ async def test_move_refusals_do_not_create_source_backups(env):
     assert not (docs / "backups").exists()
     assert (docs / "note.md").is_file() and (docs / "occupied.md").is_file()
     assert seen == []
+
+
+async def test_directory_move_same_id_retry_forwards_after_old_source_disappears(env):
+    """Directory replay belongs to durable engine state, not proxy file checks."""
+    app, tok, _, docs, seen = env
+    (docs / "source").mkdir()
+    first = {
+        "filepath": "source", "new_filepath": "archive/source",
+        "expected_policy_revision": 0, "operation_id": "directory-replay-1",
+    }
+    initial = await post(app, tok, call("move_document", first, msg_id=81))
+    assert result_payload(initial)["status"] == "success"
+    # The engine completed the first move.  The proxy must not reinterpret the
+    # retry as a missing file, strip its operation ID, or create a second backup.
+    (docs / "source").rmdir()
+    replay = await post(app, tok, call("move_document", first, msg_id=82))
+    assert result_payload(replay)["status"] == "success"
+    assert len(seen) == 2
+    assert seen[1]["params"]["arguments"]["filepath"] == "source"
+    assert seen[1]["params"]["arguments"]["operation_id"] == "directory-replay-1"
+    assert not (docs / "backups").exists()
 
 
 # 18. per-path lock identity

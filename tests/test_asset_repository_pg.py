@@ -181,6 +181,34 @@ async def test_ocr_publication_cache_search_and_detach_are_project_atomic(reposi
 
 
 @pytest.mark.asyncio
+async def test_deindex_searchable_paths_keeps_catalog_identity_and_ocr_cache(repository):
+    """Folder exclusion removes projections, never the original catalog facts."""
+    item = record("excluded/catalog.png")
+    await repository.replace_asset(item, "CATALOG_EXCLUSION_TOKEN", [[0.1] * 8])
+    snapshot = OcrSourceSnapshot(item.filepath, item.final_sha256, item.final_size,
+                                 item.width, item.height, "synthetic-stat")
+    result = OcrResultFacts(
+        item.final_sha256, "f" * 64, ["en"], "easyocr", "1.7.2", "e" * 64, 1,
+        item.width, item.height, "text", "OCR_EXCLUSION_TOKEN",
+    )
+    await repository.publish_ocr_result(
+        snapshot, result, [OcrSearchChunk(0, result.text, [0.2] * 8)]
+    )
+    assert await repository.search_hybrid("CATALOG_EXCLUSION_TOKEN", None, 10, None, None, 0)
+    assert await repository.search_hybrid("OCR_EXCLUSION_TOKEN", None, 10, None, None, 0)
+
+    assert await repository.deindex_searchable_paths([item.filepath]) >= 1
+    catalog = await repository.get(item.filepath)
+    assert catalog is not None
+    assert catalog["asset_id"] == item.asset_id
+    assert catalog["metadata"] == item.metadata
+    assert await repository.get_ocr_result(item.final_sha256, "f" * 64, "en") is not None
+    assert await repository.get_ocr_source(item.filepath) is None
+    assert not await repository.search_hybrid("CATALOG_EXCLUSION_TOKEN", None, 10, None, None, 0)
+    assert not await repository.search_hybrid("OCR_EXCLUSION_TOKEN", None, 10, None, None, 0)
+
+
+@pytest.mark.asyncio
 async def test_ocr_unreferenced_maintenance_is_bounded(repository):
     item = record("images/old-ocr.png")
     await repository.replace_asset(item, "asset metadata", [[0.1] * 8])

@@ -2231,7 +2231,7 @@ async def _intercept(
             # gateway cache must not strip their operation_id or shadow that
             # durable authority.
             if tool in ALL_ADDITIVE_MUTATING_TOOLS or directory_move:
-                return _rewrite_buffered_response(forwarded)
+                return forwarded
             return _remember_operation(connector_id, project_name, tool, operation_id,
                                        forwarded, msg_id, request_digest)
     return None
