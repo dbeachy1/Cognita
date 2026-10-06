@@ -2588,6 +2588,71 @@ def test_managed_indexing_receipt_is_durable_and_operation_bound(tmp_path):
     assert reopened.managed_write_status("Chapters/1/chapter.docx")["state"] == "blocked"
 
 
+async def test_never_enabled_project_indexes_without_captured_raw_bytes(tmp_path):
+    from cognita.retrieval import RetrievalCore
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    source = tmp_path / "notes.md"
+    source.write_text("Ordinary legacy project content.", encoding="utf-8")
+    service = BookService(tmp_path, "fixture")
+    store = ReconcileStore()
+
+    async def get_document(_project, source_path):
+        return store.sources.get(source_path)
+
+    store.get_document = get_document
+    core = RetrievalCore(store, HashEmbedder())
+    core.set_book_index_content_provider(
+        lambda _project, path, suffix, raw: service.index_captured_content(path, suffix, raw)
+    )
+    core.set_book_index_capture_provider(
+        lambda _project, document: service.capture_index_document(document)
+    )
+
+    outcome = await core.index_file("fixture", tmp_path, source)
+
+    assert outcome is not None and outcome.indexed
+    indexed, chunks = store.docs["notes.md"]
+    assert chunks
+    assert [chunk.content for chunk in chunks] == ["Ordinary legacy project content."]
+    assert indexed.content_hash == hashlib.sha256(b"Ordinary legacy project content.").hexdigest()
+
+
+def test_book_capture_still_requires_raw_bytes_for_active_registered_source(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    document = SimpleNamespace(
+        source="Project Files/ref.md", doc_id="fixture-doc", content_hash="fixture-hash",
+        captured_raw=None, book_index_context=None, book_index_record=None,
+    )
+
+    with pytest.raises(BookServiceError, match="Indexed source bytes were not captured") as raised:
+        service.capture_index_document(document)
+
+    assert raised.value.reason == "source_unavailable"
+
+
+@pytest.mark.parametrize("case", [
+    "enabled_unregistered", "bootstrap_pending", "configuration_conflict",
+])
+def test_book_capture_does_not_require_raw_bytes_without_active_registered_role(tmp_path, case):
+    bound = case != "bootstrap_pending"
+    service, _prose, _tagged = _fixture(tmp_path, bound=bound)
+    if bound:
+        ProjectState.initialize(tmp_path)
+    if case == "configuration_conflict":
+        (tmp_path / ".cognita-book-binding.json").write_text("{}", encoding="utf-8")
+    document = SimpleNamespace(
+        source=("notes.md" if case == "enabled_unregistered" else "Project Files/ref.md"),
+        doc_id="fixture-doc", content_hash="fixture-hash", captured_raw=None,
+        book_index_context=None, book_index_record=None,
+    )
+
+    assert service.capture_index_document(document) is document
+    assert document.book_index_record is None
+
+
 def test_registered_index_provenance_is_persisted_and_revalidated(tmp_path):
     from cognita.parsing import compute_doc_id, parse_file
 

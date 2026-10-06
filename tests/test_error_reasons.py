@@ -38,7 +38,7 @@ KNOWN_REASONS = {
     # Connector, policy, and replay reason codes.
     "operation_conflict", "operation_id_conflict", "policy_conflict",
     "stale_policy_revision", "state_unavailable", "policy_unavailable",
-    "project_unavailable",
+    "project_unavailable", "permission_denied",
     "content_too_large", "duplicate_path", "lossy_edit_unsupported", "unknown_section",
     "batch_too_large", "nested_batch_not_allowed", "tool_not_batchable", "invalid_batch",
     "child_no_response", "child_invalid_response", "child_error", "result_too_large",

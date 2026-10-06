@@ -492,9 +492,6 @@ class BookService:
             document.book_index_record = IndexedRoleProvenance(**values)
             document.book_index_context = None
             return document
-        raw = getattr(document, "captured_raw", None)
-        if raw is None:
-            raise BookServiceError("source_unavailable", "Indexed source bytes were not captured.")
         state = self.discover_state()
         config = load_book_config(self.root, state)
         if state is None or config.config_state != "enabled" or config.layout is None:
@@ -502,6 +499,9 @@ class BookService:
         registered = self._registered_role(config.layout, document.source)
         if registered is None:
             return document
+        raw = getattr(document, "captured_raw", None)
+        if raw is None:
+            raise BookServiceError("source_unavailable", "Indexed source bytes were not captured.")
         role, chapter, chapter_kind = registered
         raw_sha256 = hashlib.sha256(raw).hexdigest()
         values: dict[str, Any] = {

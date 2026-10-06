@@ -37,7 +37,7 @@ errors while reading, writing, copying, deleting, or retrieving data.
 `backup_failed`, `child_error`, `child_invalid_response`, `child_no_response`,
 `copy_failed`, `delete_failed`, `error`, `fetch_failed`, `index_unavailable`,
 `internal_error`, `policy_unavailable`, `project_unavailable`, `read_only`,
-`state_unavailable`,
+`permission_denied`, `state_unavailable`,
 `runtime_unavailable`, `source_unavailable`, `unknown_tool`,
 `upgrade_required`, `workspace_unavailable`
 
