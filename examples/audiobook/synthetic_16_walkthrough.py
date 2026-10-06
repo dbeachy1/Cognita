@@ -695,7 +695,7 @@ def main() -> None:
         )
         listed_source = next(item for item in source_listing["entries"] if item["path"] == source_master)
         assert listed_source["effective_indexed"] is False
-        assert listed_source["exclusion_reason"] == f"hard_exclusion:{source_master}"
+        assert listed_source["exclusion_reason"] == f"hard_exclusion:{source_master.casefold()}"
         assert listed_source["effective_read_only"] is True
         assert not index_policy.decision(source_master).indexed
         assert "project/Project Files/Source/approved-source.docx" in manifest_paths
@@ -722,6 +722,7 @@ def main() -> None:
               "one-tag retake/reuse, stale history, quote/timestamp readers, chapter/book "
               "rollback, receipts, and verified scoped backup/restore.")
         del restored_service, state
+        gc.collect()
 
 
 if __name__ == "__main__":
