@@ -7,6 +7,7 @@ search is real Postgres FTS. This is the end-to-end M2 pipeline minus only the
 production models, which the on-kei smoke run covers.
 """
 
+import hashlib
 import os
 import uuid
 from pathlib import Path
@@ -152,6 +153,110 @@ async def test_imperfect_utf8_indexes_without_rewriting_source_bytes(core, proje
 
     results = await core.search(project, "searchablemarker", hybrid_alpha=0.0)
     assert any(result["source"] == "imperfect.md" for result in results)
+
+
+async def test_book_captured_provenance_matches_sql_through_reconcile_and_forced_bulk(core, project, tmp_path):
+    """Real SQL rows and host-filtered hits need the exact durable source facts."""
+    from cognita.books.service import BookService
+    from cognita.books.state import IndexedRoleProvenance, ProjectState
+    from cognita.config import CognitaConfig
+    from cognita.engine_local import LocalEngineHost
+    from cognita.parsing import compute_doc_id
+    from cognita.registry import Project, Registry
+    from test_book_service import _fixture
+
+    root = tmp_path / "book"
+    _fixture(root, bound=True)
+    state = ProjectState.initialize(root)
+    registry = Registry(tmp_path / "registry.yaml")
+    registered = Project(
+        name=project, documents_dir=root, data_dir=tmp_path / "data",
+        indexed_extensions=[".md"], registered_extensions=[],
+        token_sha256=hashlib.sha256(b"synthetic-pg-book-token").hexdigest(),
+    )
+    registry.add(registered)
+    # Constructor wiring is the real host's capture/publication/admission path.
+    # The connected store/project fixtures own SQL teardown; no host startup,
+    # background watcher, model loading, or second database connection is needed.
+    host = LocalEngineHost(
+        CognitaConfig(connectors_path=tmp_path / "connectors.yaml", embedding_dimensions=DIMS),
+        registry, core,
+    )
+    host.apply_extension_policy(registered)
+    service = host.book_service_for(registered)
+    assert service.config().config_state == "enabled"
+    path = "Project Files/ref.md"
+    source = root / path
+    layout_sha = hashlib.sha256((root / "Project Files/Book_Layout.json").read_bytes()).hexdigest()
+
+    async def assert_current(raw):
+        text = raw.decode("utf-8").split("\n---\n", 1)[1]
+        extracted_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        doc_id = compute_doc_id(path, extracted_sha)
+        expected = IndexedRoleProvenance(
+            source_path=path, doc_id=doc_id, extracted_sha256=extracted_sha,
+            raw_sha256=hashlib.sha256(raw).hexdigest(), extraction_version="legacy-file-v1",
+            role="reference", chapter_id=None, layout_sha256=layout_sha,
+            chapter_state_sha256=None, annotations_sha256=None,
+            approval_source_raw_sha256=None, approval_prose_projection_sha256=None,
+            approval_projection_version=None, summary_raw_sha256=None,
+            summary_source_raw_sha256=None, summary_source_prose_projection_sha256=None,
+        )
+        # Markdown frontmatter is absent from extracted text; raw-byte and
+        # extracted-text hashes must remain distinct authorities.
+        assert expected.raw_sha256 != expected.extracted_sha256
+        document = await core.store.get_document(project, path)
+        assert document is not None
+        assert (document.source, document.doc_id, document.content_hash) == (path, doc_id, extracted_sha)
+        assert document.tier == "embedded" and document.content is None
+        chunks = await core.store.get_chunks(project, path)
+        assert [(chunk.chunk_id, chunk.chunk_index, chunk.content) for chunk in chunks] == [(f"{doc_id}_0", 0, text.strip())]
+        assert state.indexed_role_provenance(path) == expected
+        reopened_state = ProjectState.discover(root)
+        assert reopened_state is not None and reopened_state.indexed_role_provenance(path) == expected
+        reopened = BookService(root, project, state=reopened_state)
+        for current in (service, reopened):
+            assert current.index_provenance_is_current(expected)
+            assert set(current.index_admitted_doc_ids([document], "canon")) == {doc_id}
+        admitted = host.book_index_admission_for(project, [document], "canon")
+        assert admitted[doc_id]["provenance"] == expected
+        for alpha in (0.0, 0.3, 1.0):
+            hits = await core.search(project, "beacon", hybrid_alpha=alpha, retrieval_profile="canon")
+            assert any(hit["source"] == path and hit["content"] == text.strip() for hit in hits)
+        assert await core.store.check_consistency(project) == []
+        return document, expected
+
+    async def assert_stale_hidden(document, previous):
+        # SQL remains unchanged until refresh.  It must already fail live
+        # admission, including a previously populated query-cache key.
+        assert await core.store.get_document(project, path) == document
+        assert state.indexed_role_provenance(path) == previous
+        assert not service.index_provenance_is_current(previous)
+        assert host.book_index_admission_for(project, [document], "canon") == {}
+        for alpha in (0.0, 0.3, 1.0):
+            assert await core.search(project, "beacon", hybrid_alpha=alpha, retrieval_profile="canon") == []
+
+    raw = "---\nfixture_phase: one\n---\nAmber beacon café first reference.\n".encode("utf-8")
+    source.write_bytes(raw)
+    indexed = await core.index_file(project, root, source)
+    assert indexed is not None and indexed.indexed
+    first_document, first_provenance = await assert_current(raw)
+
+    raw = "---\nfixture_phase: two\n---\nViolet beacon café externally revised reference.\n".encode("utf-8")
+    source.write_bytes(raw)
+    await assert_stale_hidden(first_document, first_provenance)
+    reconciled = await core.reconcile_paths(project, root, [path])
+    assert reconciled["indexed"] == 1 and reconciled["failed"] == 0
+    second_document, second_provenance = await assert_current(raw)
+    assert second_document.doc_id != first_document.doc_id
+
+    raw = "---\nfixture_phase: three\n---\nSilver beacon café forced bulk reference revision.\n".encode("utf-8")
+    source.write_bytes(raw)
+    await assert_stale_hidden(second_document, second_provenance)
+    rebuilt = await core.index_project(project, root, force=True)
+    assert rebuilt["indexed"] >= 1 and rebuilt["errors"] == []
+    final_document, _final_provenance = await assert_current(raw)
+    assert final_document.doc_id not in {first_document.doc_id, second_document.doc_id}
 
 
 # ---------- search (known-answer on the fixture corpus) ----------
