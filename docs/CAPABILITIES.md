@@ -14,6 +14,7 @@ programs on copies of your files.
 - [Backups and undo](#backups-and-undo)
 - [Images and OCR](#images-and-ocr)
 - [Indexing](#indexing)
+- [Audiobook production and project storage](#audiobook-production-and-project-storage)
 - [Workspace](#workspace)
 - [Connectors and access](#connectors-and-access)
 - [The Admin page](#the-admin-page)
@@ -145,6 +146,15 @@ Every write follows the same rules:
   and the index comes out the same. Only the time changes. An AMD card busier than 20% is also
   left alone; an NVIDIA card is used however busy it is, as long as the memory is free.
 
+## Audiobook production and project storage
+
+- Register and inspect chapter sources, prepare pinned speech chunks, and record generation evidence.
+  Cognita records externally generated speech; it does not submit TTS requests itself.
+- Import authorized audio, assemble chapter or whole-book builds, accept a reviewed build, and
+  reuse or retake chunks. Historical recipes and timelines remain available for rollback and readers.
+- List stored project files and read exact bytes with hash checks, separately from the search index.
+  Folder policies control what is indexed without hiding authorized stored files.
+
 ## Workspace
 
 An optional private Linux machine, one per connector credential (or per claude.ai or ChatGPT
@@ -219,7 +229,7 @@ A password-protected page in your browser, on your own machine by default.
 
 ## Tool reference
 
-All 57 tools. "Write" tools need read/write access; "Workspace" tools need Workspace on for
+All 73 tools. "Write" tools need read/write access; "Workspace" tools need Workspace on for
 the connector.
 
 | Tool | Kind | What it does |
@@ -264,6 +274,22 @@ the connector.
 | `reindex_documents` | Index | Background catch-up or full rebuild |
 | `get_reindex_status` | Index | Progress of that rebuild |
 | `get_self_test_plan` | Test | The self-test checklist |
+| `audiobook_inspect_chapter` | Read | Inspect source bytes and a pinned speech projection |
+| `audiobook_prepare_chapter` | Write | Save validated speech ranges as an immutable prepared snapshot |
+| `audiobook_get_chapter` | Read | Read chapter snapshots, chunks, takes, and accepted build metadata |
+| `audiobook_find_chunk` | Read | Locate a spoken quote or position in an immutable build timeline |
+| `audiobook_record_generation` | Write | Reserve or record an external speech generation request and evidence |
+| `audiobook_import_audio` | Write | Import authorized audio through a durable background job |
+| `audiobook_build` | Write | Assemble a candidate chapter or whole-book audio build |
+| `audiobook_commit_build` | Write | Accept or roll back a reviewed build after dependency checks |
+| `audiobook_get_job` | Read | Read an import or build job's state and result |
+| `audiobook_cancel_job` | Write | Request cancellation of an import or build job |
+| `book_get_index_status` | Read | Read registered files' structural catalog and indexing state |
+| `audiobook_get_generations` | Read | Recover generation prompts and provider evidence |
+| `audiobook_get_book` | Read | Read book order, accepted build, chapter dependencies, and exports |
+| `set_folder_indexing` | Write | Set a project's folder indexing policy |
+| `list_project_files` | Read | List authorized stored project files with pagination |
+| `read_project_file` | Read | Read exact stored file bytes with hash checks |
 | `workspace_info` | Workspace | This connector's Workspace, if it has one yet |
 | `workspace_list_files` | Workspace | List files (creates the Workspace on first use) |
 | `workspace_stat` | Workspace | Facts about one path |

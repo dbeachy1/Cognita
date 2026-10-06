@@ -6,10 +6,9 @@ only things Cognita downloads are its own software and search models.
 The Windows installer and web interface are localized into **U.S. English, Spanish,
 French, German, Italian, and Brazilian Portuguese**.
 
-**Latest verified installer downloads (15.7.0):**
-[Windows installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/Cognita-Setup-15.7.0-r1.exe) ·
-[Linux source installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/cognita-src-15.7.0.tar.gz).
-Version 16.1.0 is under validation; its release assets are not available yet.
+**Latest verified installer downloads (16.1.0):**
+[Windows installer 16.1.0](https://github.com/dbeachy1/Cognita/releases/download/v16.1.0/Cognita-Setup-16.1.0-r1.exe) |
+[Linux source installer 16.1.0](https://github.com/dbeachy1/Cognita/releases/download/v16.1.0/cognita-src-16.1.0.tar.gz).
 The Linux archive installs Cognita using its release container images.
 
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
@@ -32,6 +31,8 @@ it can run code, process files and search the web, then copy results back into y
 - **Workspace (optional).** A sandboxed Linux machine per connector, for running programs and
   scripts on copies of your files. Nothing in it touches your documents until the assistant copies
   a result back, and only where that connector may write.
+- **Audiobook production.** Register chapter sources, record generation evidence, import audio,
+  build chapter or whole-book MP3s, and review retakes or roll back an accepted build.
 - **An Admin page in your browser**, behind a password, to add folders and projects, create
   connectors, and check that everything works.
 - **AMD or NVIDIA graphics acceleration (optional)** for faster indexing and OCR (AMD on Linux;
@@ -40,7 +41,7 @@ it can run code, process files and search the web, then copy results back into y
   supported card, everything runs on the CPU with the same results.
 
 **[Everything Cognita can do](docs/CAPABILITIES.md)**: every feature, every permission and all
-57 tools, each in a sentence.
+73 tools, each in a sentence.
 
 The [error reason codes](docs/ERROR-REASONS.md) document machine-readable error values for
 clients.
@@ -237,7 +238,7 @@ before they report success. `uninstall` keeps your documents, settings and index
 - **Images:** publish PNGs, read their text with OCR, search their metadata.
 - **Workspace:** files, commands and web search in the sandbox, and copies to and from projects.
 
-[docs/CAPABILITIES.md](docs/CAPABILITIES.md#tool-reference) lists all 57 tools by name.
+[docs/CAPABILITIES.md](docs/CAPABILITIES.md#tool-reference) lists all 73 tools by name.
 
 The tool names and shapes are stable across compatible releases. Anything that can send an
 HTTPS POST can use the MCP endpoint directly. Errors include a machine-readable reason, and

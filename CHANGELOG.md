@@ -1,10 +1,14 @@
 # Changelog
 
-## 16.1.0 — Cognita KEI error parity fix (development; not published)
+## 16.1.0 — Audiobook workflow and connector error parity (2026-10-06)
 
-- Legacy tool errors now carry stable `error_code=INVALID_ARGUMENT` through engine and connected
-  gateway results, preserving diagnostics and strict book/storage error contracts.
-- This KEI validation build is not published. No 16.1.0 installer or source archive is attached.
+- Publishes the audiobook production workflow developed for 16.0.0: registered source import,
+  generation receipts, chapter and whole-book builds, retakes, rollback, readers, and backup/restore.
+- Adds project-storage reads and folder indexing policies with exact hash and access checks.
+- Legacy tool errors now carry stable `error_code=INVALID_ARGUMENT` before text and structured
+  serialization, preserving diagnostics, `isError`, and strict book/storage error contracts.
+- Includes signed and timestamped Windows Setup and Linux source installer downloads.
+  See `docs/RELEASE-16.1.0.md` for contract versions and verification.
 
 ## 16.0.0 — Audiobook production workflow (development; not published)
 
