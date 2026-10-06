@@ -6,6 +6,11 @@ only things Cognita downloads are its own software and search models.
 The Windows installer and web interface are localized into **U.S. English, Spanish,
 French, German, Italian, and Brazilian Portuguese**.
 
+**Current release downloads:**
+[Windows installer 15.6.0](https://github.com/dbeachy1/Cognita/releases/download/v15.6.0/Cognita-Setup-15.6.0-r4.exe) ·
+[Linux source installer 15.6.0](https://github.com/dbeachy1/Cognita/releases/download/v15.6.0/cognita-src-15.6.0.tar.gz).
+The Linux archive installs Cognita using its release container images.
+
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
 it can run code, process files and search the web, then copy results back into your documents.
 

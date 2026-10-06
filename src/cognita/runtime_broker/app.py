@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from ..release_identity import APPLICATION_VERSION
 from .journal import RequestJournal
 from .protocol import (
+    MAX_RPC_BODY_BYTES,
     MAX_TRANSFER_FRAME_BYTES,
     ErrorCode,
     HealthResponse,
@@ -32,7 +33,6 @@ from .state import RuntimeStateStore
 from .transfers import TransferStore
 
 log = logging.getLogger(__name__)
-MAX_RPC_BODY_BYTES = 256 * 1024
 INTERNAL_BEARER_ENV = "COGNITA_RUNTIME_BROKER_SECRET"
 INTERNAL_BEARER_FILE_ENV = "COGNITA_INTERNAL_BEARER_FILE"
 

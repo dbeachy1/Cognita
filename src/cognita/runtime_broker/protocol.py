@@ -11,7 +11,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 
 BROKER_PROTOCOL_VERSION = "v1"
-MAX_ARGUMENT_BYTES = 64 * 1024
+# Public Workspace operations admit up to 1 MiB of file content, 1 MiB of
+# serialized edits, and lists of up to 1,000 paths at 4 KiB each. Leave room
+# for JSON escaping (including ensure_ascii transport encoding) and the RPC
+# envelope while keeping each request bounded.
+MAX_ARGUMENT_BYTES = 16 * 1024**2
+MAX_RPC_BODY_BYTES = MAX_ARGUMENT_BYTES + 64 * 1024
 # The declared read/output bound is 1 MiB (workspace.MAX_FILE_BYTES, and this
 # module's own fs_lines/job_get max_bytes ceilings), but file and job-stream
 # content crosses the broker as base64 -- 4/3 expansion -- plus the JSON

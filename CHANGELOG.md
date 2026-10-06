@@ -1,5 +1,13 @@
 # Changelog
 
+## 15.7.0 — Restore supported Workspace write sizes (2026-10-05)
+
+- Workspace writes can use the existing 1 MiB file allowance through the private broker,
+  including base64 binary content and text that expands when encoded as JSON.
+- Broker request-validation failures retain their argument-error classification instead of
+  being reported as an unavailable Workspace runtime.
+- MCP tool schemas and contract versions are unchanged. See `docs/RELEASE-15.7.0.md`.
+
 ## 15.6.0 — Finish localized Admin responses (2026-10-04)
 
 - Admin shows translated completion text after the Brave Search connection test and a translated
