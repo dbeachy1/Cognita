@@ -30,10 +30,12 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from cognita.config import CognitaConfig
+from cognita.books.config import BookLayout
 from cognita.engine_local import LocalEngineHost
 from cognita.registry import Project, Registry
 from cognita.retrieval import RetrievalCore
@@ -309,6 +311,82 @@ async def test_a_CANCELED_batch_rolls_back_too(env, monkeypatch):
 
     assert (docs / "a.md").read_bytes() == before_a
     assert (docs / "b.md").read_bytes() == b"# B\n\noriginal b\n"
+
+
+class _ManagedBookWriteService:
+    """Small durable-state seam double for publication-versus-indexing tests."""
+
+    def __init__(self):
+        self.begun = []
+        self.finished = []
+
+    def begin_managed_write(self, project, filepath, raw_sha256, *, operation_id=None):
+        self.begun.append((project.name, filepath, raw_sha256, operation_id))
+        return "managed-write-1"
+
+    def finish_managed_write(self, project, job_id, state, *, error, doc_id, extracted_sha256):
+        fact = {"state": state, "job_id": job_id, "error": error}
+        self.finished.append((project.name, fact, doc_id, extracted_sha256))
+        return fact
+
+
+def _managed_book_host(host):
+    """Enable only the registered-path durable write seam for the fixture host."""
+    from test_book_config import _layout
+
+    layout = BookLayout.model_validate(_layout(), strict=True)
+    service = _ManagedBookWriteService()
+    host.book_config_snapshot_for = lambda _project: SimpleNamespace(
+        config_state="enabled", layout=layout,
+    )
+    host.book_service_for = lambda _project: service
+    return service
+
+
+async def test_managed_book_batch_keeps_published_bytes_when_indexing_is_unavailable(
+    offline, monkeypatch,
+):
+    """A saved registered chapter is a durable write even when indexing is down."""
+    host, project, docs = offline
+    service = _managed_book_host(host)
+    payload = "chapter bytes must survive\r\n"
+
+    async def unavailable(*_args, **_kwargs):
+        raise ConnectionError("PostgreSQL unavailable")
+
+    monkeypatch.setattr(host.core, "index_file", unavailable)
+    out = await host._write_documents(project, {"documents": [{
+        "filepath": "Chapters/1/chapter.docx", "content": payload,
+    }]})
+
+    target = docs / "Chapters/1/chapter.docx"
+    assert out["status"] == "success"
+    assert target.read_bytes() == payload.encode("utf-8")
+    assert out["receipts"][0]["indexing"] == {
+        "state": "blocked", "job_id": "managed-write-1",
+        "error": {"code": "indexing_unavailable", "message": "Indexing is temporarily unavailable."},
+    }
+    assert service.begun and service.finished
+
+
+async def test_managed_book_batch_keeps_published_bytes_when_canceled(offline, monkeypatch):
+    """Cancellation leaves the durable write pending; it never restores old bytes."""
+    host, project, docs = offline
+    service = _managed_book_host(host)
+    payload = "published before cancellation\n"
+
+    async def canceled(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(host.core, "index_file", canceled)
+    with pytest.raises(asyncio.CancelledError):
+        await host._write_documents(project, {"documents": [{
+            "filepath": "Chapters/1/chapter.docx", "content": payload,
+        }]})
+
+    assert (docs / "Chapters/1/chapter.docx").read_bytes() == payload.encode("utf-8")
+    assert len(service.begun) == 1
+    assert service.finished == []  # the durable state remains pending for recovery
 
 
 @pg

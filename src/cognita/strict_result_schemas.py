@@ -80,16 +80,22 @@ BYTE_FACT_PROPERTIES = {
     "content_sha256": NULL_HASH,
 }
 BYTE_FACT_REQUIRED = tuple(BYTE_FACT_PROPERTIES)
-INDEXING_FACT = obj({
-    "state": {"type": "string", "enum": [
-        "pending", "indexed", "stale", "excluded", "blocked", "failed",
-    ]},
-    "job_id": NULL_S,
-    "error": nullable(obj({"code": S, "message": S}, ("code", "message"))),
-}, ("state", "job_id", "error"))
-WRITE_RECEIPT = obj({
-    "filepath": S, **BYTE_FACT_PROPERTIES, "indexing": INDEXING_FACT,
-}, ("filepath", *BYTE_FACT_REQUIRED))
+INDEXING_FAILURE = obj({"code": S, "message": S}, ("code", "message"))
+INDEXING_FACT = obj(
+    {
+        "state": {
+            "type": "string",
+            "enum": ["pending", "indexed", "stale", "excluded", "blocked", "failed"],
+        },
+        "job_id": NULL_S,
+        "error": nullable(INDEXING_FAILURE),
+    },
+    ("state", "job_id", "error"),
+)
+WRITE_RECEIPT = obj(
+    {"filepath": S, **BYTE_FACT_PROPERTIES, "indexing": INDEXING_FACT},
+    ("filepath", *BYTE_FACT_REQUIRED),
+)
 
 FILE_FACT_PROPERTIES = {
     "on_disk": B, "size_bytes": NNI, "mtime": nullable(S),
@@ -547,15 +553,13 @@ def build_adapter_schemas() -> dict[str, dict[str, Any]]:
 def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
     write_common = {**BYTE_FACT_PROPERTIES, "tier": TIER, "semantic_searchable": B,
                     "previous_backup_id": NULL_S, "overwrote_existing": B,
-                    "previous_content_sha256": HASH}
+                    "previous_content_sha256": HASH, "indexing": INDEXING_FACT}
     add_props = {"chunks_added": NNI, "dedup_skipped": NNI, "category": S,
                  "filepath": S, "source": S, **write_common}
-    add_props["indexing"] = INDEXING_FACT
     add_required = ("chunks_added", "dedup_skipped", "category", "filepath", "source",
                     *BYTE_FACT_REQUIRED, "tier", "semantic_searchable")
     update_props = {"old_chunks_removed": NNI, "new_chunks_added": NNI,
                     "dedup_skipped": NNI, "filepath": S, "source": S, **write_common}
-    update_props["indexing"] = INDEXING_FACT
     update_required = ("old_chunks_removed", "new_chunks_added", "dedup_skipped", "filepath",
                        "source", *BYTE_FACT_REQUIRED, "tier", "semantic_searchable")
 

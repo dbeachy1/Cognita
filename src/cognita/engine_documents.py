@@ -38,6 +38,92 @@ from .engine_contract import MAX_BATCH_DOCUMENTS, MAX_CONTENT_BYTES, MAX_PLURAL_
 
 
 class EngineDocumentOperations:
+    def _managed_book_service_for_path(self, project: Project, target: Path):
+        """Return the durable write-status service only for a registered book role."""
+        snapshot_provider = getattr(self, "book_config_snapshot_for", None)
+        service_provider = getattr(self, "book_service_for", None)
+        if snapshot_provider is None or service_provider is None:
+            return None
+        snapshot = snapshot_provider(project)
+        if getattr(snapshot, "config_state", None) != "enabled":
+            return None
+        layout = getattr(snapshot, "layout", None)
+        if layout is None:
+            return None
+        relative = self._rel(project, target.resolve()).replace("\\", "/").casefold()
+        roles = {
+            item.casefold()
+            for chapter in layout.chapters
+            for item in (chapter.working_filepath, chapter.summary_filepath)
+            if item
+        }
+        roles.update(item.filepath.casefold() for item in layout.indexed_references)
+        roles.update(item.filepath.casefold() for item in layout.indexed_instructions)
+        roles.update(item.filepath.casefold() for item in layout.indexed_workflow_documents)
+        if relative not in roles:
+            return None
+        return service_provider(project)
+
+    def _begin_managed_book_write(
+        self, service, project: Project, target: Path, content: bytes,
+        operation_id: str | None = None,
+    ) -> str | None:
+        if service is None:
+            return None
+        begin = getattr(service, "begin_managed_write", None)
+        if begin is None:
+            return None
+        return begin(
+            project, self._rel(project, target.resolve()),
+            hashlib.sha256(content).hexdigest(), operation_id=operation_id,
+        )
+
+    @staticmethod
+    def _managed_index_state(*, outcome=None, error: BaseException | None = None) -> tuple[str, dict | None]:
+        if error is not None:
+            name = type(error).__name__.casefold()
+            module = type(error).__module__.casefold()
+            blocked = (
+                isinstance(error, (TimeoutError, ConnectionError, OSError))
+                or module.startswith("asyncpg") and any(
+                    marker in name for marker in ("connection", "timeout", "pool", "interface")
+                )
+            )
+            return (
+                "blocked" if blocked else "failed",
+                {"code": "indexing_unavailable" if blocked else "indexing_failed",
+                 "message": "Indexing is temporarily unavailable." if blocked
+                 else "Indexing did not complete."},
+            )
+        if outcome is None:
+            return "failed", {"code": "empty_extraction",
+                               "message": "The published file contains no indexable text."}
+        if not getattr(outcome, "indexed", True):
+            return "excluded", None
+        if getattr(outcome, "provenance_current", None) is False:
+            return "stale", {"code": "source_provenance_changed",
+                              "message": "The source or its book approval changed during indexing."}
+        return "indexed", None
+
+    @staticmethod
+    def _finish_managed_book_write(
+        service, project: Project, job_id: str | None, *, outcome=None,
+        error: BaseException | None = None,
+    ) -> dict | None:
+        if service is None or job_id is None:
+            return None
+        finish = getattr(service, "finish_managed_write", None)
+        if finish is None:
+            return None
+        state, failure = EngineDocumentOperations._managed_index_state(
+            outcome=outcome, error=error,
+        )
+        return finish(
+            project, job_id, state, error=failure,
+            doc_id=getattr(outcome, "doc_id", None),
+            extracted_sha256=getattr(outcome, "extracted_sha256", None),
+        )
+
     def _book_mutation_decision(
         self, project: Project, target: Path, *, operation: str,
         source_exists: bool = False,
@@ -552,35 +638,75 @@ class EngineDocumentOperations:
         # ---- phase 3: publish. The commit point. ----------------------------
         await asyncio.to_thread(self._publish_staged, staged)
 
-        # ---- phase 4: index, rolling the WHOLE batch back on any failure ----
-        try:
-            indexed = 0
-            chunks_total = 0
-            receipts: list[dict] = []
-            for target, _content, _filepath, category in plan:
+        # ---- phase 4: index. Once a batch contains registered book bytes,
+        # indexing is derived work and cannot roll back the published files. ----
+        managed_services = {
+            target: self._managed_book_service_for_path(project, target)
+            for target, _content, _filepath, _category in plan
+        }
+        has_managed = any(service is not None for service in managed_services.values())
+        jobs: dict[Path, str | None] = {}
+        for target, _content, _filepath, _category in plan:
+            jobs[target] = self._begin_managed_book_write(
+                managed_services[target], project, target, target.read_bytes(),
+            )
+
+        chunks_total = 0
+        receipts: list[dict] = []
+        for target, _content, relative, category in plan:
+            service = managed_services[target]
+            job_id = jobs[target]
+            try:
                 outcome = await self.core.index_file(
                     project.name, Path(project.documents_dir), target,
                     category_override=category,
                 )
-                if outcome is None:
+            except BaseException as exc:
+                if isinstance(exc, Exception) and has_managed:
+                    indexing = self._finish_managed_book_write(
+                        service, project, job_id, error=exc,
+                    )
+                    if outcome_placeholder := (service is not None and indexing is None):
+                        indexing = {
+                            "state": self._managed_index_state(error=exc)[0],
+                            "job_id": job_id,
+                            "error": self._managed_index_state(error=exc)[1],
+                        }
+                    if indexing is not None:
+                        receipts.append({"filepath": relative,
+                                         **byte_facts(target.read_bytes()),
+                                         "indexing": indexing})
+                    else:
+                        receipts.append({"filepath": relative,
+                                         **byte_facts(target.read_bytes())})
+                    continue
+                # For a batch without managed book files retain its original
+                # all-or-nothing contract. Cancellation likewise restores the
+                # old contract only when no managed bytes were published.
+                if not has_managed:
                     self._undo_batch(previous)
-                    return {"status": "error", "reason": "parse_failed",
-                            "message": ("A document produced no indexable text. The "
-                                        "ENTIRE batch was rolled back; every file is "
-                                        "as it was before the call."),
-                            "filepath": self._rel(project, target.resolve()),
-                            "documents_written": 0, "rolled_back": True}
-                indexed += 1
+                raise
+
+            if outcome is None and not has_managed:
+                self._undo_batch(previous)
+                return {"status": "error", "reason": "parse_failed",
+                        "message": ("A document produced no indexable text. The "
+                                    "ENTIRE batch was rolled back; every file is "
+                                    "as it was before the call."),
+                        "filepath": self._rel(project, target.resolve()),
+                        "documents_written": 0, "rolled_back": True}
+            if outcome is not None:
                 chunks_total += outcome[1]
-                receipts.append({"filepath": _filepath, **byte_facts(target.read_bytes())})
-        except BaseException:
-            # 6.0.12's rule, applied to the set: synchronous undo (you cannot
-            # await out of a cancellation) and the error still propagates.
-            self._undo_batch(previous)
-            raise
+            indexing = self._finish_managed_book_write(
+                service, project, job_id, outcome=outcome,
+            )
+            receipt = {"filepath": relative, **byte_facts(target.read_bytes())}
+            if indexing is not None:
+                receipt["indexing"] = indexing
+            receipts.append(receipt)
 
         return {"status": "success",
-                "documents_written": indexed,
+                "documents_written": len(plan),
                 "chunks_indexed": chunks_total,
                 "receipts": receipts,
                 "filepaths": [fp for _t, _c, fp, _cat in plan]}
@@ -640,19 +766,39 @@ class EngineDocumentOperations:
         target.parent.mkdir(parents=True, exist_ok=True)
         existed_before = target.exists()
         previous = target.read_bytes() if existed_before else None
+        managed_service = self._managed_book_service_for_path(project, target)
         self._ensure_book_original(project, target, previous, mutation, chapter_id)
         await asyncio.to_thread(self._write_verbatim, target, content)
+        job_id = self._begin_managed_book_write(
+            managed_service, project, target, target.read_bytes(), args.get("operation_id"),
+        )
+        indexing = None
         try:
             outcome = await self.core.index_file(
                 project.name, Path(project.documents_dir), target, category_override=category
             )
-        except BaseException:
-            # 🔴 6.0.12: BaseException, and the undo runs SYNCHRONOUSLY. See
-            # `_undo_write` — `except Exception` let the one failure mode that
-            # actually happens in production walk straight past the rollback.
-            self._undo_write(target, previous)
-            raise
-        if outcome is None:
+        except BaseException as exc:
+            if managed_service is not None and job_id is not None:
+                if isinstance(exc, Exception):
+                    indexing = self._finish_managed_book_write(
+                        managed_service, project, job_id, error=exc,
+                    )
+                    outcome = None
+                else:
+                    # Cancellation and process-level interruption leave the
+                    # durable fact pending. The published bytes are retained.
+                    raise
+            else:
+                # 🔴 6.0.12: BaseException, and the undo runs SYNCHRONOUSLY. See
+                # `_undo_write` — `except Exception` let the one failure mode that
+                # actually happens in production walk straight past the rollback.
+                self._undo_write(target, previous)
+                raise
+        else:
+            indexing = self._finish_managed_book_write(
+                managed_service, project, job_id, outcome=outcome,
+            )
+        if outcome is None and managed_service is None:
             # The bytes are already on disk at this point, and index_file returns
             # None whenever the parse extracts NO text — which is not the same
             # condition as the content.strip() emptiness check above. A markdown
@@ -668,7 +814,7 @@ class EngineDocumentOperations:
                                 "or one that is only markdown frontmatter). NOTHING was "
                                 "written — the file on disk is unchanged."),
                     "rolled_back": True}
-        _, chunks_added = outcome
+        _, chunks_added = outcome if outcome is not None else (None, 0)
         # Route by extension at write time: a write to a registered-extension
         # path registers without embedding. chunks_added=0 is then the correct
         # outcome, not a failure — the markers say so explicitly.
@@ -677,8 +823,12 @@ class EngineDocumentOperations:
         # 2.9's inference an omitted category is resolved during indexing, and a
         # response echoing "general" when the path mapping chose something else
         # would be the same silent lie the inference was meant to remove.
-        stored = await self.store.get_document(project.name, self._rel(project, target.resolve()))
-        indexed = bool(getattr(outcome, "indexed", True))
+        stored = None
+        if outcome is not None:
+            stored = await self.store.get_document(project.name, self._rel(project, target.resolve()))
+        indexed = bool(outcome is not None and getattr(outcome, "indexed", True))
+        if managed_service is not None and indexing is not None:
+            indexed = indexing.get("state") == "indexed"
         return {"status": "success", "chunks_added": chunks_added, "dedup_skipped": 0,
                 "category": stored.category if stored else (category or "general"),
                 # 5.0 §5.1: filepath is RELATIVE — the form the tools accept —
@@ -690,7 +840,8 @@ class EngineDocumentOperations:
                 "source": str(target),
                 "content_sha256": text_sha256(target.read_bytes()),
                 **byte_facts(target.read_bytes()),
-                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED}
+                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED,
+                **({"indexing": indexing} if indexing is not None else {})}
 
     async def _update_document(self, project: Project, args: dict) -> dict:
         filepath = args.get("filepath") or ""
@@ -737,20 +888,41 @@ class EngineDocumentOperations:
         if byte_guard is not None:
             return {**byte_guard, "filepath": filepath}
         rel = self._rel(project, target.resolve())
-        old_chunks = await self.store.chunk_count(project.name, rel)
+        managed_service = self._managed_book_service_for_path(project, target)
+        # A managed byte write remains valid when PostgreSQL is unavailable.
+        # Avoid making a pre-publication count query a prerequisite; zero here
+        # means no count was observed, and the indexing fact carries that state.
+        old_chunks = 0 if managed_service is not None else await self.store.chunk_count(project.name, rel)
         previous = target.read_bytes()
         self._ensure_book_original(project, target, previous, mutation, chapter_id)
         await asyncio.to_thread(self._write_verbatim, target, content)
+        job_id = self._begin_managed_book_write(
+            managed_service, project, target, target.read_bytes(), args.get("operation_id"),
+        )
+        indexing = None
         try:
             outcome = await self.core.index_file(project.name, Path(project.documents_dir), target)
-        except BaseException:
+        except BaseException as exc:
+            if managed_service is not None and job_id is not None:
+                if isinstance(exc, Exception):
+                    indexing = self._finish_managed_book_write(
+                        managed_service, project, job_id, error=exc,
+                    )
+                    outcome = None
+                else:
+                    raise
+            else:
             # 🔴 6.0.12: see the twin in `_add_document`. BaseException, and the
             # undo is synchronous because you cannot await your way out of a
             # cancellation. The error still propagates — the caller is told the
             # write failed, which is now TRUE of the disk as well.
-            self._undo_write(target, previous)
-            raise
-        if outcome is None:
+                self._undo_write(target, previous)
+                raise
+        else:
+            indexing = self._finish_managed_book_write(
+                managed_service, project, job_id, outcome=outcome,
+            )
+        if outcome is None and managed_service is None:
             # See _add_document: the bytes have already landed. Leaving them
             # there meant the disk held the new content, the index still held the
             # OLD document's chunks (so search_knowledge and get_document served
@@ -762,15 +934,18 @@ class EngineDocumentOperations:
                                 "or one that is only markdown frontmatter). The document was "
                                 "restored to its previous contents; the index is unchanged."),
                     "old_chunks_removed": 0, "rolled_back": True}
-        _, new_chunks = outcome
+        _, new_chunks = outcome if outcome is not None else (None, 0)
         tier = self.core.policy_for(project.name).tier_for(target.suffix)
-        indexed = bool(getattr(outcome, "indexed", True))
+        indexed = bool(outcome is not None and getattr(outcome, "indexed", True))
+        if managed_service is not None and indexing is not None:
+            indexed = indexing.get("state") == "indexed"
         return {"status": "success", "old_chunks_removed": old_chunks,
                 "new_chunks_added": new_chunks, "dedup_skipped": 0,
                 "filepath": rel, "source": str(target),
                 "content_sha256": text_sha256(target.read_bytes()),
                 **byte_facts(target.read_bytes()),
-                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED}
+                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED,
+                **({"indexing": indexing} if indexing is not None else {})}
 
     async def _remove_documents(self, project: Project, args: dict) -> dict:
         """Remove explicit paths in order, preserving each single-file outcome.

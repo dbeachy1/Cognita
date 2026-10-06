@@ -14,19 +14,25 @@ from cognita.result_contracts import (
     validate_schema_registry,
     validate_structured_payload,
 )
+from cognita.books.schemas import ALL_ADDITIVE_TOOL_NAMES
 
 
-def test_registry_covers_exactly_the_40_public_names():
-    assert len(PUBLIC_TOOL_NAMES) == 40
+def test_registry_covers_exactly_the_authoritative_public_names():
     assert set(OUTPUT_SCHEMAS_BY_TOOL) == set(PUBLIC_TOOL_NAMES)
+    assert len(OUTPUT_SCHEMAS_BY_TOOL) == len(PUBLIC_TOOL_NAMES)
     validate_schema_registry()
 
 
 def test_every_schema_is_valid_draft_2020_object_root_and_strict_success():
     for name, schema in OUTPUT_SCHEMAS_BY_TOOL.items():
         Draft202012Validator.check_schema(schema)
-        assert schema["type"] == "object"
         assert schema["oneOf"]
+        # Legacy contracts declare their common object root. Generated book
+        # envelopes use oneOf as their root, so every variant owns that fact.
+        if "type" in schema:
+            assert schema["type"] == "object"
+        else:
+            assert all(branch.get("type") == "object" for branch in schema["oneOf"])
         success_branches = [
             branch for branch in schema["oneOf"]
             if branch.get("properties", {}).get("status", {}).get("const") != "error"
@@ -53,7 +59,10 @@ def test_only_errors_and_user_metadata_extensions_are_open_objects():
     assert open_paths
     for path, schema in open_paths:
         is_error = schema.get("properties", {}).get("status", {}).get("const") == "error"
-        assert is_error or path[-1] == "extensions", path
+        # Normative book/storage errors carry a deliberately open JsonObject
+        # under their explicit `details` field. Legacy errors themselves stay
+        # open for additive diagnostics, and asset metadata owns `extensions`.
+        assert is_error or path[-1] in {"extensions", "details"}, path
 
 
 def test_attach_output_schema_deep_copies_without_mutating_input():
@@ -64,9 +73,21 @@ def test_attach_output_schema_deep_copies_without_mutating_input():
     assert "local_only" not in OUTPUT_SCHEMAS_BY_TOOL["search_knowledge"]["oneOf"][0]["required"]
 
 
-def test_error_envelope_is_extensible_but_success_is_not_universal():
-    for name, schema in OUTPUT_SCHEMAS_BY_TOOL.items():
+def test_error_contracts_keep_legacy_diagnostics_but_book_errors_strict():
+    additive = set(ALL_ADDITIVE_TOOL_NAMES) & set(OUTPUT_SCHEMAS_BY_TOOL)
+    for name in set(OUTPUT_SCHEMAS_BY_TOOL) - additive:
         validate_structured_payload(name, {"status": "error", "reason": "not_found", "custom": {"safe": True}})
+        with pytest.raises(ValidationError):
+            validate_structured_payload(name, {"status": "success", "unexpected": True})
+    for name in additive:
+        strict_error = {
+            "status": "error", "reason": "not_found", "message": "not found",
+            "operation_outcome": "not_applied", "correlation_id": "test-correlation",
+            "details": {"safe": True},
+        }
+        validate_structured_payload(name, strict_error)
+        with pytest.raises(ValidationError):
+            validate_structured_payload(name, {**strict_error, "custom": {"not": "allowed"}})
         with pytest.raises(ValidationError):
             validate_structured_payload(name, {"status": "success", "unexpected": True})
 
@@ -246,6 +267,39 @@ def test_write_documents_accepts_the_engine_atomic_receipt_shape():
     result = build_tool_result("write_documents", payload, mutating=True)
     assert result["structuredContent"] == payload
     assert json.loads(result["content"][0]["text"]) == payload
+
+
+def test_managed_book_write_indexing_fact_is_optional_and_strict():
+    indexing = {
+        "state": "blocked", "job_id": "managed-write-1",
+        "error": {"code": "indexing_unavailable", "message": "Indexing is temporarily unavailable."},
+    }
+    payload = {
+        "status": "success", "chunks_added": 0, "dedup_skipped": 0,
+        "category": "general", "filepath": "Chapters/1/chapter.docx",
+        "source": "C:/project/Chapters/1/chapter.docx", "bytes_sha256": "a" * 64,
+        "size_bytes": 12, "line_endings": None, "utf8_valid": None,
+        "decode_error_bytes": None, "content_is_lossy": False,
+        "index_text_sanitized": False, "content_sha256": None,
+        "tier": "embedded", "semantic_searchable": False, "indexing": indexing,
+    }
+    validate_structured_payload("add_document", payload)
+    receipt = {
+        "filepath": payload["filepath"], "bytes_sha256": payload["bytes_sha256"],
+        "size_bytes": payload["size_bytes"], "line_endings": payload["line_endings"],
+        "utf8_valid": payload["utf8_valid"], "decode_error_bytes": payload["decode_error_bytes"],
+        "content_is_lossy": payload["content_is_lossy"],
+        "index_text_sanitized": payload["index_text_sanitized"],
+        "content_sha256": payload["content_sha256"], "indexing": indexing,
+    }
+    validate_structured_payload("write_documents", {
+        "status": "success", "documents_written": 1, "chunks_indexed": 0,
+        "filepaths": [payload["filepath"]], "receipts": [receipt],
+    })
+    with pytest.raises(ValidationError):
+        validate_structured_payload("add_document", {
+            **payload, "indexing": {**indexing, "unexpected": True},
+        })
 
 
 def test_restore_backup_accepts_update_and_recreate_receipts():
