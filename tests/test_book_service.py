@@ -6,6 +6,7 @@ import json
 import struct
 import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -546,7 +547,6 @@ def test_headered_pcm_import_detects_format_rejects_conflicting_rawformat_and_re
     failed = service.get_job(GetJobRequest(project="fixture", job_id=failed_job["job_id"]))
     assert failed["state"] == "failed" and failed["error"]["reason"] == "media_mismatch"
     assert source.read_bytes() == original
-
     generation_after = service.get_generations(GetGenerationsRequest.model_validate({
         "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
     }))["generations"][0]
@@ -567,8 +567,76 @@ def test_headered_pcm_import_detects_format_rejects_conflicting_rawformat_and_re
     assert take["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
     assert take["assembly_derivative"] is None
     assert (tmp_path / take["filepath"]).read_bytes() == original
+
+
+@pytest.mark.parametrize("provenance", ["test_mp3", "derived_audio"])
+def test_project_mp3_import_uses_detected_facts_and_preserves_original_bytes(tmp_path, monkeypatch, provenance):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, _raw_format = _completed_raw_generation(service, prose, tagged)
+    source = tmp_path / "Audiobook/Chapters/1/provider-output.mp3"
+    original = b"ID3\x04\x00\x00synthetic-mp3-payload"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(original)
+
+    async def fake_probe(_executable, filepath, **_kwargs):
+        assert Path(filepath).is_file()
+        return {
+            "streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100",
+                         "channels": 1, "duration": "0.25", "bit_rate": "96000", "nb_frames": "10"}],
+            "format": {"format_name": "mp3", "duration": "0.25", "bit_rate": "96000"},
+        }
+
+    monkeypatch.setattr(service, "_registered_media_executables", lambda: (source, source))
+    monkeypatch.setattr(service_module, "ffprobe_json", fake_probe)
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": f"import-{provenance}",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.mp3",
+                   "expected_sha256": hashlib.sha256(original).hexdigest()},
+        "provenance": provenance,
+    })
+    queued, _ = service.import_audio(request, owner_key="principal:fixture")
+    service.run_import_job(queued["job_id"])
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "succeeded", completed
+    take = completed["result"]["take"]
+    assert take["provenance"] == provenance
+    assert take["filepath"].endswith("/native.mp3")
+    assert take["media"]["codec"] == "mp3" and take["media"]["encoding"] == "compressed"
+    assert take["assembly_derivative"] is None
+    assert (tmp_path / take["filepath"]).read_bytes() == original
     assert source.read_bytes() == original
 
+
+def test_native_generation_label_cannot_admit_detected_compressed_mp3(tmp_path, monkeypatch):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, _raw_format = _completed_raw_generation(service, prose, tagged)
+    source = tmp_path / "Audiobook/Chapters/1/mislabelled.mp3"
+    original = b"ID3\x04\x00\x00mislabelled-compressed"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(original)
+
+    async def fake_probe(_executable, _filepath, **_kwargs):
+        return {"streams": [{"codec_type": "audio", "codec_name": "mp3", "sample_rate": "44100",
+                              "channels": 1, "duration": "0.25", "bit_rate": "96000"}],
+                "format": {"format_name": "mp3", "duration": "0.25"}}
+
+    monkeypatch.setattr(service, "_registered_media_executables", lambda: (source, source))
+    monkeypatch.setattr(service_module, "ffprobe_json", fake_probe)
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "reject-mislabelled-mp3",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/mislabelled.mp3",
+                   "expected_sha256": hashlib.sha256(original).hexdigest()},
+        "provenance": "native_generation",
+    })
+    queued, _ = service.import_audio(request, owner_key="principal:fixture")
+    service.run_import_job(queued["job_id"])
+    result = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert result["state"] == "failed" and result["error"]["reason"] == "native_pcm_required"
+    assert source.read_bytes() == original
 
 def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_back(tmp_path):
     service, prose, tagged = _fixture(tmp_path)

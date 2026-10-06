@@ -1584,7 +1584,13 @@ class BookService:
                                        source_size=source_size, job_id=job_id)
             raw_format = pinned.get("source_format")
             probe = None
-            if pinned["provenance"] in {"test_mp3", "derived_audio"}:
+            with staging.open("rb") as staged_input:
+                header = staged_input.read(12)
+            is_wave = len(header) >= 12 and header[8:12] == b"WAVE" and header[:4] in {b"RIFF", b"RIFX", b"RF64"}
+            # Headered PCM is verified by the bounded WAVE parser. Every
+            # compressed or derived candidate, including one falsely labelled
+            # native_generation, must instead have actual FFprobe facts.
+            if pinned["provenance"] in {"test_mp3", "derived_audio"} or (raw_format is None and not is_wave):
                 _, ffprobe = self._registered_media_executables()
                 probe = asyncio.run(ffprobe_json(ffprobe, staging, timeout_seconds=60.0))
             inspection = inspect_media_file(
