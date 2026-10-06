@@ -2074,11 +2074,77 @@ class BookService:
                              else _cursor(view, next_offset)) if next_offset < len(metadata) else None),
         }
 
+    def _working_chunk_bookmark_proof(
+        self, stored: dict[str, Any], *, chapter_id: str, scope_key: str,
+    ) -> tuple[dict[str, str], dict[str, Any]]:
+        """Check current navigation against frozen ranges, never matching by prose."""
+        if stored["chapter_id"] != chapter_id or stored["scope_key"] != scope_key:
+            raise BookServiceError("state_unavailable", "The current navigation snapshot has an inconsistent namespace.")
+        self._authorize_snapshot_read(stored, chapter_id)
+        payload = stored["payload"]
+        result = payload["result"]
+        chunks = result["chunks"]
+        identity: dict[str, Any] = {"snapshot_id": result["snapshot_id"], "scope_key": scope_key}
+        try:
+            frozen_tagged = _read_bytes(self.root, payload["tagged_filepath"])
+            frozen_prose = _read_bytes(self.root, payload["prose_filepath"])
+            if (hashlib.sha256(frozen_tagged).hexdigest() != result["snapshot_tagged_sha256"]
+                    or hashlib.sha256(frozen_prose).hexdigest() != result["snapshot_prose_sha256"]):
+                raise ValueError("frozen source identity changed")
+            expected = parse_docx(frozen_tagged)
+            pair = project_docx_pair(
+                frozen_prose, frozen_tagged, explicit_tag_spans=payload.get("explicit_tag_spans", []),
+            )
+            expected_ordinals = {paragraph.paragraph_id: paragraph.source_ordinal for paragraph in pair.paragraphs}
+            expected_marks = {mark.name: mark for mark in expected.bookmarks}
+        except (BookServiceError, OSError, ValueError, KeyError, TypeError) as exc:
+            raise BookServiceError("state_unavailable", "The frozen current bookmark source could not be verified.") from exc
+        try:
+            _, _, layout = self._enabled_layout()
+            chapter = self._chapter(layout, chapter_id)
+            working_pair = self._snapshot_working_pair(payload, chapter)
+            if json.loads(scope_key) == {"kind": "production"} and working_pair != (
+                    chapter.working_filepath, chapter.tagged_filepath):
+                raise BookServiceError("stale_source", "The current navigation working pair is no longer registered.")
+            identity["working_tagged_filepath"] = working_pair[1]
+            working_raw = _read_bytes(self.root, working_pair[1])
+            identity["working_tagged_sha256"] = hashlib.sha256(working_raw).hexdigest()
+            working = parse_docx(working_raw)
+        except (BookServiceError, OSError, ValueError) as exc:
+            reason = exc.reason if isinstance(exc, BookServiceError) else type(exc).__name__
+            identity["check_error"] = reason
+            status = "missing" if reason == "file_not_found" else "not_checked"
+            return {chunk["chunk_id"]: status for chunk in chunks}, identity
+        working_marks = {mark.name: mark for mark in working.bookmarks}
+        checked: dict[str, str] = {}
+        for chunk in chunks:
+            segments = chunk.get("source_segments", [])
+            present = bool(segments)
+            for segment in segments:
+                mark = expected_marks.get(segment.get("bookmark"))
+                ordinal = expected_ordinals.get(segment.get("paragraph_id"))
+                if (mark is None or ordinal is None or mark.paragraph_ordinal != ordinal
+                        or mark.end_paragraph_ordinal != ordinal
+                        or (mark.offset, mark.end_offset) != (segment["start"], segment["end"])):
+                    raise BookServiceError("state_unavailable", "A frozen chunk source segment lacks its exact bookmark range.")
+                live = working_marks.get(mark.name)
+                if live is None or (live.paragraph_ordinal, live.offset, live.end_paragraph_ordinal, live.end_offset) != (
+                        mark.paragraph_ordinal, mark.offset, mark.end_paragraph_ordinal, mark.end_offset):
+                    present = False
+                    continue
+                expected_text = expected.paragraphs[ordinal].text[mark.offset:mark.end_offset]
+                live_text = working.paragraphs[ordinal].text[live.offset:live.end_offset]
+                if hashlib.sha256(live_text.encode("utf-8")).digest() != hashlib.sha256(expected_text.encode("utf-8")).digest():
+                    present = False
+            checked[chunk["chunk_id"]] = "present" if present else "missing"
+        return checked, identity
+
     def find_chunk(self, request: dto.FindChunkRequest) -> dict[str, Any]:
         state = self.discover_state()
         matches: list[dict[str, Any]] = []
         searched_snapshots: list[str] = []
         current_heads: list[tuple[str, str, dict[str, Any] | None]] = []
+        working_checks: list[dict[str, Any]] = []
         query_value = request.query.model_dump(mode="json", exclude_unset=True)
         if isinstance(request.query, dto.TimestampQuery):
             build = state.build(request.query.build_id) if state is not None else None
@@ -2175,6 +2241,11 @@ class BookService:
                 text = snapshot.get("spoken_projection", "")
                 speech_text = snapshot.get("speech_text", "")
                 start = 0
+                current_namespace = state.namespace(chapter_id, search_scope_key)
+                current_snapshot = current_namespace.get("current_snapshot_id") if current_namespace else None
+                current_stored = state.snapshot(current_snapshot) if current_snapshot else None
+                current_chunks = current_stored["payload"].get("result", {}).get("chunks", []) if current_stored else []
+                bookmark_statuses: dict[str, str] | None = None
                 while query and (at := text.find(query, start)) >= 0:
                     end = at + len(query)
                     if ((before is None or text[max(0, at-len(before)):at] == before)
@@ -2194,10 +2265,6 @@ class BookService:
                                 "state_unavailable",
                                 "The frozen spoken projection could not be mapped to its prepared chunks.",
                             ) from exc
-                        current_namespace = state.namespace(chapter_id, scope_key) if state else None
-                        current_snapshot = current_namespace.get("current_snapshot_id") if current_namespace else None
-                        current_stored = state.snapshot(current_snapshot) if current_snapshot else None
-                        current_chunks = current_stored["payload"].get("result", {}).get("chunks", []) if current_stored else []
                         lineage = []
                         current_ids: list[str] = []
                         for old_id in overlapping:
@@ -2214,6 +2281,17 @@ class BookService:
                                           and current_ids else "missing")
                         if any(len(item["current_chunk_ids"]) > 1 for item in lineage):
                             mapping_status = "ambiguous"
+                        if mapping_status == "present":
+                            if bookmark_statuses is None:
+                                bookmark_statuses, checked_source = self._working_chunk_bookmark_proof(
+                                    current_stored, chapter_id=chapter_id, scope_key=search_scope_key,
+                                )
+                                working_checks.append(checked_source)
+                            statuses = [bookmark_statuses.get(chunk_id, "missing") for chunk_id in current_ids]
+                            if "missing" in statuses:
+                                mapping_status = "missing"
+                            elif "not_checked" in statuses:
+                                mapping_status = "not_checked"
                         matches.append({
                             "chapter_id": chapter_id, "snapshot_id": snapshot_id,
                             "chunk_ids": overlapping, "occurrence_start": at,
@@ -2234,6 +2312,7 @@ class BookService:
             "chapter_ids": chapter_ids if not isinstance(request.query, dto.TimestampQuery) else [],
             "snapshot_ids": searched_snapshots,
             "current_heads": current_heads,
+            "working_checks": working_checks,
             "mapping": [
                 (match["snapshot_id"], match["chunk_ids"], match["current_chunk_ids"],
                  match["current_take_ids"], match["current_mapping_status"])

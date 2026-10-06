@@ -950,6 +950,170 @@ def test_direct_take_associations_keep_history_separate_from_current_head(tmp_pa
     assert old_timeline.read_bytes() == timeline_before
 
 
+def _working_bookmark_fixture(root, *, publish=True):
+    service, _, _ = _fixture(root)
+    source = _docx_paragraphs("repeat α", "repeat β")
+    (root / "Chapters/1/chapter.docx").write_bytes(source)
+    (root / "Chapters/1/chapter_audio-tags.docx").write_bytes(source)
+    layout_path = root / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0].update({
+        "source_raw_sha256": hashlib.sha256(source).hexdigest(), "allowed_paragraph_ordinals": [0, 1],
+    })
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    prepared = _prepare_test_plan(service, "working-bookmark-prepare", source, source, None, [
+        {"chunk_id": "both", "start": 0, "end": len("repeat α\n\nrepeat β"), "request_spec": None},
+    ], publish=publish)
+    query = {"project": "fixture", "chapter_id": "ch1", "query": {
+        "kind": "quote", "text": "repeat", "snapshot_id": prepared["snapshot_id"],
+    }}
+    return service, prepared, query
+
+
+def _rewrite_docx_part(path, rewrite):
+    from lxml import etree
+
+    with zipfile.ZipFile(io.BytesIO(path.read_bytes())) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    document = etree.fromstring(parts["word/document.xml"])
+    rewrite(document)
+    parts["word/document.xml"] = etree.tostring(document)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in parts.items():
+            archive.writestr(name, content)
+    path.write_bytes(output.getvalue())
+
+
+@pytest.mark.parametrize("change,expected", [
+    ("published", "present"), ("unpublished", "missing"), ("remove_second", "missing"),
+    ("range_second", "missing"), ("text_second", "missing"), ("formatting", "present"),
+    ("missing_file", "missing"), ("malformed", "not_checked"), ("unreadable", "not_checked"),
+])
+def test_quote_present_requires_every_actual_working_bookmark(tmp_path, monkeypatch, change, expected):
+    service, prepared, query = _working_bookmark_fixture(tmp_path, publish=change != "unpublished")
+    working = tmp_path / "Chapters/1/chapter_audio-tags.docx"
+    original = working.read_bytes()
+    assert len(prepared["chunks"][0]["source_segments"]) == 2
+    ns = {"w": W}
+
+    def change_document(document):
+        second = document.xpath("//w:body/w:p", namespaces=ns)[1]
+        if change == "remove_second":
+            for mark in second.xpath("w:bookmarkStart | w:bookmarkEnd", namespaces=ns):
+                second.remove(mark)
+        elif change == "range_second":
+            end = second.find(f"{{{W}}}bookmarkEnd")
+            second.remove(end)
+            second.insert(1, end)  # Same name/text, but an empty actual Word range.
+        elif change == "text_second":
+            second.find(f".//{{{W}}}t").text = "repeat γ"
+        elif change == "formatting":
+            from lxml import etree
+            second.insert(0, etree.Element(f"{{{W}}}pPr"))
+
+    if change == "missing_file":
+        working.unlink()
+    elif change == "malformed":
+        working.write_bytes(b"not a DOCX")
+    elif change == "unreadable":
+        read = service_module._read_bytes
+
+        def unavailable_read(root, relative):
+            if relative == "Chapters/1/chapter_audio-tags.docx":
+                raise PermissionError("synthetic fixture read denied")
+            return read(root, relative)
+
+        monkeypatch.setattr(service_module, "_read_bytes", unavailable_read)
+    elif change not in {"published", "unpublished"}:
+        _rewrite_docx_part(working, change_document)
+    found = service.find_chunk(FindChunkRequest.model_validate(query))
+    assert len(found["matches"]) == 2
+    assert {match["current_mapping_status"] for match in found["matches"]} == {expected}
+    assert all(match["current_chunk_ids"] == ["both"] for match in found["matches"])
+    assert all(match["snapshot_id"] == prepared["snapshot_id"] for match in found["matches"])
+    if change == "formatting":
+        assert working.read_bytes() != original
+
+
+def test_quote_bookmark_proof_reads_once_and_pins_observed_hash_in_cursor(tmp_path, monkeypatch):
+    service, _prepared, query = _working_bookmark_fixture(tmp_path)
+    reads = []
+    read = service_module._read_bytes
+
+    def observed_read(root, relative):
+        reads.append(relative)
+        return read(root, relative)
+
+    monkeypatch.setattr(service_module, "_read_bytes", observed_read)
+    page = service.find_chunk(FindChunkRequest.model_validate({**query, "limit": 1}))
+    working_path = "Chapters/1/chapter_audio-tags.docx"
+    assert reads.count(working_path) == 1
+    assert page["has_more"] and page["matches"][0]["current_mapping_status"] == "present"
+    continuation = service.find_chunk(FindChunkRequest.model_validate({**query, "cursor": page["next_cursor"], "limit": 1}))
+    assert continuation["matches"][0]["current_mapping_status"] == "present"
+    assert reads.count(working_path) == 2
+    _rewrite_docx_part(tmp_path / working_path, lambda document: document.set("formatting_fixture", "changed"))
+    # Ranges/text and status remain identical; only observed raw bytes changed.
+    assert service.find_chunk(FindChunkRequest.model_validate(query))["matches"][0]["current_mapping_status"] == "present"
+    with pytest.raises(BookServiceError) as stale:
+        service.find_chunk(FindChunkRequest.model_validate({**query, "cursor": page["next_cursor"], "limit": 1}))
+    assert stale.value.reason == "invalid_cursor"
+
+
+@pytest.mark.parametrize("artifact", ["tagged_filepath", "prose_filepath"])
+def test_quote_bookmark_proof_refuses_changed_frozen_artifact(tmp_path, artifact):
+    service, prepared, query = _working_bookmark_fixture(tmp_path)
+    stored = service._state_required().snapshot(prepared["snapshot_id"])
+    frozen = tmp_path / stored["payload"][artifact]
+    frozen.write_bytes(_docx("different immutable source"))
+    with pytest.raises(BookServiceError) as corrupt:
+        service.find_chunk(FindChunkRequest.model_validate(query))
+    assert corrupt.value.reason == "state_unavailable"
+
+
+def test_old_quote_uses_current_prepared_bookmarks_without_changing_history(tmp_path):
+    service, first, query = _working_bookmark_fixture(tmp_path)
+    source = (tmp_path / "Chapters/1/chapter.docx").read_bytes()
+    second = _prepare_test_plan(
+        service, "working-bookmark-second", source,
+        (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes(), first["manifest_revision"],
+        [{"chunk_id": "both", "start": 0, "end": len("repeat α\n\nrepeat β"), "request_spec": None}], publish=True,
+    )
+    second_name = second["chunks"][0]["source_segments"][1]["bookmark"]
+    first_name = first["chunks"][0]["source_segments"][1]["bookmark"]
+    assert second_name != first_name
+    found = service.find_chunk(FindChunkRequest.model_validate(query))
+    assert all(match["snapshot_id"] == first["snapshot_id"] and match["current_mapping_status"] == "present"
+               for match in found["matches"])
+
+    def remove_current(document):
+        starts = document.findall(f".//{{{W}}}bookmarkStart")
+        selected = next(mark for mark in starts if mark.get(f"{{{W}}}name") == second_name)
+        mark_id = selected.get(f"{{{W}}}id")
+        selected.getparent().remove(selected)
+        end = next(mark for mark in document.findall(f".//{{{W}}}bookmarkEnd") if mark.get(f"{{{W}}}id") == mark_id)
+        end.getparent().remove(end)
+
+    _rewrite_docx_part(tmp_path / "Chapters/1/chapter_audio-tags.docx", remove_current)
+    found = service.find_chunk(FindChunkRequest.model_validate(query))
+    assert all(match["snapshot_id"] == first["snapshot_id"] and match["current_mapping_status"] == "missing"
+               for match in found["matches"])
+
+
+def test_quote_working_bookmark_proof_uses_authorized_alternate_test_path(tmp_path):
+    service, _, production_tagged = _fixture(tmp_path)
+    prose, tagged = _authorized_alternate_pair(tmp_path)
+    prepared = _prepare_alternate_test_plan(service, prose, tagged, operation_id="alternate-lookup", publish=True)
+    query = {"project": "fixture", "chapter_id": "ch1", "query": {
+        "kind": "quote", "text": "alternate", "snapshot_id": prepared["snapshot_id"],
+    }}
+    assert service.find_chunk(FindChunkRequest.model_validate(query))["matches"][0]["current_mapping_status"] == "present"
+    assert (tmp_path / "Chapters/1/chapter_audio-tags.docx").read_bytes() == production_tagged
+    (tmp_path / "Chapters/1/Test/chapter_audio-tags.docx").write_bytes(tagged)
+    assert service.find_chunk(FindChunkRequest.model_validate(query))["matches"][0]["current_mapping_status"] == "missing"
+
+
 def test_selected_build_association_allows_take_reused_from_older_snapshot(tmp_path):
     service, state, stored, settings_path, *_rest, settings = _production_prepared_fixture(tmp_path)
     first = stored["payload"]["result"]
