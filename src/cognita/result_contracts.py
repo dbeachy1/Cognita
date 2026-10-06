@@ -17,7 +17,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError
 
 from .strict_result_schemas import build_adapter_schemas, build_schemas
-from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS
+from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +127,18 @@ validate_output = validate_structured_payload
 schema_for_tool = output_schema_for_tool
 
 
+def normalize_legacy_error_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a legacy payload and supply the stable code for status:error.
+
+    Explicit codes and diagnostic fields are preserved. Strict generated book and
+    storage contracts must stay outside this legacy normalization boundary.
+    """
+    result = dict(payload)
+    if result.get("status") == "error":
+        result.setdefault("error_code", "INVALID_ARGUMENT")
+    return result
+
+
 def _encoded_payload(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -161,6 +173,8 @@ def build_tool_result(
     """
     if error is not None:
         is_error = bool(error)
+    if isinstance(payload, Mapping) and tool_name not in ALL_ADDITIVE_TOOL_NAMES:
+        payload = normalize_legacy_error_payload(payload)
     if not isinstance(payload, Mapping):
         valid = False
     else:
@@ -186,6 +200,8 @@ def build_tool_result(
             ),
             correlation_id=cid,
         )
+        if tool_name not in ALL_ADDITIVE_TOOL_NAMES:
+            payload = normalize_legacy_error_payload(payload)
         is_error = True
         # Contract-invalid output is replaced, not decorated. In particular,
         # never retain private image or document content on the containment

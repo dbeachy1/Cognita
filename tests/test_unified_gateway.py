@@ -287,6 +287,7 @@ async def test_read_only_and_invalid_projects_are_bounded(env):
     assert payload == {
         "status": "error", "reason": "project_unavailable",
         "message": "The requested project is unavailable through this connector.",
+        "error_code": "INVALID_ARGUMENT",
     }
     legacy = await _post(app, selected_id, token, _rpc("tools/call", {
         "name": "search_knowledge", "arguments": {"project": "../A", "query": "x"}

@@ -1211,6 +1211,7 @@ async def test_reindex_fails_closed_when_current_policy_is_malformed(tmp_path):
         "status": "error",
         "reason": "policy_unavailable",
         "message": "Connector policy is unavailable for background reindex.",
+        "error_code": "INVALID_ARGUMENT",
     }
     assert core.index_calls == []
 
@@ -1237,6 +1238,7 @@ async def test_engine_rechecks_connector_write_policy_for_every_mutation(tmp_pat
     assert result == {
         "status": "error", "reason": "read_only",
         "message": "The connector has read-only access to this project.",
+        "error_code": "INVALID_ARGUMENT",
     }
 
 

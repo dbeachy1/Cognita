@@ -168,6 +168,7 @@ async def test_excluded_project_has_generic_remote_unavailable_response(tmp_path
         "status": "error",
         "reason": "project_unavailable",
         "message": "The requested project is unavailable through this connector.",
+        "error_code": "INVALID_ARGUMENT",
     }
 
 
@@ -274,6 +275,7 @@ async def test_valid_key_initializes_with_no_accessible_projects(tmp_path, caplo
         "status": "error",
         "reason": "project_unavailable",
         "message": "No projects are configured for this key.",
+        "error_code": "INVALID_ARGUMENT",
     }
     assert "connector authenticated without projects" in caplog.text
 

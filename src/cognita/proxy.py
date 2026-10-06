@@ -96,8 +96,11 @@ from .reading import (
     read_slice,
 )
 from .readonly import MUTATING_TOOLS, READONLY_TOOLS, is_tool_allowed_remote
-from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES
-from .result_contracts import OUTPUT_SCHEMAS_BY_TOOL, attach_output_schema, build_tool_result
+from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS
+from .result_contracts import (
+    OUTPUT_SCHEMAS_BY_TOOL, attach_output_schema, build_tool_result,
+    normalize_legacy_error_payload,
+)
 from .selftest import SELFTEST_TOOL_DEF, SELFTEST_TOOL_NAME, select_self_test_plan
 from .toolargs import reject_unknown_arguments, reject_wrong_types, wire_error
 
@@ -415,8 +418,9 @@ def _tool_result(msg_id, payload: dict, tool_name: str | None = None) -> JSONRes
     else:
         # Generic errors are valid against every public tool's common error
         # branch; retain this fallback for policy refusals before tool routing.
-        result = {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}],
-                  "structuredContent": dict(payload),
+        normalized = normalize_legacy_error_payload(payload)
+        result = {"content": [{"type": "text", "text": json.dumps(normalized, indent=2)}],
+                  "structuredContent": normalized,
                   "isError": payload.get("status") == "error"}
     return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
 

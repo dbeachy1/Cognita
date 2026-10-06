@@ -75,7 +75,7 @@ from .proxy import (
 from .public_url import PublicBaseURLStore
 from .readonly import is_tool_allowed_remote
 from .registry import Registry
-from .result_contracts import build_tool_result
+from .result_contracts import build_tool_result, normalize_legacy_error_payload
 from .selftest import SELFTEST_TOOL_NAME, select_self_test_plan
 from .workspace import workspace_tool_result
 from .workspace_selftest import WORKSPACE_SELFTEST_TOOL_NAME, workspace_selftest_plan
@@ -887,8 +887,9 @@ def create_gateway_app(
         else:
             # Policy/project errors are shared by all output schemas.  Keep the
             # synthesized response structured even before a tool is resolved.
-            result = {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}],
-                      "structuredContent": dict(payload),
+            normalized = normalize_legacy_error_payload(payload)
+            result = {"content": [{"type": "text", "text": json.dumps(normalized, indent=2)}],
+                      "structuredContent": normalized,
                       "isError": payload.get("status") in {"error", "partial_failure"}}
         return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
 

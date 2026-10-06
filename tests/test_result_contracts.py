@@ -479,3 +479,43 @@ def test_broker_relayed_error_with_null_correlation_id_validates():
     result = build_tool_result("workspace_start_job", payload, is_error=True)
     assert result["isError"] is True
     assert result["structuredContent"]["reason"] == "runtime_unavailable"
+
+
+def test_legacy_error_normalization_preserves_diagnostics_and_is_error_flag():
+    payload = {
+        "status": "error", "reason": "not_found", "message": "missing",
+        "diagnostic": {"path": "safe"},
+    }
+    result = build_tool_result("get_document", payload, is_error=False)
+    assert payload == {
+        "status": "error", "reason": "not_found", "message": "missing",
+        "diagnostic": {"path": "safe"},
+    }
+    assert result["structuredContent"] == {
+        **payload, "error_code": "INVALID_ARGUMENT",
+    }
+    assert result["isError"] is False
+    assert json.loads(result["content"][0]["text"]) == result["structuredContent"]
+
+    explicit = build_tool_result(
+        "get_document",
+        {"status": "error", "error_code": "CUSTOM_CODE", "reason": "invalid"},
+        is_error=True,
+    )
+    assert explicit["structuredContent"]["error_code"] == "CUSTOM_CODE"
+
+
+def test_invalid_legacy_fallback_gets_error_code_but_book_error_stays_strict():
+    fallback = build_tool_result("search_knowledge", {"status": "success"})
+    assert fallback["structuredContent"]["error_code"] == "INVALID_ARGUMENT"
+    assert json.loads(fallback["content"][0]["text"]) == fallback["structuredContent"]
+
+    book_error = {
+        "status": "error", "reason": "not_found", "message": "not found",
+        "operation_outcome": "not_applied", "correlation_id": "test-correlation",
+        "details": {"safe": True},
+    }
+    result = build_tool_result("audiobook_get_book", book_error, is_error=True)
+    assert result["structuredContent"] == book_error
+    assert "error_code" not in result["structuredContent"]
+    validate_structured_payload("audiobook_get_book", result["structuredContent"])

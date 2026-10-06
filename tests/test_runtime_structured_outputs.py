@@ -40,8 +40,11 @@ def test_gateway_upgrades_legacy_text_result_and_prefers_structured_content():
     message["result"]["structuredContent"] = preferred
     message["result"]["content"][0]["text"] = json.dumps(original)
     normalized = _normalize_tool_rpc_payload(message, "search_knowledge")
-    assert normalized["result"]["structuredContent"] == preferred
-    assert json.loads(normalized["result"]["content"][0]["text"]) == preferred
+    expected = {**preferred, "error_code": "INVALID_ARGUMENT"}
+    assert preferred == {"status": "error", "reason": "stale_file"}
+    assert normalized["result"]["structuredContent"] == expected
+    assert json.loads(normalized["result"]["content"][0]["text"]) == expected
+    assert normalized["result"]["isError"] is False
 
 
 def test_gateway_preserves_an_image_block_when_content_lacks_leading_text():

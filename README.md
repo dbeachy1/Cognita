@@ -9,7 +9,7 @@ French, German, Italian, and Brazilian Portuguese**.
 **Latest verified installer downloads (15.7.0):**
 [Windows installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/Cognita-Setup-15.7.0-r1.exe) ·
 [Linux source installer 15.7.0](https://github.com/dbeachy1/Cognita/releases/download/v15.7.0/cognita-src-15.7.0.tar.gz).
-Version 16.0.0 is under validation; its release assets are not available yet.
+Version 16.1.0 is under validation; its release assets are not available yet.
 The Linux archive installs Cognita using its release container images.
 
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
