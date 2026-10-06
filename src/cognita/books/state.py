@@ -750,10 +750,16 @@ class ProjectState:
                 raise ProjectStateError("import_reservation_lost")
             media_row = connection.execute("SELECT media_revision FROM book_chapter_media WHERE chapter_id=?", (take_payload["chapter_id"],)).fetchone()
             media_revision = 1 if media_row is None else int(media_row["media_revision"]) + 1
+            # Import work can take minutes.  Preserve any independently
+            # recorded provider evidence that arrived while the source was
+            # streamed; immutable request identity remains the row authority.
+            completed_at = generation_payload["updated_at"]
+            generation_payload = dict(generation)
             generation_payload["generation_revision"] = int(generation["generation_revision"]) + 1
             generation_payload["media_registered"] = True
             generation_payload["take_id"] = take_payload["take_id"]
             generation_payload["import_job_id"] = job_id
+            generation_payload["updated_at"] = completed_at
             result = {"kind": "import", "generation_record_id": row["generation_record_id"],
                       "generation_revision": generation_payload["generation_revision"],
                       "media_revision": media_revision, "take": take_payload}

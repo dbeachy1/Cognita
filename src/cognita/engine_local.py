@@ -801,18 +801,36 @@ class LocalEngineHost(
                 elif tool == "audiobook_import_audio":
                     data, replayed = service.import_audio(request_model, owner_key=owner_key)
                     if not replayed:
-                        key = (project.name, data["job_id"])
-                        service.mark_import_worker_started(data["job_id"])
+                        job_id = data["job_id"]
+                        key = (project.name, job_id)
+                        service.mark_import_worker_started(job_id)
 
                         async def run_import() -> None:
                             # The durable reservation was committed under the
-                            # admission lock. The worker deliberately runs its
-                            # stream/hash work after that lock is released.
-                            await asyncio.to_thread(service.run_import_job, data["job_id"])
+                            # admission lock. Stream/hash/PCM work happens
+                            # outside it; final guarded publication reacquires
+                            # the same project lock in the event-loop owner.
+                            loop = asyncio.get_running_loop()
+                            lock = self.core.write_lock(project.name)
+
+                            async def acquire_finalization() -> None:
+                                if not await lock.acquire_within(WRITE_LOCK_WAIT_S):
+                                    raise BookServiceError("busy", "Another project write is in progress.")
+
+                            def before_finalize() -> None:
+                                asyncio.run_coroutine_threadsafe(acquire_finalization(), loop).result()
+
+                            def after_finalize() -> None:
+                                asyncio.run_coroutine_threadsafe(lock.release(), loop).result()
+
+                            await asyncio.to_thread(
+                                service.run_import_job, job_id,
+                                before_finalize=before_finalize, after_finalize=after_finalize,
+                            )
 
                         task = asyncio.create_task(run_import())
                         self._book_import_tasks[key] = task
-                        def finished(_task, *, key=key, job_id=data["job_id"], service=service) -> None:
+                        def finished(_task, *, key=key, job_id=job_id, service=service) -> None:
                             self._book_import_tasks.pop(key, None)
                             service.mark_import_worker_finished(job_id)
                         task.add_done_callback(finished)

@@ -42,12 +42,10 @@ EXPECTED_TOOLS = {
     "write_documents",  # 6.0.13 — atomic multi-document write
     "put_asset", "update_asset_metadata", "search_assets", "list_assets",
     "get_asset_info", "get_asset", "reindex_assets", "ocr_asset", "remove_asset",  # 10.1
-} | {
-    # M1 exposes the implemented inspection/prepare/read/finding subset and
-    # all three general-storage tools; later audiobook operations stay absent
-    # until their owning durable service checkpoint adds them to the catalog.
     "audiobook_inspect_chapter", "audiobook_prepare_chapter",
     "audiobook_get_chapter", "audiobook_find_chunk",
+    "audiobook_record_generation", "audiobook_import_audio",
+    "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
     "set_folder_indexing", "list_project_files", "read_project_file",
 }
 
@@ -170,7 +168,7 @@ def test_make_snippet_truncates_at_natural_break():
 
 def test_engine_tool_defs_have_no_duplicates():
     names = [t["name"] for t in ENGINE_TOOL_DEFS]
-    assert len(names) == len(set(names)) == len(EXPECTED_TOOLS)
+    assert len(names) == len(set(names)) == len(EXPECTED_TOOLS) == 42
 
 
 async def test_asset_mutation_uses_project_lock_and_type_gate(tmp_path):

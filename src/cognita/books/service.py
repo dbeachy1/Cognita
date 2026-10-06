@@ -17,7 +17,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from . import models as dto
 from .config import (
@@ -29,6 +29,7 @@ from .configuration import (
 )
 from .fingerprint import canonical_json_sha256, request_fingerprint
 from .media import MediaValidationError, inspect_media_file
+from .assembly import AssemblyError, PcmSource, assemble_pcm_stream, wrap_pcm_as_wave
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
@@ -1153,12 +1154,28 @@ class BookService:
     def _available_import_space(self, layout, chapter, source_size: int) -> None:
         audio_root = _path(self.root, layout.shared_paths.book_audio_root, allow_missing=True)
         usage = shutil.disk_usage(audio_root if audio_root.exists() else self.root)
-        # The job temporarily owns both a staged source and its immutable take.
-        required = source_size * 2 + layout.storage.reserve_bytes
+        retained_bytes = 0
+        if audio_root.exists():
+            for current, directories, filenames in os.walk(audio_root, followlinks=False):
+                current_path = Path(current)
+                directories[:] = [name for name in directories if not (current_path / name).is_symlink()]
+                for name in filenames:
+                    candidate = current_path / name
+                    try:
+                        facts = candidate.lstat()
+                    except OSError as exc:
+                        raise BookServiceError("source_unavailable", "Existing audiobook storage could not be inventoried.") from exc
+                    if stat.S_ISLNK(facts.st_mode):
+                        continue
+                    if stat.S_ISREG(facts.st_mode):
+                        retained_bytes += facts.st_size
+        # The final take retains native PCM and an exact WAVE wrapper. Before
+        # publication, staging additionally holds a raw copy and canonical PCM.
+        required = source_size * 3 + layout.storage.reserve_bytes
         if usage.free < required:
             raise BookServiceError("insufficient_storage", "The configured media reserve leaves insufficient free space.")
-        if source_size * 2 > layout.storage.quota_bytes:
-            raise BookServiceError("insufficient_storage", "The source exceeds the configured audiobook media quota.")
+        if retained_bytes + source_size * 2 > layout.storage.quota_bytes:
+            raise BookServiceError("insufficient_storage", "The import would exceed the configured audiobook media quota.")
 
     def import_audio(self, request: dto.ImportAudioRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         """Reserve a durable project-file PCM import; worker execution is separate.
@@ -1261,7 +1278,30 @@ class BookService:
         if digest.hexdigest() != expected_sha256:
             raise BookServiceError("media_mismatch", "The imported bytes do not match expected_sha256.")
 
-    def run_import_job(self, job_id: str) -> None:
+    def _discard_unregistered_import_artifacts(self, job: dict[str, Any]) -> None:
+        """Remove only this job's UUID-owned publication paths after a failed import.
+
+        A succeeded job is its own commit marker.  For all other states the
+        deterministic take directory is not an authority, so crash recovery
+        removes it before releasing the generation reservation.
+        """
+        pinned = job["payload"]
+        try:
+            _, _, layout = self._enabled_layout()
+            chapter = self._chapter(layout, pinned["chapter_id"])
+            _, target, _ = self._import_paths(layout, chapter, job["job_id"], pinned["take_id"], raw_pcm=True)
+            for artifact in (target, target.with_suffix(".wav")):
+                artifact.unlink(missing_ok=True)
+        except (BookServiceError, OSError, KeyError, TypeError):
+            # The subsequent durable failure remains authoritative. Never
+            # broaden a cleanup path when the registered configuration cannot
+            # be read safely.
+            return
+
+    def run_import_job(
+        self, job_id: str, *, before_finalize: Callable[[], None] | None = None,
+        after_finalize: Callable[[], None] | None = None,
+    ) -> None:
         """Run one owned import outside SQLite transactions and finalize atomically."""
         state = self._state_required()
         claimed = state.claim_import_job(job_id)
@@ -1273,6 +1313,9 @@ class BookService:
             return
         self._active_import_jobs.add(job_id)
         staging: Path | None = None
+        published_paths: list[Path] = []
+        registered = False
+        finalization_started = False
         try:
             pinned = claimed["payload"]
             _, _, layout = self._enabled_layout()
@@ -1284,6 +1327,10 @@ class BookService:
             source_size = source.stat(follow_symlinks=False).st_size
             self._available_import_space(layout, chapter, source_size)
             staging, target, relative = self._import_paths(layout, chapter, job_id, pinned["take_id"], raw_pcm=True)
+            wrapper_staging = staging.with_suffix(".wav.part")
+            canonical_staging = staging.with_suffix(".canonical.pcm")
+            wrapper_target = target.with_suffix(".wav")
+            wrapper_relative = f"{chapter.audio_root}/takes/{pinned['take_id']}/native.wav"
             self._stream_project_audio(pinned["source_filepath"], staging, pinned["expected_sha256"],
                                        source_size=source_size, job_id=job_id)
             inspection = inspect_media_file(
@@ -1292,11 +1339,31 @@ class BookService:
             )
             if not inspection.native_pcm:
                 raise BookServiceError("native_pcm_required", "The imported media is not verified native PCM.")
+            raw = pinned["source_format"]
+            target_format = dto.ProductionTarget.model_validate({
+                "sample_rate_hz": raw["sample_rate_hz"], "channels": raw["channels"],
+                "encoding": raw["encoding"], "storage_bits": raw["storage_bits"],
+                "valid_bits": raw["valid_bits"], "mp3_bitrate_kbps": 1,
+            }, strict=True)
+            with canonical_staging.open("xb") as canonical_output:
+                assembled = assemble_pcm_stream(
+                    [PcmSource(pinned["take_id"], staging, inspection)], [], target_format, canonical_output,
+                )
+                canonical_output.flush()
+                os.fsync(canonical_output.fileno())
+            wrapped = wrap_pcm_as_wave(canonical_staging, wrapper_staging, target_format, assembled)
+            canonical_staging.unlink()
+            if before_finalize is not None:
+                before_finalize()
+                finalization_started = True
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if target.exists():
+            if target.exists() or wrapper_target.exists():
                 raise BookServiceError("job_failed", "The immutable take path already exists.")
             os.replace(staging, target)
             staging = None
+            published_paths.append(target)
+            os.replace(wrapper_staging, wrapper_target)
+            published_paths.append(wrapper_target)
             now = datetime.now(timezone.utc).isoformat()
             take = dto.TakeRecord.model_validate({
                 "take_id": pinned["take_id"], "namespace": generation["scope"],
@@ -1305,13 +1372,17 @@ class BookService:
                 "request_sha256": pinned["request_sha256"], "filepath": relative,
                 "bytes_sha256": inspection.bytes_sha256, "size_bytes": inspection.size_bytes,
                 "media": inspection.media.model_dump(mode="json"), "provenance": pinned["provenance"],
-                "assembly_derivative": None,
+                "assembly_derivative": {
+                    "filepath": wrapper_relative, "bytes_sha256": wrapped.bytes_sha256,
+                    "media": wrapped.media.model_dump(mode="json"),
+                },
             }, strict=True).model_dump(mode="json", exclude_unset=True)
             completed = dict(generation)
             completed["updated_at"] = now
             completed["state"] = "completed"
             state.finish_import_success(job_id=job_id, generation_payload=completed, take_payload=take)
-        except (BookServiceError, MediaValidationError, OSError, ProjectStateError) as exc:
+            registered = True
+        except (BookServiceError, MediaValidationError, AssemblyError, OSError, ProjectStateError) as exc:
             if isinstance(exc, MediaValidationError):
                 reason, message = exc.code, exc.message
             elif isinstance(exc, BookServiceError):
@@ -1320,15 +1391,34 @@ class BookService:
                 reason, message = "cancelled", "The import was cancelled before it could be finalized."
             else:
                 reason, message = "job_failed", "The local import could not complete safely."
+            if not registered:
+                for artifact in published_paths:
+                    try:
+                        artifact.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             state.finish_import_failure(job_id=job_id, reason=reason, message=message,
                                         cancelled=reason == "cancelled")
         finally:
+            if finalization_started and after_finalize is not None:
+                try:
+                    after_finalize()
+                except Exception:
+                    # The final state has already been made durable. A failed
+                    # local lock cleanup must not turn it into a false failure.
+                    pass
             self._active_import_jobs.discard(job_id)
             if staging is not None:
                 try:
                     staging.unlink(missing_ok=True)
                 except OSError:
                     pass
+            for transient in (locals().get("canonical_staging"), locals().get("wrapper_staging")):
+                if isinstance(transient, Path):
+                    try:
+                        transient.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def mark_import_worker_started(self, job_id: str) -> None:
         """Record in-process ownership before the event loop yields to its worker."""
@@ -1346,6 +1436,7 @@ class BookService:
         if job["state"] in {"queued", "running"} and request.job_id not in self._active_import_jobs:
             # A fresh service instance proves no worker survived restart.  Do
             # not silently repeat local work or reuse a transient source.
+            self._discard_unregistered_import_artifacts(job)
             state.finish_import_failure(job_id=request.job_id, reason="job_failed",
                                         message="The unfinished import was interrupted by restart.")
             job = state.import_job(request.job_id)

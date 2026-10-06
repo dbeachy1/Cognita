@@ -19,6 +19,7 @@ from cognita.books.models import (
 )
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState, ProjectStateError
+from cognita.books.media import inspect_media_file
 import cognita.books.service as service_module
 
 
@@ -485,6 +486,10 @@ def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
     assert take["media"]["container"] == "raw_pcm"
     assert take["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
     assert (tmp_path / take["filepath"]).read_bytes() == samples
+    wrapper = take["assembly_derivative"]
+    assert wrapper is not None and (tmp_path / wrapper["filepath"]).is_file()
+    assert wrapper["media"]["canonical_sample_sha256"] == take["media"]["canonical_sample_sha256"]
+    assert inspect_media_file(tmp_path / wrapper["filepath"]).media.canonical_sample_sha256 == hashlib.sha256(samples).hexdigest()
     generation_after = restarted.get_generations(GetGenerationsRequest.model_validate({
         "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
     }))["generations"][0]
