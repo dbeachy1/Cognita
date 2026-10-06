@@ -1899,6 +1899,28 @@ class BookService:
         result["manifest_revision"] = revision
         return result, False
 
+    def _selected_chunk_takes(self, state: ProjectState, build: dict[str, Any] | None,
+                              *, chapter_id: str, scope_key: str) -> dict[str, str]:
+        """Read only the selected take association of one frozen chapter build."""
+        if build is None:
+            return {}
+        stored = state.snapshot(build.get("snapshot_id"))
+        if (build.get("scope") != "chapter" or build.get("chapter_id") != chapter_id
+                or build.get("scope_key") != scope_key or stored is None
+                or stored["chapter_id"] != chapter_id or stored["scope_key"] != scope_key):
+            raise BookServiceError("state_unavailable", "The selected chapter build association is inconsistent.")
+        chunk_ids = {chunk["chunk_id"] for chunk in stored["payload"]["result"]["chunks"]}
+        namespace = json.loads(scope_key)
+        selected: dict[str, str] = {}
+        for take_id in build.get("input_take_ids", []):
+            take = state.take(take_id)
+            if (take is None or take.get("chapter_id") != chapter_id or take.get("namespace") != namespace
+                    or take.get("chunk_id") not in chunk_ids or take["chunk_id"] in selected):
+                raise BookServiceError("state_unavailable", "A selected take does not belong to this chapter build.")
+            # Reuse can select a take originating in an older snapshot.
+            selected[take["chunk_id"]] = take_id
+        return selected
+
     def get_chapter(self, request: dto.GetChapterRequest) -> dict[str, Any]:
         state, _, layout = self._enabled_layout()
         chapter = self._chapter(layout, request.chapter_id)
@@ -1916,6 +1938,11 @@ class BookService:
         snap = stored["payload"] if stored else {}
         result_data = snap.get("result", {})
         chunks = [dict(item) for item in result_data.get("chunks", [])]
+        head = state.chapter_head(chapter.chapter_id, scope_key)
+        accepted_takes = self._selected_chunk_takes(
+            state, state.build(head["accepted_build_id"]) if head else None,
+            chapter_id=chapter.chapter_id, scope_key=scope_key,
+        )
         selected_chunk_ids = {item.get("chunk_id") for item in chunks}
         takes = [item for item in state.takes(chapter_id=chapter.chapter_id)
                  if item.get("namespace") == _data(scope) and item.get("chunk_id") in selected_chunk_ids]
@@ -1924,12 +1951,12 @@ class BookService:
             take_ids_by_chunk.setdefault(take["chunk_id"], []).append(take["take_id"])
         for chunk in chunks:
             chunk["take_ids"] = take_ids_by_chunk.get(chunk["chunk_id"], [])
+            chunk["accepted_take_id"] = accepted_takes.get(chunk["chunk_id"])
         if "chunk_ids" in request.model_fields_set:
             wanted = set(request.chunk_ids)
             chunks = [item for item in chunks if item["chunk_id"] in wanted]
             takes = [item for item in takes if item["chunk_id"] in wanted]
         candidates = state.builds(chapter_id=chapter.chapter_id, scope_key=scope_key)
-        head = state.chapter_head(chapter.chapter_id, scope_key)
         source_status = "not_prepared"
         if snapshot_id:
             try:
@@ -1957,7 +1984,7 @@ class BookService:
             "chapter": chapter.chapter_id, "scope": scope_key, "snapshot": snapshot_id,
             "manifest": namespace.get("manifest_revision") if namespace else None,
             "media": namespace.get("media_revision") if namespace else 0,
-            "head": namespace.get("head_revision") if namespace else None,
+            "head": head,
             "metadata": [(kind, item if isinstance(item, str) else item.get("chunk_id", item.get("take_id")))
                          for kind, item in metadata],
         })
@@ -2051,11 +2078,24 @@ class BookService:
         state = self.discover_state()
         matches: list[dict[str, Any]] = []
         searched_snapshots: list[str] = []
+        current_heads: list[tuple[str, str, dict[str, Any] | None]] = []
         query_value = request.query.model_dump(mode="json", exclude_unset=True)
         if isinstance(request.query, dto.TimestampQuery):
             build = state.build(request.query.build_id) if state is not None else None
             if build is None:
                 raise BookServiceError("file_not_found", "The requested immutable build does not exist.")
+            matched_takes: dict[str, str] = {}
+            current_takes: dict[str, str] = {}
+            if build.get("scope") == "chapter":
+                matched_takes = self._selected_chunk_takes(
+                    state, build, chapter_id=build["chapter_id"], scope_key=build["scope_key"],
+                )
+                head = state.chapter_head(build["chapter_id"], build["scope_key"])
+                current_heads.append((build["chapter_id"], build["scope_key"], head))
+                current_takes = self._selected_chunk_takes(
+                    state, state.build(head["accepted_build_id"]) if head else None,
+                    chapter_id=build["chapter_id"], scope_key=build["scope_key"],
+                )
             result = build.get("result", {})
             timeline_path = result.get("timeline_filepath")
             if not isinstance(timeline_path, str):
@@ -2082,12 +2122,8 @@ class BookService:
                         source_ids = [candidate["source_id"] for candidate in (
                             entries[max(0, position - 1):position] + entries[position + 1:position + 2]
                         ) if candidate.get("kind") == "audio"]
-                    take_ids: list[str] = []
-                    if build.get("scope") == "chapter":
-                        for take_id in build.get("input_take_ids", []):
-                            take = state.take(take_id) if state else None
-                            if take is not None and take.get("chunk_id") in source_ids:
-                                take_ids.append(take_id)
+                    take_ids = [take_id for chunk_id, take_id in matched_takes.items() if chunk_id in source_ids]
+                    current_take_ids = [take_id for chunk_id, take_id in current_takes.items() if chunk_id in source_ids]
                     matches.append({
                         "chapter_id": chapter_id, "snapshot_id": (
                             build.get("snapshot_id") if build.get("scope") == "chapter" else None
@@ -2098,7 +2134,7 @@ class BookService:
                         "matched_build_id": request.query.build_id, "matched_take_ids": take_ids,
                         "segment_kind": "silence" if entry["kind"] == "silence" else "speech",
                         "current_chunk_ids": source_ids if take_ids else [],
-                        "current_take_ids": take_ids, "lineage": [], "current_mapping_status": "not_checked",
+                        "current_take_ids": current_take_ids, "lineage": [], "current_mapping_status": "not_checked",
                         "match_mode": "timestamp",
                     })
         else:
@@ -2120,6 +2156,20 @@ class BookService:
                 if not stored or stored["chapter_id"] != chapter_id:
                     raise BookServiceError("snapshot_not_found", "The requested snapshot is unavailable for this chapter.")
                 self._authorize_snapshot_read(stored, chapter_id)
+                search_scope_key = stored["scope_key"]
+                historical_builds = state.builds(chapter_id=chapter_id, scope_key=search_scope_key)
+                matched = next((build for build in historical_builds
+                                if build.get("snapshot_id") == snapshot_id and build.get("was_accepted")), None)
+                matched_build_id = matched.get("build_id") if matched else None
+                matched_takes = self._selected_chunk_takes(
+                    state, matched, chapter_id=chapter_id, scope_key=search_scope_key,
+                )
+                head = state.chapter_head(chapter_id, search_scope_key)
+                current_heads.append((chapter_id, search_scope_key, head))
+                accepted_takes = self._selected_chunk_takes(
+                    state, state.build(head["accepted_build_id"]) if head else None,
+                    chapter_id=chapter_id, scope_key=search_scope_key,
+                )
                 searched_snapshots.append(snapshot_id)
                 snapshot = stored["payload"]
                 text = snapshot.get("spoken_projection", "")
@@ -2144,11 +2194,6 @@ class BookService:
                                 "state_unavailable",
                                 "The frozen spoken projection could not be mapped to its prepared chunks.",
                             ) from exc
-                        search_scope_key = stored["scope_key"]
-                        historical_builds = state.builds(chapter_id=chapter_id, scope_key=search_scope_key)
-                        matched = next((build for build in historical_builds
-                                        if build.get("snapshot_id") == snapshot_id and build.get("was_accepted")), None)
-                        matched_build_id = matched.get("build_id") if matched else None
                         current_namespace = state.namespace(chapter_id, scope_key) if state else None
                         current_snapshot = current_namespace.get("current_snapshot_id") if current_namespace else None
                         current_stored = state.snapshot(current_snapshot) if current_snapshot else None
@@ -2163,9 +2208,8 @@ class BookService:
                                 lineage.append({"old_chunk_id": old_id, "current_chunk_ids": mapped})
                             current_ids.extend(mapped)
                         current_ids = list(dict.fromkeys(current_ids))
-                        current_takes = state.takes(chapter_id=chapter_id, snapshot_id=current_snapshot) if current_snapshot else []
-                        matching_takes = [take["take_id"] for take in current_takes
-                                          if take.get("chunk_id") in current_ids]
+                        matching_takes = [take_id for chunk_id, take_id in matched_takes.items() if chunk_id in overlapping]
+                        current_take_ids = [take_id for chunk_id, take_id in accepted_takes.items() if chunk_id in overlapping]
                         mapping_status = ("present" if all(len(item["current_chunk_ids"]) == 1 for item in lineage)
                                           and current_ids else "missing")
                         if any(len(item["current_chunk_ids"]) > 1 for item in lineage):
@@ -2177,7 +2221,7 @@ class BookService:
                             "excerpt": text[max(0, at-80):min(len(text), end+80)],
                             "matched_build_id": matched_build_id, "matched_take_ids": matching_takes,
                             "segment_kind": "speech", "current_chunk_ids": current_ids,
-                            "current_take_ids": matching_takes, "lineage": lineage,
+                            "current_take_ids": current_take_ids, "lineage": lineage,
                             "current_mapping_status": mapping_status, "match_mode": "literal",
                         })
                     start = at + max(1, len(query))
@@ -2189,6 +2233,7 @@ class BookService:
             "version": version, "query": query_value,
             "chapter_ids": chapter_ids if not isinstance(request.query, dto.TimestampQuery) else [],
             "snapshot_ids": searched_snapshots,
+            "current_heads": current_heads,
             "mapping": [
                 (match["snapshot_id"], match["chunk_ids"], match["current_chunk_ids"],
                  match["current_take_ids"], match["current_mapping_status"])

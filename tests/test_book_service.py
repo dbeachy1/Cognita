@@ -888,6 +888,105 @@ def _commit_book(service, operation_id, build_id, expected_head, intent):
     }), owner_key="principal:fixture")[0]
 
 
+def test_direct_take_associations_keep_history_separate_from_current_head(tmp_path):
+    service, state, stored, settings_path, *_rest, settings = _production_prepared_fixture(tmp_path)
+    old_plan = stored["payload"]["result"]
+    old_take = _import_native_take(service, old_plan, "main", operation_prefix="association-old")
+    old_head = _build_and_accept_production_chapter(
+        service, old_plan, old_take, operation_prefix="association-old", expected_head=None,
+    )
+    new_plan, _ = _prepare_production_context(
+        service, stored, settings_path, settings, {"language": "en", "previous_text": "changed context"},
+    )
+    new_take = _import_native_take(service, new_plan, "main", operation_prefix="association-new")
+    new_head = _build_and_accept_production_chapter(
+        service, new_plan, new_take, operation_prefix="association-new", expected_head=1,
+    )
+    unaccepted_take = _import_native_take(service, new_plan, "main", operation_prefix="association-unaccepted")
+    query = {"project": "fixture", "chapter_id": "ch1", "query": {
+        "kind": "quote", "text": "hello", "snapshot_id": old_plan["snapshot_id"],
+    }}
+    timestamp_query = {"project": "fixture", "query": {
+        "kind": "timestamp", "build_id": old_head["accepted_build_id"], "seconds": 0.0,
+    }}
+    old_timeline = tmp_path / state.build(old_head["accepted_build_id"])["result"]["timeline_filepath"]
+    timeline_before = old_timeline.read_bytes()
+    for arguments in (query, timestamp_query):
+        match = service.find_chunk(FindChunkRequest.model_validate(arguments))["matches"][0]
+        assert match["snapshot_id"] == old_plan["snapshot_id"]
+        assert match["matched_build_id"] == old_head["accepted_build_id"]
+        assert match["matched_take_ids"] == [old_take["take_id"]]
+        assert match["current_take_ids"] == [new_take["take_id"]]
+        assert unaccepted_take["take_id"] not in match["current_take_ids"]
+    for snapshot_id in (old_plan["snapshot_id"], new_plan["snapshot_id"]):
+        chapter = service.get_chapter(GetChapterRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1", "snapshot_id": snapshot_id, "limit": 1,
+        }))
+        assert chapter["takes"] == [] and chapter["chunks"][0]["take_ids"] == []
+        assert chapter["chunks"][0]["accepted_take_id"] == new_take["take_id"]
+    chapter_query = {"project": "fixture", "chapter_id": "ch1", "snapshot_id": old_plan["snapshot_id"], "limit": 1}
+    chapter_cursor = service.get_chapter(GetChapterRequest.model_validate(chapter_query))["next_cursor"]
+    repeated_query = {**query, "limit": 1, "query": {**query["query"], "text": "l"}}
+    quote_cursor = service.find_chunk(FindChunkRequest.model_validate(repeated_query))["next_cursor"]
+    rolled = _commit_book(service, "association-rollback", old_head["accepted_build_id"], 2, "rollback")
+    assert rolled["head_revision"] == 3
+    assert state.namespace("ch1", '{"kind":"production"}')["current_snapshot_id"] == new_plan["snapshot_id"]
+    assert state.chapter_head("ch1", '{"kind":"production"}')["accepted_snapshot_id"] == old_plan["snapshot_id"]
+    for arguments in (query, timestamp_query):
+        match = service.find_chunk(FindChunkRequest.model_validate(arguments))["matches"][0]
+        assert match["matched_take_ids"] == match["current_take_ids"] == [old_take["take_id"]]
+    current = service.get_chapter(GetChapterRequest(project="fixture", chapter_id="ch1", limit=1))
+    assert current["snapshot_id"] == new_plan["snapshot_id"]
+    assert current["accepted_build_id"] == old_head["accepted_build_id"] != new_head["accepted_build_id"]
+    assert current["chunks"][0]["accepted_take_id"] == old_take["take_id"]
+    for method, arguments, cursor, model in (
+        (service.get_chapter, chapter_query, chapter_cursor, GetChapterRequest),
+        (service.find_chunk, repeated_query, quote_cursor, FindChunkRequest),
+    ):
+        assert cursor is not None
+        with pytest.raises(BookServiceError) as stale:
+            method(model.model_validate({**arguments, "cursor": cursor}))
+        assert stale.value.reason == "invalid_cursor"
+    assert old_timeline.read_bytes() == timeline_before
+
+
+def test_selected_build_association_allows_take_reused_from_older_snapshot(tmp_path):
+    service, state, stored, settings_path, *_rest, settings = _production_prepared_fixture(tmp_path)
+    first = stored["payload"]["result"]
+    take = _import_native_take(service, first, "main", operation_prefix="association-reuse")
+    _build_and_accept_production_chapter(service, first, take, operation_prefix="association-reuse-first", expected_head=None)
+    second, _ = _prepare_production_context(service, stored, settings_path, settings, settings["request_spec"]["context_fields"])
+    assert second["snapshot_id"] != take["snapshot_id"]
+    assert second["chunks"][0]["reusable_take_ids"] == [take["take_id"]]
+    committed = _build_and_accept_production_chapter(
+        service, second, take, operation_prefix="association-reuse-second", expected_head=1,
+    )
+    match = service.find_chunk(FindChunkRequest.model_validate({"project": "fixture", "query": {
+        "kind": "timestamp", "build_id": committed["accepted_build_id"], "seconds": 0.0,
+    }}))["matches"][0]
+    assert match["snapshot_id"] == second["snapshot_id"]
+    assert match["matched_take_ids"] == match["current_take_ids"] == [take["take_id"]]
+    assert service.get_chapter(GetChapterRequest(project="fixture", chapter_id="ch1"))["chunks"][0]["accepted_take_id"] == take["take_id"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("chapter_id", "different-chapter"),
+    ("namespace", {"kind": "test", "authorization_id": "different-namespace"}),
+    ("chunk_id", "different-chunk"),
+])
+def test_selected_build_association_rejects_take_outside_frozen_membership(tmp_path, monkeypatch, field, value):
+    service, state, stored, *_rest = _production_prepared_fixture(tmp_path)
+    prepared = stored["payload"]["result"]
+    take = _import_native_take(service, prepared, "main", operation_prefix="association-membership")
+    build_id = _build_production_chapter_candidate(
+        service, prepared, take, operation_prefix="association-membership", expected_head=None,
+    )
+    monkeypatch.setattr(state, "take", lambda _take_id: {**take, field: value})
+    with pytest.raises(BookServiceError) as invalid:
+        service._selected_chunk_takes(state, state.build(build_id), chapter_id="ch1", scope_key='{"kind":"production"}')
+    assert invalid.value.reason == "state_unavailable"
+
+
 def _acceptance_events(state):
     with state._connect() as connection:
         return [dict(row) for row in connection.execute(
@@ -3188,6 +3287,13 @@ def test_chapter_pcm_build_requires_explicit_current_head_commit_and_can_roll_ba
         "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 0.0},
     }))
     assert located["matches"][0]["matched_take_ids"] == [take["take_id"]]
+    assert located["matches"][0]["current_take_ids"] == [take["take_id"]]
+    test_quote = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1", "query": {
+            "kind": "quote", "text": "hello", "snapshot_id": snapshot_id,
+        },
+    }))["matches"][0]
+    assert test_quote["matched_take_ids"] == test_quote["current_take_ids"] == [take["take_id"]]
     with pytest.raises(BookServiceError) as past_end:
         service.find_chunk(FindChunkRequest.model_validate({
             "project": "fixture", "query": {"kind": "timestamp", "build_id": candidate["build_id"], "seconds": 1.0},
