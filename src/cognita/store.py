@@ -756,6 +756,8 @@ class Store:
     async def dense_search(
         self, project: str, embedding: Sequence[float], limit: int, category: str | None = None,
         *, exclude_source: str | None = None, one_per_source: bool = False,
+        include_sources: Sequence[str] | None = None,
+        include_doc_ids: Sequence[str] | None = None,
     ) -> list[ChunkHit]:
         """Nearest chunks by cosine distance (pgvector HNSW).
 
@@ -781,6 +783,16 @@ class Store:
         if exclude_source is not None:
             params.append(exclude_source)
             conds.append(f"d.source <> ${len(params) + 2}")
+        if include_sources is not None:
+            if not include_sources:
+                return []
+            params.append(list(include_sources))
+            conds.append(f"d.source = ANY(${len(params) + 2}::text[])")
+        if include_doc_ids is not None:
+            if not include_doc_ids:
+                return []
+            params.append(list(include_doc_ids))
+            conds.append(f"d.doc_id = ANY(${len(params) + 2}::text[])")
         where_sql = ("WHERE " + " AND ".join(conds)) if conds else ""
         if one_per_source:
             # DISTINCT ON keeps the best-scoring chunk per document; the outer
@@ -831,13 +843,30 @@ class Store:
         return [self._hit_from_row(r) for r in rows]
 
     async def lexical_search(
-        self, project: str, query: str, limit: int, category: str | None = None
+        self, project: str, query: str, limit: int, category: str | None = None,
+        *, include_sources: Sequence[str] | None = None,
+        include_doc_ids: Sequence[str] | None = None,
     ) -> list[ChunkHit]:
         """Full-text hits ranked by ts_rank_cd. websearch_to_tsquery tolerates
         arbitrary user input (no tsquery syntax errors), replacing 3.x's
         in-memory BM25 (D4.7)."""
         s = _quoted_schema(project)
-        filter_sql = "AND d.category = $3" if category else ""
+        conds = []
+        params: list[object] = [query, limit]
+        if category:
+            params.append(category)
+            conds.append(f"d.category = ${len(params)}")
+        if include_sources is not None:
+            if not include_sources:
+                return []
+            params.append(list(include_sources))
+            conds.append(f"d.source = ANY(${len(params)}::text[])")
+        if include_doc_ids is not None:
+            if not include_doc_ids:
+                return []
+            params.append(list(include_doc_ids))
+            conds.append(f"d.doc_id = ANY(${len(params)}::text[])")
+        filter_sql = " AND " + " AND ".join(conds) if conds else ""
         rows = await self.pool.fetch(
             f"""SELECT {self._HIT_COLUMNS},
                        ts_rank_cd(c.tsv, q)::float8 AS score
@@ -846,14 +875,14 @@ class Store:
                 WHERE c.tsv @@ q {filter_sql}
                 ORDER BY score DESC, c.chunk_id
                 LIMIT $2""",
-            query,
-            limit,
-            *((category,) if category else ()),
+            *params,
         )
         return [self._hit_from_row(r) for r in rows]
 
     async def registered_lexical_search(
-        self, project: str, query: str, limit: int, category: str | None = None
+        self, project: str, query: str, limit: int, category: str | None = None,
+        *, include_sources: Sequence[str] | None = None,
+        include_doc_ids: Sequence[str] | None = None,
     ) -> list[ChunkHit]:
         """Full-text hits over REGISTERED documents (D4.4-5).
 
@@ -868,20 +897,32 @@ class Store:
         match before it reaches a caller.
         """
         s = _quoted_schema(project)
-        filter_sql = "AND d.category = $4" if category else ""
+        conds = ["d.tier = $3"]
+        params: list[object] = [query, limit, TIER_REGISTERED]
+        if category:
+            params.append(category)
+            conds.append(f"d.category = ${len(params)}")
+        if include_sources is not None:
+            if not include_sources:
+                return []
+            params.append(list(include_sources))
+            conds.append(f"d.source = ANY(${len(params)}::text[])")
+        if include_doc_ids is not None:
+            if not include_doc_ids:
+                return []
+            params.append(list(include_doc_ids))
+            conds.append(f"d.doc_id = ANY(${len(params)}::text[])")
+        filter_sql = " AND " + " AND ".join(conds)
         rows = await self.pool.fetch(
             f"""SELECT d.doc_id || '_r0' AS chunk_id, d.doc_id, 0 AS chunk_index,
                        coalesce(d.content, '') AS content, NULL::text AS section,
                        d.source, d.category, d.keywords,
                        ts_rank_cd(d.tsv, q)::float8 AS score
                 FROM {s}.documents d, websearch_to_tsquery('english', $1) q
-                WHERE d.tier = $3 AND d.tsv @@ q {filter_sql}
+                WHERE {filter_sql} AND d.tsv @@ q
                 ORDER BY score DESC, d.source
                 LIMIT $2""",
-            query,
-            limit,
-            TIER_REGISTERED,
-            *((category,) if category else ()),
+            *params,
         )
         return [self._hit_from_row(r) for r in rows]
 

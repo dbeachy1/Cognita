@@ -40,6 +40,20 @@ from .engine_contract import LITERAL_WALK_BUDGET_S, MAX_PLURAL_PATHS, MAX_RESULT
 
 
 class EngineReadOperations:
+    def _indexed_source_predicate(self, project: Project):
+        policy = self.core.effective_index_policy_for(project.name)
+        if policy is None:
+            return lambda _source: True
+        extension_policy = self.core.policy_for(project.name)
+
+        def is_indexed(source: str) -> bool:
+            return policy.decision(
+                source,
+                globally_eligible=extension_policy.tier_for(Path(source).suffix) is not None,
+            ).indexed
+
+        return is_indexed
+
     async def _search_knowledge(self, project: Project, args: dict) -> dict:
         query = (args.get("query") or "").strip()
         if not query:
@@ -453,6 +467,9 @@ class EngineReadOperations:
             rel = self._rel(project, target.resolve())
         except ValueError:
             return no_results
+        is_indexed = self._indexed_source_predicate(project)
+        if not is_indexed(rel):
+            return no_results
         # A registered document has no embedding, so it can be neither a result
         # nor a reference. Say that specifically — "not found" would be actively
         # misleading when list_documents just showed the file (D4.4-6).
@@ -479,14 +496,25 @@ class EngineReadOperations:
         # and filter afterwards: the reference's own chunks sit at distance 0, so
         # a document with 25+ chunks filled the entire budget with rows that were
         # all discarded and the tool reported "No similar documents found".
+        admitted_sources, admitted_doc_ids = await self.core._effective_indexed_sources(
+            project.name
+        )
+        admission_kwargs = (
+            {"include_sources": admitted_sources, "include_doc_ids": admitted_doc_ids}
+            if self.core.effective_index_policy_for(project.name) is not None else {}
+        )
         hits = await self.store.dense_search(
             project.name, embedding, max_results,
             exclude_source=rel, one_per_source=True,
+            **admission_kwargs,
         )
         seen: set[str] = set()
         similar = []
+        is_indexed = self._indexed_source_predicate(project)
         for hit in hits:
             if hit.source == rel or hit.source in seen:
+                continue
+            if not is_indexed(hit.source):
                 continue
             seen.add(hit.source)
             similarity = round(max(0.0, 1.0 - hit.score), 4)  # hit.score = cosine distance
@@ -523,10 +551,12 @@ class EngineReadOperations:
         include_hashes = bool(args.get("include_hashes", False))
         docs = await self.store.list_documents(project.name)
         counts = await self.store.chunk_counts(project.name)
+        is_indexed = self._indexed_source_predicate(project)
         selected = [
             d for d in docs
             if (not category or d.category == category)
             and (prefix is None or d.source.startswith(prefix))
+            and is_indexed(d.source)
         ]
         entries = [
             {
@@ -789,6 +819,7 @@ class EngineReadOperations:
         compact = bool(args.get("compact", False))
 
         docs = await self.store.list_documents(project.name)  # ORDER BY source
+        is_indexed = self._indexed_source_predicate(project)
         selected = [
             d for d in docs
             if (not category or d.category == category)
@@ -799,6 +830,7 @@ class EngineReadOperations:
             # snapshots is exactly the failure that makes an exhaustive tool
             # useless, so it is not left to depend on indexing config.
             and not d.source.startswith(f"{BACKUPS_DIRNAME}/")
+            and is_indexed(d.source)
         ]
         # Distinguish an empty filter selection from a scan that found no match;
         # both return zero matches, but only the latter proves absence.

@@ -747,6 +747,9 @@ async def _serve_async(
             watcher=engine.watcher,
             reconcile=reconcile_bridge_paths,
             backup_keep=config.backup_keep_per_file,
+            book_mutation_policy_for=engine.book_mutation_policy_for,
+            book_config_snapshot_for=engine.book_config_snapshot_for,
+            book_service_for=engine.book_service_for,
         )
 
     gateway = _make_server(

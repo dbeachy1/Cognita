@@ -238,7 +238,7 @@ class EngineTransferOperations:
             "source_filepath": self._rel(project, src.resolve()),
             "chunks_added": chunks,
             "tier": tier,
-            "indexed": outcome is not None,
+            "indexed": bool(outcome),
             # Keep the complete disk fact set.  COPY_ENTRY requires on_disk so
             # callers can verify the byte-identical destination without another
             # stat, and file_facts already reports that observed postcondition.
@@ -296,6 +296,11 @@ class EngineTransferOperations:
         if src.resolve() == dst.resolve():
             return {"status": "error", "reason": "invalid",
                     "message": "src_filepath and dst_filepath are the same file."}
+        mutation, chapter_id = self._book_mutation_decision(
+            project, dst, operation="copy", source_exists=dst.is_file(),
+        )
+        if refused := self._book_mutation_error(mutation, dst_fp):
+            return refused
         for rejected in (self._reject_backups_write(project, dst),
                          self._reject_unindexable(project, dst),
                          self._reject_sync_conflict(dst)):
@@ -337,6 +342,8 @@ class EngineTransferOperations:
         async with self.core.write_lock(project.name):
             existed = dst.exists()
             try:
+                prior = dst.read_bytes() if dst.is_file() else None
+                self._ensure_book_original(project, dst, prior, mutation, chapter_id)
                 entry, backup = await self._copy_one(project, src, dst, category)
             except BackupError as exc:
                 return {"status": "error", "reason": "backup_failed",
@@ -404,6 +411,16 @@ class EngineTransferOperations:
                     "file_count": len(copyable), "limit": MAX_COPY_FILES}
 
         pairs = [(f, dst_dir / f.relative_to(src_dir)) for f in copyable]
+        mutations: dict[Path, tuple[Any, str | None]] = {}
+        for _source, destination in pairs:
+            mutation, chapter_id = self._book_mutation_decision(
+                project, destination, operation="copy", source_exists=destination.is_file(),
+            )
+            if refused := self._book_mutation_error(
+                mutation, self._rel(project, destination),
+            ):
+                return refused
+            mutations[destination] = (mutation, chapter_id)
         # Pre-flight EVERY destination before writing ANY of them. Reporting the
         # first conflict and stopping would make the caller discover the rest one
         # round trip at a time; reporting them after a partial write would be the
@@ -450,6 +467,11 @@ class EngineTransferOperations:
                     project, self._rel(project, src_file.resolve()), override
                 )
                 try:
+                    prior = dst_file.read_bytes() if dst_file.is_file() else None
+                    mutation, chapter_id = mutations.get(dst_file, (None, None))
+                    self._ensure_book_original(
+                        project, dst_file, prior, mutation, chapter_id,
+                    )
                     entry, backup = await self._copy_one(project, src_file, dst_file, category)
                 except Exception as exc:
                     undone = await self._rollback_copies(project, written)
@@ -498,6 +520,19 @@ class EngineTransferOperations:
                                 "base is not something this tool will do.")}
 
         on_disk = self._collect_dir_files(directory, recursive)
+        directory_mutation, _chapter_id = self._book_mutation_decision(
+            project, directory, operation="remove", source_exists=True,
+        )
+        if refused := self._book_mutation_error(directory_mutation, prefix):
+            return refused
+        for path in on_disk:
+            mutation, _chapter_id = self._book_mutation_decision(
+                project, path, operation="remove", source_exists=True,
+            )
+            if refused := self._book_mutation_error(
+                mutation, self._rel(project, path),
+            ):
+                return refused
         if not recursive:
             nested = sorted({
                 str(path.parent.relative_to(directory).parts[0])

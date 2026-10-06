@@ -8,6 +8,7 @@ from cognita.books.state import (
     BOOTSTRAP_FILENAME,
     DATABASE_FILENAME,
     INITIALIZED_FILENAME,
+    IndexedRoleProvenance,
     STATE_DIRECTORY,
     ProjectState,
     ProjectStateError,
@@ -161,3 +162,51 @@ def test_snapshot_receipt_conflict_and_manifest_cas_are_atomic(tmp_path):
     assert first[0:2] == ("committed", 1)
     assert state.namespace("chapter-1", "production")["current_snapshot_id"] == "snapshot-1"
     assert state.snapshot("snapshot-2") is None
+
+
+def test_indexed_role_provenance_is_strict_and_survives_reopen(tmp_path):
+    state = ProjectState.initialize(tmp_path)
+    record = IndexedRoleProvenance(
+        source_path="Book/Chapter.docx", doc_id="doc-current",
+        extracted_sha256="a" * 64, raw_sha256="b" * 64,
+        extraction_version="cognita-docx-v1", role="chapter_working",
+        chapter_id="ch01", layout_sha256="c" * 64,
+        chapter_state_sha256="d" * 64, annotations_sha256=None,
+        approval_source_raw_sha256="b" * 64,
+        approval_prose_projection_sha256="e" * 64,
+        approval_projection_version="cognita-docx-v1",
+        summary_raw_sha256=None, summary_source_raw_sha256=None,
+        summary_source_prose_projection_sha256=None,
+    )
+
+    state.put_indexed_role_provenance(record)
+    reopened = ProjectState.discover(tmp_path)
+
+    assert reopened is not None
+    assert reopened.indexed_role_provenance(record.source_path) == record
+    assert reopened.delete_indexed_role_provenance(record.source_path)
+    assert not reopened.delete_indexed_role_provenance(record.source_path)
+    assert reopened.indexed_role_provenance(record.source_path) is None
+
+
+def test_indexed_role_provenance_rejects_invalid_paths_or_hashes():
+    with pytest.raises(ValueError):
+        IndexedRoleProvenance(
+            source_path="../private.docx", doc_id="id", extracted_sha256="a" * 64,
+            raw_sha256="b" * 64, extraction_version="v1", role="chapter_working",
+            chapter_id="ch1", layout_sha256="c" * 64,
+            chapter_state_sha256=None, annotations_sha256=None,
+            approval_source_raw_sha256=None, approval_prose_projection_sha256=None,
+            approval_projection_version=None, summary_raw_sha256=None,
+            summary_source_raw_sha256=None, summary_source_prose_projection_sha256=None,
+        )
+    with pytest.raises(ValueError):
+        IndexedRoleProvenance(
+            source_path="chapter.docx", doc_id="id", extracted_sha256="A" * 64,
+            raw_sha256="b" * 64, extraction_version="v1", role="chapter_working",
+            chapter_id="ch1", layout_sha256="c" * 64,
+            chapter_state_sha256=None, annotations_sha256=None,
+            approval_source_raw_sha256=None, approval_prose_projection_sha256=None,
+            approval_projection_version=None, summary_raw_sha256=None,
+            summary_source_raw_sha256=None, summary_source_prose_projection_sha256=None,
+         )

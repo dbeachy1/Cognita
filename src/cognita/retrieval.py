@@ -19,6 +19,8 @@ write-serialization invariant, now guarding cheap DB transactions).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import copy
 import logging
 import os
@@ -43,6 +45,7 @@ from .gpu_probe import GpuProbe, NullProbe, batch_ceiling_gb
 from .gpu_warm import WARM
 from .gpu_warm import total_chunks as pool_chunks
 from .index_scheduler import IndexScheduler
+from .books.policy import EffectiveIndexPolicy, IndexDecision
 from .parsing import (
     DEFAULT_POLICY,
     TIER_EMBEDDED,
@@ -115,6 +118,36 @@ class RootIdentity:
     resolved: str
     st_dev: int
     st_ino: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexFileOutcome:
+    """Result for a parsed write that may be intentionally outside the index.
+
+    The first two values retain existing internal unpack/index behavior;
+    ``indexed`` distinguishes an effective-policy exclusion from an empty or
+    unsupported parse (which remains ``None`` at the call boundary).
+    """
+
+    doc_id: str | None
+    chunks: int
+    indexed: bool
+    exclusion_reason: str | None = None
+    extracted_sha256: str | None = None
+
+    def __iter__(self):
+        yield self.doc_id
+        yield self.chunks
+
+    def __getitem__(self, index: int):
+        if index == 0:
+            return self.doc_id
+        if index == 1:
+            return self.chunks
+        raise IndexError(index)
+
+    def __bool__(self) -> bool:
+        return self.indexed
 
 
 class QueryCache:
@@ -310,6 +343,8 @@ class RetrievalCore:
         # Paths deliberately NOT indexed, per project (5.7). Registered by the
         # engine, which is the layer that knows each project's data_dir.
         self._deindexed: dict[str, DeindexedPaths] = {}
+        self._effective_index_policy_provider: Callable[[str], EffectiveIndexPolicy] | None = None
+        self._book_index_admission_provider: Callable[..., Any] | None = None
         self._write_locks: dict[str, _ProjectWriteLock] = {}
         self._caches: dict[str, QueryCache] = {}
         # Set by the watcher when a project is attached.  A first targeted
@@ -634,6 +669,7 @@ class RetrievalCore:
                         return summary
 
                     policy = self.policy_for(project)
+                    effective_policy = self.effective_index_policy_for(project)
                     existing = await self.store.list_sources(project)
                     # Collapse lexical descendants before touching disk.  A directory
                     # event may be the only signal for a populated copy, and a vanished
@@ -736,6 +772,10 @@ class RetrievalCore:
                             or source in suppressed
                             or _is_excluded(Path(source), self.exclude_patterns)
                             or is_sync_conflict(filepath.name, self.sync_conflict_patterns)
+                            or not self._policy_allows_source(
+                                effective_policy, source,
+                                globally_eligible=policy.tier_for(filepath.suffix) is not None,
+                            )
                         ):
                             forced_removals.add(source)
                     changed = False
@@ -746,6 +786,13 @@ class RetrievalCore:
                         if tier is None or source in suppressed \
                                 or _is_excluded(Path(source), self.exclude_patterns) \
                                 or is_sync_conflict(filepath.name, self.sync_conflict_patterns):
+                            if known is not None:
+                                removal_candidates.add(source)
+                                forced_removals.add(source)
+                            continue
+                        if not self._policy_allows_source(
+                            effective_policy, source, globally_eligible=True,
+                        ):
                             if known is not None:
                                 removal_candidates.add(source)
                                 forced_removals.add(source)
@@ -869,6 +916,83 @@ class RetrievalCore:
     def set_deindexed(self, project: str, paths: DeindexedPaths) -> None:
         self._deindexed[project] = paths
 
+    def set_effective_index_policy_provider(
+        self, provider: Callable[[str], EffectiveIndexPolicy] | None,
+    ) -> None:
+        """Install the host-owned durable policy resolver for this core.
+
+        The host resolves project state and validated book configuration; the
+        retrieval layer only applies the resulting pure decision. Standalone
+        cores keep their legacy behavior when no provider is installed.
+        """
+        self._effective_index_policy_provider = provider
+
+    def effective_index_policy_for(self, project: str) -> EffectiveIndexPolicy | None:
+        provider = self._effective_index_policy_provider
+        return provider(project) if provider is not None else None
+
+    def set_book_index_admission_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host's current-source/doc-id approval admission check."""
+        self._book_index_admission_provider = provider
+
+    @staticmethod
+    def _policy_allows_source(
+        policy: EffectiveIndexPolicy | None, source: str, *, globally_eligible: bool = True,
+    ) -> bool:
+        return policy is None or policy.decision(
+            source, globally_eligible=globally_eligible,
+        ).indexed
+
+    def index_decision_for(self, project: str, source: str) -> IndexDecision | None:
+        """Return the live effective decision, or ``None`` for legacy cores."""
+        policy = self.effective_index_policy_for(project)
+        if policy is None:
+            return None
+        extension_policy = self.policy_for(project)
+        return policy.decision(
+            source,
+            globally_eligible=extension_policy.tier_for(Path(source).suffix) is not None,
+        )
+
+    async def _effective_indexed_sources(
+        self, project: str,
+    ) -> tuple[list[str] | None, list[str] | None]:
+        """Return policy-admitted indexed sources for SQL candidate filtering.
+
+        Every SQL search leg must apply exclusions before LIMIT, otherwise
+        excluded high-ranked rows can consume the whole candidate budget. The
+        final publication still rechecks the live policy because folder rules
+        can change while embedding/reranking runs.
+        """
+        effective = self.effective_index_policy_for(project)
+        if effective is None:
+            return None, None
+        extension_policy = self.policy_for(project)
+        source_info = await self.store.list_sources(project)
+        admitted = {
+            source: info for source, info in source_info.items()
+            if self._policy_allows_source(
+                effective, source,
+                globally_eligible=extension_policy.tier_for(Path(source).suffix) is not None,
+            )
+        }
+        if getattr(effective, "layout", None) is not None:
+            provider = self._book_index_admission_provider
+            if provider is None:
+                # An enabled layout without provenance verification is not a
+                # path-only allow decision. Fail closed until the host wires it.
+                return [], []
+            book_ids = provider(project, tuple(admitted.values()))
+            if inspect.isawaitable(book_ids):
+                book_ids = await book_ids
+            allowed_ids = set(book_ids)
+            admitted = {
+                source: info for source, info in admitted.items()
+                if info.doc_id in allowed_ids
+            }
+            return list(admitted), [info.doc_id for info in admitted.values()]
+        return list(admitted), None
+
     def deindexed_for(self, project: str) -> DeindexedPaths | None:
         return self._deindexed.get(project)
 
@@ -956,6 +1080,18 @@ class RetrievalCore:
             files = await asyncio.to_thread(
                 iter_document_files, documents_dir, self.exclude_patterns, policy
             )
+            walk_found_files = bool(files)
+            effective_policy = self.effective_index_policy_for(project)
+            policy_excluded = 0
+            if effective_policy is not None:
+                eligible_files: list[Path] = []
+                for filepath in files:
+                    source = filepath.relative_to(documents_dir).as_posix()
+                    if self._policy_allows_source(effective_policy, source):
+                        eligible_files.append(filepath)
+                    else:
+                        policy_excluded += 1
+                files = eligible_files
             # 5.0 §10: drop cloud-sync conflict copies BEFORE anything indexes
             # them, and remember which ones so get_index_stats can say so out
             # loud. Indexing a conflict copy is worse than not indexing it: the
@@ -970,7 +1106,7 @@ class RetrievalCore:
             # len(files): a project whose every file is suppressed or a conflict
             # copy is a correct empty corpus, while a walk that found nothing at
             # all is an unmounted documents_dir.
-            walk_found_files = bool(files) or bool(conflicts)
+            walk_found_files = walk_found_files or bool(conflicts)
             # Set when the parse-ahead task raises or is canceled: the live-
             # document set is then incomplete and the removal sweep must not run.
             producer_failed: str = ""
@@ -1053,6 +1189,7 @@ class RetrievalCore:
                 "chunks_purged": 0,
                 "sync_conflicts_skipped": len(conflicts),
                 "deindexed_skipped": deindexed_skipped,
+                "policy_excluded_skipped": policy_excluded,
             }
             scheduler_job = None
             if self.scheduler is not None:
@@ -1703,7 +1840,7 @@ class RetrievalCore:
         filepath: Path,
         *,
         category_override: str | None = None,
-    ) -> tuple[str, int] | None:
+    ) -> IndexFileOutcome | None:
         """Index/refresh a single file (chat writes, M4 watcher). Returns
         (doc_id, chunks_indexed), or None if the file parsed empty.
 
@@ -1721,7 +1858,7 @@ class RetrievalCore:
             outcome = await self._index_file_locked(
                 project, documents_dir, filepath, category_override=category_override
             )
-            job.done(files=1, indexed=0 if outcome is None else 1,
+            job.done(files=1, indexed=int(bool(outcome)),
                      outcome="ok" if outcome is not None else "empty")
             return outcome
 
@@ -1732,10 +1869,35 @@ class RetrievalCore:
         filepath: Path,
         *,
         category_override: str | None = None,
-    ) -> tuple[str, int] | None:
+    ) -> IndexFileOutcome | None:
         async with self._write_lock(project):
+            extension_policy = self.policy_for(project)
+            effective_policy = self.effective_index_policy_for(project)
+            if effective_policy is not None:
+                source = self._relative_dirty_path(filepath, documents_dir)
+                decision = effective_policy.decision(
+                    source,
+                    globally_eligible=extension_policy.tier_for(Path(source).suffix) is not None,
+                )
+                # Explicit writes have historically re-admitted a per-file
+                # de-indexed path. Keep that narrow behavior; folder and book
+                # exclusions remain authoritative across writes and copies.
+                if not decision.indexed and decision.reason == "per_file_exclusion":
+                    self.readmit(project, source)
+                    effective_policy = self.effective_index_policy_for(project)
+                    decision = (
+                        effective_policy.decision(source)
+                        if effective_policy is not None else decision
+                    )
+                if not decision.indexed:
+                    removed = await self.store.delete_document(project, source)
+                    if removed:
+                        self.query_cache(project).invalidate()
+                    return IndexFileOutcome(
+                        None, 0, False, decision.reason,
+                    )
             doc = await asyncio.to_thread(
-                self._parse, filepath, documents_dir, self.policy_for(project)
+                self._parse, filepath, documents_dir, extension_policy
             )
             if doc is None:
                 return None
@@ -1752,7 +1914,9 @@ class RetrievalCore:
             # reported success and then silently lost its document.
             self.readmit(project, doc.source)
             self.query_cache(project).invalidate()
-            return doc.doc_id, chunks
+            return IndexFileOutcome(
+                doc.doc_id, chunks, True, extracted_sha256=doc.content_hash,
+            )
 
     async def remove_file(self, project: str, source: str) -> bool:
         async with self._write_lock(project):
@@ -1769,13 +1933,35 @@ class RetrievalCore:
         no re-embed (4.1, DESIGN-4.1-move-document.md); otherwise indexes the moved
         file fresh at its new home. Always returns (doc_id, chunks)."""
         async with self._write_lock(project):
+            effective_policy = self.effective_index_policy_for(project)
+            extension_policy = self.policy_for(project)
+            if effective_policy is not None:
+                destination = effective_policy.decision(
+                    new_source,
+                    globally_eligible=extension_policy.tier_for(
+                        Path(new_source).suffix
+                    ) is not None,
+                )
+                if not destination.indexed and destination.reason == "per_file_exclusion":
+                    self.readmit(project, new_source)
+                    effective_policy = self.effective_index_policy_for(project)
+                    destination = (
+                        effective_policy.decision(new_source)
+                        if effective_policy is not None else destination
+                    )
+                if not destination.indexed:
+                    removed_old = await self.store.delete_document(project, old_source)
+                    removed_new = await self.store.delete_document(project, new_source)
+                    if removed_old or removed_new:
+                        self.query_cache(project).invalidate()
+                    return "", 0
             # 5.7: a move re-admits BOTH ends. The destination is indexed below,
             # so leaving it suppressed would cost it its row at the next walk;
             # the source no longer holds a file, so an entry left there could
             # only ever suppress some unrelated file written to that path later.
             self.readmit(project, old_source)
             self.readmit(project, new_source)
-            policy = self.policy_for(project)
+            policy = extension_policy
             old_doc = await self.store.get_document(project, old_source)
             # The metadata-only fast path is valid only while the tier holds.
             # Crossing a boundary (notes.md -> notes.py) changes the required
@@ -2131,40 +2317,71 @@ class RetrievalCore:
         max_results = max(1, min(max_results, MAX_RESULTS))
         hybrid_alpha = max(0.0, min(hybrid_alpha, 1.0))
         cache = self.query_cache(project)
-        cache_key = (query, max_results, category, hybrid_alpha, include_registered)
+        admitted_sources, admitted_doc_ids = await self._effective_indexed_sources(project)
+        admission_fingerprint = (
+            hashlib.sha256(
+                "\0".join(sorted(admitted_sources)).encode("utf-8")
+                + b"\1"
+                + "\0".join(sorted(admitted_doc_ids or ())).encode("utf-8")
+            ).hexdigest()
+            if admitted_sources is not None else None
+        )
+        cache_key = (
+            query, max_results, category, hybrid_alpha, include_registered,
+            admission_fingerprint,
+        )
         cached = cache.get(cache_key)
         if cached is not None:
-            return cached
+            return self._filter_search_results(project, cached)
         n_candidates = min(max_results * 3, MAX_RESULTS)
 
         routed_category = self._route_by_keywords(query) if not category else None
         effective_category = category or routed_category
+        admission_kwargs = (
+            {"include_sources": admitted_sources, "include_doc_ids": admitted_doc_ids}
+            if self.effective_index_policy_for(project) is not None else {}
+        )
 
         async def dense_leg() -> list[ChunkHit]:
             if hybrid_alpha <= 0:
                 return []
             qvec = (await asyncio.to_thread(self.embedder.embed, [query]))[0]
             return await self.store.dense_search(
-                project, qvec, n_candidates, effective_category
+                project, qvec, n_candidates, effective_category, **admission_kwargs
             )
 
         async def lexical_leg() -> list[ChunkHit]:
             if hybrid_alpha >= 1.0:
                 return []
             return await self.store.lexical_search(
-                project, query, n_candidates, effective_category
+                project, query, n_candidates, effective_category, **admission_kwargs
             )
 
         async def registered_leg() -> list[ChunkHit]:
             if hybrid_alpha >= 1.0 or not include_registered:
                 return []
             return await self.store.registered_lexical_search(
-                project, query, n_candidates, effective_category
+                project, query, n_candidates, effective_category, **admission_kwargs
             )
 
         dense_hits, lexical_hits, registered_hits = await asyncio.gather(
             dense_leg(), lexical_leg(), registered_leg()
         )
+        effective_policy = self.effective_index_policy_for(project)
+        if effective_policy is not None:
+            extension_policy = self.policy_for(project)
+
+            def eligible(hit: ChunkHit) -> bool:
+                return self._policy_allows_source(
+                    effective_policy, hit.source,
+                    globally_eligible=extension_policy.tier_for(
+                        Path(hit.source).suffix
+                    ) is not None,
+                )
+
+            dense_hits = [hit for hit in dense_hits if eligible(hit)]
+            lexical_hits = [hit for hit in lexical_hits if eligible(hit)]
+            registered_hits = [hit for hit in registered_hits if eligible(hit)]
         registered_ids = {hit.doc_id for hit in registered_hits}
         if registered_hits:
             # A registered hit carries the WHOLE file. Narrow it to a window
@@ -2257,6 +2474,10 @@ class RetrievalCore:
         # is also complete by this point; publish the final page in descending
         # score order and keep that order in the query cache.
         results.sort(key=lambda r: r["score"], reverse=True)
+        # Policy may change while embedding, retrieving, or reranking. Re-read
+        # the host-owned snapshot immediately before publishing/cacheing the
+        # response so a result that became excluded mid-query cannot escape.
+        results = self._filter_search_results(project, results)
         # 14.0 §2.4: a result the reranker was configured for but could not
         # score while it may still become ready (loading, or a one-off scoring
         # fault) is RRF order. Caching it would keep serving `reranker_score:
@@ -2270,6 +2491,24 @@ class RetrievalCore:
         else:
             cache.put(cache_key, results)
         return results
+
+    def _filter_search_results(
+        self, project: str, results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        effective_policy = self.effective_index_policy_for(project)
+        if effective_policy is None:
+            return results
+        extension_policy = self.policy_for(project)
+        return [
+            result for result in results
+            if self._policy_allows_source(
+                effective_policy,
+                str(result.get("source", "")),
+                globally_eligible=extension_policy.tier_for(
+                    Path(str(result.get("source", ""))).suffix
+                ) is not None,
+            )
+        ]
 
     @staticmethod
     def _rrf_fuse(

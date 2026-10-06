@@ -264,6 +264,9 @@ class BridgeService:
         reconcile: Callable[..., Any] | None = None,
         backup_keep: int = 0,
         growth_renewal_interval: float = 60.0,
+        book_mutation_policy_for: Callable[[Any], Any] | None = None,
+        book_config_snapshot_for: Callable[[Any], Any] | None = None,
+        book_service_for: Callable[[Any], Any] | None = None,
     ):
         self.workspace = workspace
         self.transfer_client = transfer_client or getattr(workspace, "transfer_client", None)
@@ -278,6 +281,9 @@ class BridgeService:
         self.knowledge_core = knowledge_core
         self.reconcile = reconcile
         self.backup_keep = backup_keep
+        self.book_mutation_policy_for = book_mutation_policy_for
+        self.book_config_snapshot_for = book_config_snapshot_for
+        self.book_service_for = book_service_for
         if growth_renewal_interval <= 0:
             raise ValueError("growth_renewal_interval must be positive")
         self.growth_renewal_interval = float(growth_renewal_interval)
@@ -501,6 +507,55 @@ class BridgeService:
         if len(files) > MAX_TRANSFER_FILES or sum(item.size for item in files) > MAX_TRANSFER_BYTES:
             raise BridgeError("quota_exceeded", "Transfer exceeds its file or byte limit")
         return tuple(files), tuple(sorted(dirs))
+
+    def _check_book_destination(self, project: Any, relative: str, *, source_exists: bool):
+        provider = self.book_mutation_policy_for
+        if provider is None:
+            return None, None
+        policy = provider(project)
+        if policy is None:
+            return None, None
+        decision = policy.decide(
+            relative, operation="write", source_exists=source_exists,
+        )
+        if not decision.allowed:
+            raise BridgeError(
+                decision.reason,
+                "destination is protected or requires its guarded book workflow",
+                path=relative,
+            )
+        chapter_id = None
+        if decision.preserve_original:
+            if self.book_config_snapshot_for is None or self.book_service_for is None:
+                raise BridgeError("configuration_conflict", "book original preservation is unavailable")
+            snapshot = self.book_config_snapshot_for(project)
+            folded = relative.replace("\\", "/").casefold()
+            chapter = next((
+                item for item in getattr(getattr(snapshot, "layout", None), "chapters", ())
+                if item.working_filepath.replace("\\", "/").casefold() == folded
+            ), None)
+            if chapter is None:
+                raise BridgeError("configuration_conflict", "registered working path has no chapter")
+            chapter_id = chapter.chapter_id
+            service = self.book_service_for(project)
+            decision = policy.decide(
+                relative, operation="write", source_exists=source_exists,
+                first_original_exists=service.original_exists(project, chapter_id),
+            )
+        return decision, chapter_id
+
+    def _preserve_book_destination(
+        self, project: Any, relative: str, prior: bytes | None, decision: Any,
+        chapter_id: str | None,
+    ) -> None:
+        if decision is None or not decision.preserve_original:
+            return
+        if prior is None or chapter_id is None or self.book_service_for is None:
+            raise BridgeError("configuration_conflict", "first-original source bytes are unavailable")
+        service = self.book_service_for(project)
+        service.ensure_original(
+            project, chapter_id, prior, hashlib.sha256(prior).hexdigest(),
+        )
 
     async def _workspace_inventory(self, principal: Any, paths: Iterable[str], connector_id: str | None) -> dict[str, dict[str, Any]]:
         inventory = getattr(self.workspace, "inventory", None)
@@ -1113,6 +1168,9 @@ class BridgeService:
                     target_rel = _unique_project_name(docs, target_rel, used)
             elif policy == "replace" and target_rel in expected:
                 raise BridgeError("stale_file", "replace destination no longer exists", path=target_rel)
+            mutation, chapter_id = self._check_book_destination(
+                project, target_rel, source_exists=target.is_file(),
+            )
             used.add(target_rel)
             planned.append((item, target_rel))
         # Destination checks and writes happen under Knowledge's lock only; the
@@ -1148,7 +1206,14 @@ class BridgeService:
                     if policy == "rename":
                         target_rel = _unique_project_name(docs, target_rel, commit_used)
                         target = resolve_target(docs, target_rel)
+                mutation, chapter_id = self._check_book_destination(
+                    project, target_rel, source_exists=target.is_file(),
+                )
                 target.parent.mkdir(parents=True, exist_ok=True)
+                prior_bytes = target.read_bytes() if target.is_file() else None
+                self._preserve_book_destination(
+                    project, target_rel, prior_bytes, mutation, chapter_id,
+                )
                 if prior_hash and policy == "replace":
                     try:
                         backup_if_exists(docs, target_rel, keep=self.backup_keep)

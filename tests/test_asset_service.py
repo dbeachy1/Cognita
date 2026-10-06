@@ -550,6 +550,39 @@ def test_search_uses_reranker_and_normalizes_display_scores(tmp_path):
     asyncio.run(run())
 
 
+def test_search_applies_effective_folder_policy_before_candidate_limit(tmp_path):
+    from cognita.books.config import FolderRule
+    from cognita.books.policy import EffectiveIndexPolicy
+
+    class Project:
+        name = "test"
+        documents_dir = tmp_path
+        data_dir = tmp_path / "data"
+
+    class Repository:
+        async def searchable_source_paths(self):
+            return ["private/a.png", "private/b.png", "public/c.png"]
+
+        async def search_hybrid(self, query, vector, limit, prefix, tags, alpha, *, include_sources=None):
+            ranked = [
+                {"asset_id": name, "source": name, "metadata": {}, "content": name}
+                for name in ("private/a.png", "private/b.png", "public/c.png")
+            ]
+            return [item for item in ranked if item["source"] in include_sources][:limit]
+
+    policy = EffectiveIndexPolicy([FolderRule(path="private", indexed=False)])
+
+    async def run():
+        service = AssetService(
+            Project(), Repository(),
+            effective_index_policy=lambda: policy,
+        )
+        result = await service.search_assets({"query": "image", "hybrid_alpha": 0, "max_results": 1})
+        assert [row["filepath"] for row in result["results"]] == ["public/c.png"]
+
+    asyncio.run(run())
+
+
 def test_legacy_project_writable_flag_does_not_veto_connector_policy(tmp_path):
     class Project:
         name = "test"

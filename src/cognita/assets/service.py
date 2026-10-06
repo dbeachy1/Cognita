@@ -55,7 +55,7 @@ _SERVICE_CONNECTOR = object()
 class AssetService:
     """Coordinate validation, publication, catalog replacement and safe reads."""
 
-    def __init__(self, project: Any, repository: Any | None = None, *, logger: Any | None = None, backup_keep: int = 20, embedder: Any | None = None, reranker: Any | None = None, limits: Any | None = None, connector_id: str | None = None, ocr_service: OCRService | None = None, scheduler: Any | None = None):
+    def __init__(self, project: Any, repository: Any | None = None, *, logger: Any | None = None, backup_keep: int = 20, embedder: Any | None = None, reranker: Any | None = None, limits: Any | None = None, connector_id: str | None = None, ocr_service: OCRService | None = None, scheduler: Any | None = None, book_mutation_policy: Callable[[], Any] | None = None, effective_index_policy: Callable[[], Any] | None = None):
         self.project = project
         self.project_name = getattr(project, "name", "project")
         # The gateway supplies this trusted identity after connector/project
@@ -74,6 +74,8 @@ class AssetService:
         self.embedder = embedder
         self.reranker = reranker
         self.scheduler = scheduler
+        self.book_mutation_policy_provider = book_mutation_policy
+        self.effective_index_policy_provider = effective_index_policy
         self.recovery_blocked = False
         self.max_png_bytes = min(int(getattr(limits, "asset_max_png_bytes", MAX_PNG_BYTES)), MAX_PNG_BYTES)
         self.max_metadata_bytes = min(int(getattr(limits, "asset_max_metadata_bytes", MAX_METADATA_BYTES)), MAX_METADATA_BYTES)
@@ -149,6 +151,37 @@ class AssetService:
                         raise AssetError("invalid_path", "asset path collides with an existing name")
             parent /= part
         return relative, target
+
+    def _mutation_allowed(self, relative: str, operation: str) -> None:
+        provider = self.book_mutation_policy_provider
+        policy = provider() if provider is not None else None
+        if policy is None:
+            return
+        decision = policy.decide(
+            relative, operation=operation,
+            source_exists=(self.documents_dir / Path(relative)).is_file(),
+        )
+        if not decision.allowed or decision.preserve_original:
+            raise AssetError(
+                decision.reason if not decision.allowed else "configuration_conflict",
+                "this managed book path is protected or requires its guarded document workflow",
+            )
+
+    def _effective_indexed(self, relative: str) -> bool:
+        provider = self.effective_index_policy_provider
+        policy = provider() if provider is not None else None
+        return policy is None or policy.decision(relative).indexed
+
+    async def _searchable_asset_sources(self) -> list[str] | None:
+        provider = self.effective_index_policy_provider
+        policy = provider() if provider is not None else None
+        if policy is None:
+            return None
+        if self.repository is not None and hasattr(self.repository, "searchable_source_paths"):
+            sources = await self.repository.searchable_source_paths()
+        else:
+            sources = list(self._memory)
+        return [source for source in sources if policy.decision(source).indexed]
 
     async def _claim(self, tool: str, op: str, fingerprint: str) -> tuple[str, Any | None]:
         if self.repository is not None and hasattr(self.repository, "claim_operation"):
@@ -264,10 +297,11 @@ class AssetService:
                     # Same-byte copies/moves get their source mapping only after
                     # current catalog facts are checked in the transaction.
                     self.ocr_service._freshness_check(target, snapshot_dict)
-                    await self._await_ocr_phase(
-                        self.repository.publish_ocr_result(snapshot, cached, chunks),
-                        outer_deadline, selected_timeout, "publication",
-                    )
+                    if self._effective_indexed(relative):
+                        await self._await_ocr_phase(
+                            self.repository.publish_ocr_result(snapshot, cached, chunks),
+                            outer_deadline, selected_timeout, "publication",
+                        )
                     return self._cached_ocr_result(cached, relative, started)
 
         coalesce_key = (
@@ -318,7 +352,8 @@ class AssetService:
         result = dict(result)
         result["filepath"] = relative
         result["source_snapshot"] = dict(snapshot_dict)
-        if self.repository is not None and hasattr(self.repository, "publish_ocr_result"):
+        if (self.repository is not None and hasattr(self.repository, "publish_ocr_result")
+                and self._effective_indexed(relative)):
             try:
                 source_snapshot = source_snapshot_from_result(result)
                 self.ocr_service._freshness_check(target, result["source_snapshot"])
@@ -460,16 +495,22 @@ class AssetService:
         target = self.documents_dir / Path(record.filepath)
         if record.file_mtime is None:
             record.file_mtime = datetime.fromtimestamp(target.stat().st_mtime, UTC)
-        vectors = await self._vectors(projection)
-        record.indexed = True
+        searchable = self._effective_indexed(record.filepath)
+        vectors = await self._vectors(projection) if searchable else []
+        record.indexed = searchable
+        if result is not None:
+            result["indexed"] = searchable
         if self.repository is not None:
             if operation and result is not None and hasattr(self.repository, "commit_asset_operation"):
                 await self._repository_call(
                     self.repository.commit_asset_operation, record, projection, vectors,
                     operation, result, connector_id=self.connector_id, tool=tool,
+                    searchable=searchable,
                 )
             else:
-                await self.repository.replace_asset(record, projection, vectors)
+                await self.repository.replace_asset(
+                    record, projection, vectors, searchable=searchable,
+                )
                 if operation and result is not None:
                     await self._finish(operation, result, tool=tool)
         self._memory[record.filepath] = record
@@ -506,6 +547,7 @@ class AssetService:
         if self.recovery_blocked:
             raise AssetError("recovery_required", "asset recovery must complete before mutation")
         relative, target = self._target(args.get("filepath"))
+        self._mutation_allowed(relative, "write")
         image = args.get("image")
         if not isinstance(image, Mapping) or set(image) - {"image_url", "output_hint"}:
             raise AssetError("invalid_arguments", "image must contain image_url and optional output_hint")
@@ -627,6 +669,7 @@ class AssetService:
         if self.recovery_blocked:
             raise AssetError("recovery_required", "asset recovery must complete before mutation")
         relative, target = self._target(args.get("filepath"))
+        self._mutation_allowed(relative, "write")
         op = operation_id(args.get("operation_id"))
         fingerprint = hashlib.sha256(
             json.dumps(dict(args), sort_keys=True, separators=(",", ":")).encode()
@@ -733,6 +776,7 @@ class AssetService:
         if self.recovery_blocked:
             raise AssetError("recovery_required", "asset recovery must complete before mutation")
         relative, target = self._target(args.get("filepath"))
+        self._mutation_allowed(relative, "remove")
         if target.is_symlink():
             raise AssetError("invalid_path", "asset paths may not be links")
         op = operation_id(args.get("operation_id"))
@@ -1046,15 +1090,24 @@ class AssetService:
             tags = [bounded_string(tag, "tag", 256, empty=False) for tag in tags]
         freshness_warning = False
         if self.repository is not None and hasattr(self.repository, "search_hybrid"):
+            allowed_sources = await self._searchable_asset_sources()
             vector = None
             if alpha > 0:
                 if self.embedder is None:
                     raise AssetError("index_failed", "asset embedder is unavailable")
                 vector = (await asyncio.to_thread(self.embedder.embed, [query]))[0]
             pool_limit = min(limit * 3, 60) if self.reranker is not None else limit
-            hits = await self.repository.search_hybrid(
-                query, vector, pool_limit, prefix, tags, float(alpha)
+            hits = await self._repository_call(
+                self.repository.search_hybrid,
+                query, vector, pool_limit, prefix, tags, float(alpha),
+                include_sources=allowed_sources,
             )
+            if allowed_sources is not None:
+                allowed = set(allowed_sources)
+                hits = [
+                    hit for hit in hits
+                    if str(self._field(hit, "source", self._field(hit, "filepath", ""))) in allowed
+                ]
             if self.reranker is not None and hits:
                 scores = await asyncio.to_thread(
                     self.reranker.rerank, query, [str(hit.get("content", "")) for hit in hits]
@@ -1093,11 +1146,22 @@ class AssetService:
                     continue
                 fresh_hits.append(hit)
             hits = fresh_hits
+            # Folder policy can change while OCR validation or reranking runs.
+            # Apply a final current-policy check before result limiting/publication.
+            allowed_sources = await self._searchable_asset_sources()
+            if allowed_sources is not None:
+                allowed = set(allowed_sources)
+                hits = [
+                    hit for hit in hits
+                    if str(self._field(hit, "source", self._field(hit, "filepath", ""))) in allowed
+                ]
             results = [self._project(hit, detail, include_score=True) for hit in hits[:limit]]
         else:
             q = query.casefold()
+            allowed_sources = await self._searchable_asset_sources()
             results = [self._project(row, detail, include_score=True) for row in self._memory.values()
-                       if q in search_projection(row.metadata, row.filepath).casefold()][:limit]
+                       if q in search_projection(row.metadata, row.filepath).casefold()
+                       and (allowed_sources is None or row.filepath in allowed_sources)][:limit]
         filtered_results = [row for row in results if row.get("score", 1.0) >= minimum]
         response = {"status": "success", "project": self.project_name,
                     "results": filtered_results}
@@ -1225,6 +1289,21 @@ class AssetService:
             paths, dirty_prefixes, root_identity=root_identity,
             source_is_safe=source_is_safe,
         )
+
+    async def deindex_searchable_paths(self, paths: list[str]) -> int:
+        """Drop asset/OCR search projections without deleting catalog/file facts."""
+        normalized = sorted({path.replace("\\", "/") for path in paths})
+        if not normalized:
+            return 0
+        for path in normalized:
+            if resolve_target(self.documents_dir, path) is None:
+                raise AssetError("invalid_path", "index exclusion path is outside the project")
+            row = self._memory.get(path)
+            if row is not None:
+                row.indexed = False
+        if self.repository is not None and hasattr(self.repository, "deindex_searchable_paths"):
+            return int(await self.repository.deindex_searchable_paths(normalized))
+        return 0
 
     async def reconcile_all(
         self, *, source_is_safe: Callable[[], bool] | None = None,

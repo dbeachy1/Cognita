@@ -119,16 +119,16 @@ class AssetRepository:
 
     async def replace_asset(
         self, record: AssetRecord, projection: str, vectors: Iterable[Iterable[float]],
-        *, connection: Any | None = None,
+        *, connection: Any | None = None, searchable: bool = True,
     ) -> None:
         vector_list = list(vectors)
-        if not vector_list:
+        if searchable and not vector_list:
             raise ValueError("an indexed asset requires an embedding")
         if connection is not None:
-            await self._replace(connection, record, projection, vector_list)
+            await self._replace(connection, record, projection, vector_list if searchable else [])
             return
         async with self.pool.acquire() as conn, conn.transaction():
-            await self._replace(conn, record, projection, vector_list)
+            await self._replace(conn, record, projection, vector_list if searchable else [])
 
     async def _replace(
         self, conn: Any, record: AssetRecord, projection: str, vectors: list[Iterable[float]]
@@ -168,11 +168,13 @@ class AssetRepository:
     async def commit_asset_operation(
         self, record: AssetRecord, projection: str, vectors: Iterable[Iterable[float]],
         operation_id: str, result: Mapping[str, Any], *, connector_id: str | None = None,
-        tool: str = "put_asset",
+        tool: str = "put_asset", searchable: bool = True,
     ) -> None:
         connector_key = normalize_connector_id(connector_id)
         async with self.pool.acquire() as conn, conn.transaction():
-            await self.replace_asset(record, projection, vectors, connection=conn)
+            await self.replace_asset(
+                record, projection, vectors, connection=conn, searchable=searchable,
+            )
             status = await conn.execute(
                 f"""UPDATE {self.schema}.asset_operations
                         SET state='committed',result=$2::jsonb,completed_at=now()
@@ -289,15 +291,20 @@ class AssetRepository:
     async def search_hybrid(
         self, query: str, vector: list[float] | None, limit: int,
         prefix: str | None, tags: list[str] | None, alpha: float,
+        include_sources: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        if include_sources is not None and not include_sources:
+            return []
         candidates = min(limit * 3, 60)
-        common = " AND ($3::text IS NULL OR a.source LIKE $3 || '%') AND ($4::text[] IS NULL OR a.metadata->'tags' ?| $4::text[])"
+        common = " AND ($3::text IS NULL OR a.source LIKE $3 || '%') AND ($4::text[] IS NULL OR a.metadata->'tags' ?| $4::text[]) AND ($5::text[] IS NULL OR a.source=ANY($5::text[]))"
         # A present catalog row remains an additional freshness constraint.
         # A missing row is valid: OCR can publish directly from an authorized
         # local PNG, including files provisioned after startup with watch off.
         ocr_common = """ AND (a.source IS NULL OR a.file_sha256=os.source_sha256)
             AND ($3::text IS NULL OR os.filepath LIKE $3 || '%')
-            AND ($4::text[] IS NULL OR a.metadata->'tags' ?| $4::text[])"""
+            AND ($4::text[] IS NULL OR a.metadata->'tags' ?| $4::text[])
+            AND ($5::text[] IS NULL OR os.filepath=ANY($5::text[]))"""
+        common_args = (prefix, tags, include_sources)
         lexical: list[Any] = []
         dense: list[Any] = []
         if alpha < 1:
@@ -307,7 +314,7 @@ class AssetRepository:
                          websearch_to_tsquery('english',$1) q
                     WHERE c.tsv @@ q {common}
                     ORDER BY rank_score DESC,c.chunk_id LIMIT $2""",
-                query, candidates, prefix, tags))
+                query, candidates, *common_args))
             # OCR chunks use the current source mapping, with optional catalog
             # facts checked when present. The service still verifies the actual
             # file hash through its bounded no-atime reader before exposing it.
@@ -325,7 +332,7 @@ class AssetRepository:
                          websearch_to_tsquery('english',$1) q
                     WHERE oc.tsv @@ q {ocr_common}
                     ORDER BY rank_score DESC,oc.source_sha256,oc.chunk_ordinal LIMIT $2""",
-                query, candidates, prefix, tags))
+                query, candidates, *common_args))
         if alpha > 0 and vector is not None:
             literal = "[" + ",".join(str(float(value)) for value in vector) + "]"
             dense = list(await self.pool.fetch(
@@ -333,7 +340,7 @@ class AssetRepository:
                     FROM {self.schema}.asset_chunks c JOIN {self.schema}.assets a USING(asset_id)
                     WHERE true {common}
                     ORDER BY c.embedding <=> $1::vector,c.chunk_id LIMIT $2""",
-                literal, candidates, prefix, tags))
+                literal, candidates, *common_args))
             dense.extend(await self.pool.fetch(
                 f"""SELECT {self._ocr_search_columns()}, oc.source_sha256 AS ocr_source_sha256,
                            oc.chunk_ordinal AS chunk_index,
@@ -347,7 +354,7 @@ class AssetRepository:
                     LEFT JOIN {self.schema}.assets a ON a.source=os.filepath
                     WHERE true {ocr_common}
                     ORDER BY oc.embedding <=> $1::vector,oc.source_sha256,oc.chunk_ordinal LIMIT $2""",
-                literal, candidates, prefix, tags))
+                literal, candidates, *common_args))
         fused: dict[str, dict[str, Any]] = {}
         for rank, row in enumerate(dense, 1):
             key = str(row["source"])
@@ -373,6 +380,35 @@ class AssetRepository:
                                     else "semantic" if item["semantic_rank"] else "keyword")
             results.append(row)
         return results
+
+    async def searchable_source_paths(self) -> list[str]:
+        """Current cataloged and OCR-mapped paths, including uncataloged OCR."""
+        rows = await self.pool.fetch(
+            f"""SELECT source FROM {self.schema}.assets
+                UNION SELECT filepath AS source FROM {self.schema}.asset_ocr_sources
+                ORDER BY source"""
+        )
+        return [str(row["source"]) for row in rows]
+
+    async def deindex_searchable_paths(self, paths: list[str]) -> int:
+        """Remove searchable asset/OCR projections while retaining asset facts."""
+        if not paths:
+            return 0
+        async with self.pool.acquire() as conn, conn.transaction():
+            status = await conn.execute(
+                f"""DELETE FROM {self.schema}.asset_chunks c
+                    USING {self.schema}.assets a
+                    WHERE c.asset_id=a.asset_id AND a.source=ANY($1::text[])""",
+                paths,
+            )
+            await conn.execute(
+                f"DELETE FROM {self.schema}.asset_ocr_sources WHERE filepath=ANY($1::text[])",
+                paths,
+            )
+        try:
+            return int(status.rsplit(" ", 1)[-1])
+        except (AttributeError, ValueError):
+            return 0
 
     async def claim_operation(
         self, operation_id: str, tool: str, request_sha256: str, *,

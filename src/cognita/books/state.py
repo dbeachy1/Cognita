@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from .config import normalize_project_path
+
 STATE_DIRECTORY = ".cognita-storage"
 DATABASE_FILENAME = "state.sqlite"
 INITIALIZED_FILENAME = "initialized.json"
@@ -30,6 +32,55 @@ class ProjectStateError(RuntimeError):
 class FolderPolicy:
     policy_revision: int
     rules: tuple[tuple[str, bool], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedRoleProvenance:
+    """Source/version/config bindings for one role-admitted book index row.
+
+    This record is derived evidence, not an alternate layout or approval
+    authority. Current source and config are revalidated by the service before
+    a record is admitted to a query or refreshed during indexing.
+    """
+
+    source_path: str
+    doc_id: str
+    extracted_sha256: str
+    raw_sha256: str
+    extraction_version: str
+    role: str
+    chapter_id: str | None
+    layout_sha256: str
+    chapter_state_sha256: str | None
+    annotations_sha256: str | None
+    approval_source_raw_sha256: str | None
+    approval_prose_projection_sha256: str | None
+    approval_projection_version: str | None
+    summary_raw_sha256: str | None
+    summary_source_raw_sha256: str | None
+    summary_source_prose_projection_sha256: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_path", normalize_project_path(self.source_path))
+        for name in (
+            "extracted_sha256", "raw_sha256", "layout_sha256",
+            "chapter_state_sha256", "annotations_sha256",
+            "approval_source_raw_sha256", "approval_prose_projection_sha256",
+            "summary_raw_sha256", "summary_source_raw_sha256",
+            "summary_source_prose_projection_sha256",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(char not in "0123456789abcdef" for char in value)
+            ):
+                raise ValueError(f"{name} must be lowercase SHA-256 hex or null")
+        for name in (
+            "doc_id", "extraction_version", "role", "layout_sha256",
+        ):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ValueError(f"{name} must be a nonempty string")
 
 
 class ProjectState:
@@ -74,6 +125,7 @@ class ProjectState:
             state = cls(project_root, timeout=timeout)
             state._validate_marker()
             state._validate_database()
+            state._ensure_indexed_role_schema()
             return state
         except ProjectStateError:
             raise
@@ -109,6 +161,7 @@ class ProjectState:
     def _finish_bootstrap(cls, project_root: Path, *, timeout: float) -> ProjectState:
         state = cls(project_root, timeout=timeout)
         state._create_schema()
+        state._ensure_indexed_role_schema()
         marker = {
             "schema_version": SCHEMA_VERSION,
             "database": DATABASE_FILENAME,
@@ -278,6 +331,88 @@ class ProjectState:
             raise
         except sqlite3.DatabaseError as exc:
             raise ProjectStateError("project state database is unreadable or corrupt") from exc
+
+    def _ensure_indexed_role_schema(self) -> None:
+        """Add the optional derived-provenance table to existing state DBs."""
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS indexed_role_provenance (
+                        source_path TEXT PRIMARY KEY,
+                        doc_id TEXT NOT NULL,
+                        extracted_sha256 TEXT NOT NULL,
+                        raw_sha256 TEXT NOT NULL,
+                        extraction_version TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        chapter_id TEXT,
+                        layout_sha256 TEXT NOT NULL,
+                        chapter_state_sha256 TEXT,
+                        annotations_sha256 TEXT,
+                        approval_source_raw_sha256 TEXT,
+                        approval_prose_projection_sha256 TEXT,
+                        approval_projection_version TEXT,
+                        summary_raw_sha256 TEXT,
+                        summary_source_raw_sha256 TEXT,
+                        summary_source_prose_projection_sha256 TEXT,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )"""
+                )
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("indexed role provenance schema is unavailable") from exc
+
+    def put_indexed_role_provenance(self, record: IndexedRoleProvenance) -> None:
+        """Atomically replace the derived admission facts for one source path."""
+        columns = (
+            "source_path", "doc_id", "extracted_sha256", "raw_sha256",
+            "extraction_version", "role", "chapter_id", "layout_sha256",
+            "chapter_state_sha256", "annotations_sha256",
+            "approval_source_raw_sha256", "approval_prose_projection_sha256",
+            "approval_projection_version", "summary_raw_sha256",
+            "summary_source_raw_sha256", "summary_source_prose_projection_sha256",
+        )
+        values = tuple(getattr(record, column) for column in columns)
+        assignments = ",".join(f"{column}=excluded.{column}" for column in columns[1:])
+        with self.transaction() as connection:
+            connection.execute(
+                f"INSERT INTO indexed_role_provenance ({','.join(columns)}) "
+                f"VALUES ({','.join('?' for _ in columns)}) "
+                f"ON CONFLICT(source_path) DO UPDATE SET {assignments}, "
+                "updated_at=CURRENT_TIMESTAMP",
+                values,
+            )
+
+    def indexed_role_provenance(self, source_path: str) -> IndexedRoleProvenance | None:
+        source_path = normalize_project_path(source_path)
+        try:
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT * FROM indexed_role_provenance WHERE source_path=?",
+                    (source_path,),
+                ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise ProjectStateError("indexed role provenance is unreadable") from exc
+        if row is None:
+            return None
+        columns = (
+            "source_path", "doc_id", "extracted_sha256", "raw_sha256",
+            "extraction_version", "role", "chapter_id", "layout_sha256",
+            "chapter_state_sha256", "annotations_sha256",
+            "approval_source_raw_sha256", "approval_prose_projection_sha256",
+            "approval_projection_version", "summary_raw_sha256",
+            "summary_source_raw_sha256", "summary_source_prose_projection_sha256",
+        )
+        try:
+            return IndexedRoleProvenance(**{column: row[column] for column in columns})
+        except (TypeError, ValueError) as exc:
+            raise ProjectStateError("indexed role provenance is invalid") from exc
+
+    def delete_indexed_role_provenance(self, source_path: str) -> bool:
+        source_path = normalize_project_path(source_path)
+        with self.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM indexed_role_provenance WHERE source_path=?", (source_path,)
+            )
+        return cursor.rowcount > 0
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -492,3 +627,9 @@ class ProjectState:
                  json.dumps(committed_result, ensure_ascii=False, separators=(",", ":"))),
             )
             return "committed", next_revision, committed_result
+
+__all__ = [
+    "STATE_DIRECTORY", "DATABASE_FILENAME", "INITIALIZED_FILENAME",
+    "BOOTSTRAP_FILENAME", "SCHEMA_VERSION", "ProjectStateError", "FolderPolicy",
+    "IndexedRoleProvenance", "ProjectState",
+]

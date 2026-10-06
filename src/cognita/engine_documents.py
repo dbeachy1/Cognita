@@ -32,11 +32,84 @@ from .parsing import (
     is_sync_conflict,
 )
 from .registry import Project
+from .books.policy import MutationDecision
 from .toolargs import wire_error
 from .engine_contract import MAX_BATCH_DOCUMENTS, MAX_CONTENT_BYTES, MAX_PLURAL_PATHS, _collection, log
 
 
 class EngineDocumentOperations:
+    def _book_mutation_decision(
+        self, project: Project, target: Path, *, operation: str,
+        source_exists: bool = False,
+    ) -> tuple[MutationDecision | None, str | None]:
+        """Resolve one managed-book mutation decision and first-original state."""
+        provider = getattr(self, "book_mutation_policy_for", None)
+        if provider is None:
+            return None, None
+        policy = provider(project)
+        if policy is None:
+            return None, None
+        relative = self._rel(project, target.resolve())
+        decision = policy.decide(
+            relative, operation=operation, source_exists=source_exists,
+            first_original_exists=False,
+        )
+        chapter_id = None
+        if decision.preserve_original:
+            snapshot_provider = getattr(self, "book_config_snapshot_for", None)
+            service_provider = getattr(self, "book_service_for", None)
+            if snapshot_provider is None or service_provider is None:
+                raise RuntimeError("book original preservation service is unavailable")
+            snapshot = snapshot_provider(project)
+            layout = getattr(snapshot, "layout", None)
+            folded = relative.replace("\\", "/").casefold()
+            chapter = next((
+                item for item in getattr(layout, "chapters", ())
+                if item.working_filepath.replace("\\", "/").casefold() == folded
+            ), None)
+            if chapter is None:
+                raise RuntimeError("managed working path has no registered chapter")
+            chapter_id = chapter.chapter_id
+            service = service_provider(project)
+            first_exists = service.original_exists(project, chapter_id)
+            decision = policy.decide(
+                relative, operation=operation, source_exists=source_exists,
+                first_original_exists=first_exists,
+            )
+        return decision, chapter_id
+
+    @staticmethod
+    def _book_mutation_error(
+        decision: MutationDecision | None, filepath: str,
+    ) -> dict | None:
+        if decision is None or decision.allowed:
+            return None
+        reason = (
+            "configuration_conflict"
+            if decision.disposition == "configuration_conflict"
+            else decision.reason
+        )
+        return {
+            "status": "error", "reason": reason,
+            "message": "This managed book path is protected or requires its guarded configuration workflow. Nothing was changed.",
+            "filepath": filepath,
+        }
+
+    def _ensure_book_original(
+        self, project: Project, target: Path, source_bytes: bytes | None,
+        decision: MutationDecision | None, chapter_id: str | None,
+    ) -> dict[str, str] | None:
+        if decision is None or not decision.preserve_original:
+            return None
+        if source_bytes is None or chapter_id is None:
+            raise RuntimeError("first-original preservation requires existing source bytes")
+        service = self.book_service_for(project)
+        receipt = service.ensure_original(
+            project, chapter_id, source_bytes,
+            hashlib.sha256(source_bytes).hexdigest(),
+        )
+        return {"filepath": receipt.filepath, "bytes_sha256": receipt.bytes_sha256}
+
     def _reject_backups_write(self, project: Project, target: Path) -> dict | None:
         """None unless `target` is inside `backups/` — the recovery tree.
 
@@ -355,6 +428,7 @@ class EngineDocumentOperations:
 
         # ---- phase 1: validate EVERYTHING before touching anything ----------
         plan: list[tuple[Path, bytes, str, str | None]] = []
+        book_decisions: dict[Path, tuple[MutationDecision | None, str | None]] = {}
         seen: set[Path] = set()
         base64_bytes = 0
         for index, entry in enumerate(documents):
@@ -398,6 +472,15 @@ class EngineDocumentOperations:
                 return {"status": "error", "reason": "invalid_path",
                         "message": f"filepath resolves outside this project: {filepath!r}",
                         "filepath": filepath}
+            mutation, chapter_id = self._book_mutation_decision(
+                project, target, operation="write", source_exists=target.is_file(),
+            )
+            if refused := self._book_mutation_error(mutation, filepath):
+                return {**refused, "documents_written": 0}
+            # The first-original check is part of the book-write contract. Keep
+            # its chapter association with this validated batch target until we
+            # have pinned exact pre-write bytes below.
+            book_decisions[target] = (mutation, chapter_id)
             # 🔴 The same duplicate path twice in one batch is a caller bug that
             # would make the result order-dependent — the second write wins and
             # the first is silently lost. Refuse it rather than pick.
@@ -452,6 +535,16 @@ class EngineDocumentOperations:
                 )
         except BaseException:
             # Staging failed. No target has changed; drop the temps and report.
+            for tmp, _target in staged:
+                tmp.unlink(missing_ok=True)
+            raise
+
+        try:
+            for target, prior in previous:
+                mutation, chapter_id = book_decisions.get(target, (None, None))
+                if mutation is not None and mutation.preserve_original:
+                    self._ensure_book_original(project, target, prior, mutation, chapter_id)
+        except BaseException:
             for tmp, _target in staged:
                 tmp.unlink(missing_ok=True)
             raise
@@ -522,6 +615,11 @@ class EngineDocumentOperations:
         if target is None:
             return {"status": "error", "reason": "invalid_path",
                     "message": f"filepath resolves outside this project: {filepath!r}"}
+        mutation, chapter_id = self._book_mutation_decision(
+            project, target, operation="write", source_exists=target.is_file(),
+        )
+        if refused := self._book_mutation_error(mutation, filepath):
+            return refused
         for rejected in (self._reject_backups_write(project, target),
                          self._reject_unindexable(project, target),
                          self._reject_sync_conflict(target),
@@ -542,6 +640,7 @@ class EngineDocumentOperations:
         target.parent.mkdir(parents=True, exist_ok=True)
         existed_before = target.exists()
         previous = target.read_bytes() if existed_before else None
+        self._ensure_book_original(project, target, previous, mutation, chapter_id)
         await asyncio.to_thread(self._write_verbatim, target, content)
         try:
             outcome = await self.core.index_file(
@@ -579,6 +678,7 @@ class EngineDocumentOperations:
         # response echoing "general" when the path mapping chose something else
         # would be the same silent lie the inference was meant to remove.
         stored = await self.store.get_document(project.name, self._rel(project, target.resolve()))
+        indexed = bool(getattr(outcome, "indexed", True))
         return {"status": "success", "chunks_added": chunks_added, "dedup_skipped": 0,
                 "category": stored.category if stored else (category or "general"),
                 # 5.0 §5.1: filepath is RELATIVE — the form the tools accept —
@@ -590,7 +690,7 @@ class EngineDocumentOperations:
                 "source": str(target),
                 "content_sha256": text_sha256(target.read_bytes()),
                 **byte_facts(target.read_bytes()),
-                "tier": tier, "semantic_searchable": tier != TIER_REGISTERED}
+                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED}
 
     async def _update_document(self, project: Project, args: dict) -> dict:
         filepath = args.get("filepath") or ""
@@ -606,6 +706,11 @@ class EngineDocumentOperations:
         if target is None:
             return {"status": "error", "reason": "invalid_path",
                     "message": f"filepath resolves outside this project: {filepath!r}"}
+        mutation, chapter_id = self._book_mutation_decision(
+            project, target, operation="write", source_exists=target.is_file(),
+        )
+        if refused := self._book_mutation_error(mutation, filepath):
+            return refused
         # Ahead of the exists() check on purpose: the destructive case is an
         # update to a file that DOES exist (archive.zip), and write_text would
         # replace its bytes with text before the parse ever objected.
@@ -634,6 +739,7 @@ class EngineDocumentOperations:
         rel = self._rel(project, target.resolve())
         old_chunks = await self.store.chunk_count(project.name, rel)
         previous = target.read_bytes()
+        self._ensure_book_original(project, target, previous, mutation, chapter_id)
         await asyncio.to_thread(self._write_verbatim, target, content)
         try:
             outcome = await self.core.index_file(project.name, Path(project.documents_dir), target)
@@ -658,12 +764,13 @@ class EngineDocumentOperations:
                     "old_chunks_removed": 0, "rolled_back": True}
         _, new_chunks = outcome
         tier = self.core.policy_for(project.name).tier_for(target.suffix)
+        indexed = bool(getattr(outcome, "indexed", True))
         return {"status": "success", "old_chunks_removed": old_chunks,
                 "new_chunks_added": new_chunks, "dedup_skipped": 0,
                 "filepath": rel, "source": str(target),
                 "content_sha256": text_sha256(target.read_bytes()),
                 **byte_facts(target.read_bytes()),
-                "tier": tier, "semantic_searchable": tier != TIER_REGISTERED}
+                "tier": tier, "semantic_searchable": indexed and tier != TIER_REGISTERED}
 
     async def _remove_documents(self, project: Project, args: dict) -> dict:
         """Remove explicit paths in order, preserving each single-file outcome.
@@ -711,6 +818,11 @@ class EngineDocumentOperations:
             if target.exists() and target.is_dir():
                 return {"status": "error", "reason": "invalid_path",
                         "message": f"{raw!r} is a directory; recursive removal is not supported"}
+            mutation, _chapter_id = self._book_mutation_decision(
+                project, target, operation="remove", source_exists=target.is_file(),
+            )
+            if refused := self._book_mutation_error(mutation, raw):
+                return refused
             seen.add(canonical)
             validated.append((raw, target))
 
@@ -802,6 +914,11 @@ class EngineDocumentOperations:
         refused = self._reject_backups_write(project, target)
         if refused is not None:
             return {**refused, "filepath": filepath}
+        mutation, _chapter_id = self._book_mutation_decision(
+            project, target, operation="remove", source_exists=target.is_file(),
+        )
+        if refused := self._book_mutation_error(mutation, filepath):
+            return refused
         try:
             rel = self._rel(project, target.resolve())
         except ValueError:
@@ -981,6 +1098,16 @@ class EngineDocumentOperations:
         if new_t is None:
             return {"status": "error", "reason": "invalid_path",
                     "message": f"new_filepath resolves outside this project: {new_fp!r}"}
+        source_mutation, _ = self._book_mutation_decision(
+            project, old_t, operation="move", source_exists=old_t.is_file(),
+        )
+        if refused := self._book_mutation_error(source_mutation, old_fp):
+            return refused
+        destination_mutation, _ = self._book_mutation_decision(
+            project, new_t, operation="move", source_exists=new_t.is_file(),
+        )
+        if refused := self._book_mutation_error(destination_mutation, new_fp):
+            return refused
         # The DESTINATION extension decides indexability. A rename to an
         # unindexable suffix used to move the file on disk, delete the old index
         # row, and only then fail the parse — the document vanished from search
