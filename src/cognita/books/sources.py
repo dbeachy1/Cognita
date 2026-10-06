@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +128,31 @@ def _validate_https_url(url: str, allowed_hosts: set[str], resolver=None) -> tup
     return host, _public_addresses(host, parsed.port or 443, resolver)
 
 
+class _PinnedPublicBackend:
+    """Resolve each TCP connection to the vetted address it must use."""
+
+    def __init__(self, *, resolver=None, backend=None):
+        import httpcore
+
+        self._resolver = resolver
+        self._backend = backend or httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        import asyncio
+
+        name = host.decode() if isinstance(host, bytes) else str(host)
+        addresses = await asyncio.to_thread(_public_addresses, name, int(port), self._resolver)
+        # This numeric target is the connection authority. httpcore retains the
+        # request hostname for TLS SNI and certificate verification.
+        return await self._backend.connect_tcp(addresses[0], port, timeout, local_address, socket_options)
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise RuntimeError("Unix sockets are not available for HTTPS import")
+
+    async def sleep(self, seconds):
+        await self._backend.sleep(seconds)
+
+
 async def stage_https_audio_source(
     url: str,
     staging_root: Path,
@@ -137,6 +163,8 @@ async def stage_https_audio_source(
     expected_sha256: str | None = None,
     timeout_seconds: float = 60.0,
     resolver=None,
+    _pool_factory=None,
+    _clock=time.monotonic,
 ) -> StagedAudioSource:
     """Download one allowlisted HTTPS source through a public-address pin.
 
@@ -163,32 +191,18 @@ async def stage_https_audio_source(
         raise SourceStageError("source_forbidden", "No authorized HTTPS import host is configured.")
     root = Path(staging_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    if shutil.disk_usage(root).free - reserve_bytes < max_bytes:
-        raise SourceStageError("storage_unavailable", "Insufficient free storage for the configured source quota.")
-
-    class _PinnedBackend:
-        def __init__(self):
-            self._backend = httpcore.AnyIOBackend()
-
-        async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-            name = host.decode() if isinstance(host, bytes) else str(host)
-            addresses = await asyncio.to_thread(_public_addresses, name, int(port), resolver)
-            # Passing the vetted numeric target to httpcore is the actual
-            # connection decision; TLS still receives the request hostname.
-            return await self._backend.connect_tcp(addresses[0], port, timeout, local_address, socket_options)
-
-        async def connect_unix_socket(self, path, timeout=None, socket_options=None):
-            raise RuntimeError("Unix sockets are not available for HTTPS import")
-
-        async def sleep(self, seconds):
-            await self._backend.sleep(seconds)
 
     current = url
+    deadline = _clock() + float(timeout_seconds)
     stage_path = root / f"{_STAGE_PREFIX}{uuid.uuid4().hex}"
     try:
         for _hop in range(_MAX_REDIRECTS + 1):
+            if _clock() > deadline:
+                raise SourceStageError("source_timeout", "The audio source exceeded its total download deadline.")
             _validate_https_url(current, hosts, resolver)
-            pool = httpcore.AsyncConnectionPool(network_backend=_PinnedBackend(), max_connections=1)
+            backend = _PinnedPublicBackend(resolver=resolver)
+            pool = (_pool_factory(backend, timeout_seconds) if _pool_factory is not None
+                    else httpcore.AsyncConnectionPool(network_backend=backend, max_connections=1))
             try:
                 async with pool.stream(
                     "GET", current,
@@ -206,17 +220,36 @@ async def stage_https_audio_source(
                     if response.status < 200 or response.status >= 300:
                         raise SourceStageError("source_unavailable", "The audio source could not be retrieved.")
                     content_length = headers.get("content-length")
-                    if content_length is not None and (not content_length.isdecimal() or int(content_length) > max_bytes):
-                        raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
+                    if content_length is not None:
+                        if not content_length.isdecimal() or int(content_length) > max_bytes:
+                            raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
+                        if shutil.disk_usage(root).free - reserve_bytes < int(content_length):
+                            raise SourceStageError("storage_unavailable", "Insufficient free storage for the audio source.")
                     digest, total = hashlib.sha256(), 0
                     fd = os.open(stage_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
                     with os.fdopen(fd, "wb") as outgoing:
-                        async for chunk in response.aiter_stream():
+                        stream = response.aiter_stream().__aiter__()
+                        while True:
+                            if _clock() > deadline:
+                                raise SourceStageError("source_timeout", "The audio source exceeded its total download deadline.")
+                            remaining = deadline - _clock()
+                            if remaining <= 0:
+                                raise SourceStageError("source_timeout", "The audio source exceeded its total download deadline.")
+                            try:
+                                chunk = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError as exc:
+                                raise SourceStageError("source_timeout", "The audio source exceeded its total download deadline.") from exc
+                            if shutil.disk_usage(root).free - reserve_bytes < len(chunk):
+                                raise SourceStageError("storage_unavailable", "Insufficient free storage for the audio source.")
                             total += len(chunk)
                             if total > max_bytes:
                                 raise SourceStageError("quota_exceeded", "The audio source exceeds the configured byte quota.")
                             digest.update(chunk)
                             outgoing.write(chunk)
+                    if content_length is not None and total != int(content_length):
+                        raise SourceStageError("source_changed", "The audio source ended before its declared length.")
                     actual = digest.hexdigest()
                     if expected is not None and actual != expected:
                         raise SourceStageError("source_changed", "The audio source did not match its expected hash.")
