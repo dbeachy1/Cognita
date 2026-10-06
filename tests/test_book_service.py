@@ -1430,6 +1430,81 @@ def test_inspect_view_identity_binds_identical_pairs_to_chapter_paths_and_layout
     assert service._state_required().load_view(revised["document_view_id"]) is not None
 
 
+def test_inspect_pagination_budgets_speech_and_all_paragraph_text_without_omission(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    prose = _docx_paragraphs("a" * 7000, "b" * 7000)
+    tagged = _docx_paragraphs("a" * 7000, "b" * 7000)
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    ProjectState.initialize(tmp_path)
+    initial = _inspect(service)
+    ids = [item["paragraph_id"] for item in initial["paragraphs"]]
+    page = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/chapter.docx",
+        "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        "base_document_view_id": initial["document_view_id"],
+        "speech_paragraph_ids": [ids[0]],
+        "excluded_paragraphs": [{"paragraph_id": ids[1], "reason": "editorial_note"}],
+    }))
+    assert page["speech_text_total_codepoints"] == 7000
+    assert sum(len(item["text"]) for item in page["paragraphs"]) + len(page["speech_text"]) <= 12000
+    assert page["has_more"]
+
+    speech = []
+    paragraphs = {item: [] for item in ids}
+    local_ends = {item: 0 for item in ids}
+    while True:
+        assert sum(len(item["text"]) for item in page["paragraphs"]) + len(page["speech_text"]) <= 12000
+        speech.append(page["speech_text"])
+        for item in page["paragraphs"]:
+            assert item["paragraph_returned_start"] == local_ends[item["paragraph_id"]]
+            local_ends[item["paragraph_id"]] = item["paragraph_returned_end"]
+            paragraphs[item["paragraph_id"]].append(item["text"])
+        if not page["has_more"]:
+            break
+        page = service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": page["next_cursor"],
+        }))
+    assert "".join(speech) == "a" * 7000
+    assert "".join(paragraphs[ids[0]]) == "a" * 7000
+    assert "".join(paragraphs[ids[1]]) == "b" * 7000
+
+
+def test_inspect_pagination_tiny_budget_never_advances_past_unreturned_fields(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    prose = _docx_paragraphs("alpha", "bravocharlie")
+    tagged = _docx_paragraphs("alpha", "bravocharlie")
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    ProjectState.initialize(tmp_path)
+    page = service.inspect(InspectRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "prose_filepath": "Chapters/1/chapter.docx",
+        "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        "max_characters": 3,
+    }))
+    speech, paragraphs = [], {}
+    while True:
+        assert sum(len(item["text"]) for item in page["paragraphs"]) + len(page["speech_text"]) <= 3
+        speech.append(page["speech_text"])
+        for item in page["paragraphs"]:
+            paragraphs.setdefault(item["paragraph_id"], []).append(item["text"])
+        if not page["has_more"]:
+            break
+        page = service.inspect(InspectRequest.model_validate({
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+            "cursor": page["next_cursor"], "max_characters": 3,
+        }))
+    assert "".join(speech) == "alpha\n\nbravocharlie"
+    assert sorted("".join(value) for value in paragraphs.values()) == ["alpha", "bravocharlie"]
+
+
 def test_inspect_cursor_uses_frozen_view_and_rejects_changed_arguments(tmp_path):
     service, prose, tagged = _fixture(tmp_path, bound=True)
     ProjectState.initialize(tmp_path)

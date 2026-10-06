@@ -1095,18 +1095,24 @@ class BookService:
 
     @staticmethod
     def _inspect_page(projected, *, view_id: str, offset: int, page_size: int) -> dict[str, Any]:
-        if offset > len(projected.speech_text):
+        speech_length = len(projected.speech_text)
+        paragraph_starts: list[int] = []
+        field_end = speech_length
+        for paragraph in projected.paragraphs:
+            paragraph_starts.append(field_end)
+            field_end += len(paragraph.text)
+        if offset > field_end:
             raise BookServiceError("invalid_cursor", "The text cursor is outside the pinned view.")
-        end = min(len(projected.speech_text), offset + page_size)
+        end = min(field_end, offset + page_size)
+        speech_start = min(speech_length, offset)
+        speech_end = min(speech_length, end)
         from .projection import PROJECTION_VERSION
         paragraph_results = []
-        for paragraph in projected.paragraphs:
-            local_start = local_end = 0
-            if paragraph.speech_start is not None:
-                local_start = max(0, offset - paragraph.speech_start)
-                local_end = min(len(paragraph.text), end - paragraph.speech_start)
-                if local_end <= local_start:
-                    local_start = local_end = min(len(paragraph.text), max(0, local_start))
+        for paragraph, field_start in zip(projected.paragraphs, paragraph_starts, strict=True):
+            local_start = min(len(paragraph.text), max(0, offset - field_start))
+            local_end = min(len(paragraph.text), max(0, end - field_start))
+            if local_end < local_start:
+                local_end = local_start
             visible = paragraph.text[local_start:local_end]
             paragraph_results.append({
                 "paragraph_id": paragraph.paragraph_id,
@@ -1135,9 +1141,9 @@ class BookService:
             "spoken_projection_sha256": projected.spoken_projection_sha256,
             "speech_text_sha256": projected.speech_text_sha256,
             "speech_text_total_codepoints": len(projected.speech_text),
-            "speech_text": projected.speech_text[offset:end],
-            "returned_start": offset,
-            "returned_end": end,
+            "speech_text": projected.speech_text[speech_start:speech_end],
+            "returned_start": speech_start,
+            "returned_end": speech_end,
             "paragraphs": paragraph_results,
             "excluded_paragraphs": _data(projected.excluded_paragraphs),
             "source_text_matches_without_tags": projected.source_text_matches_without_tags,
@@ -1146,13 +1152,13 @@ class BookService:
                  "message": f"{item.part}:{item.location}: {item.detail}"}
                 for item in projected.unsupported
             ],
-            "has_more": end < len(projected.speech_text),
-            "next_cursor": _cursor(view_id, end) if end < len(projected.speech_text) else None,
+            "has_more": end < field_end,
+            "next_cursor": _cursor(view_id, end) if end < field_end else None,
         }
 
     def inspect(self, request: dto.InspectRequest) -> dict[str, Any]:
         state = self.discover_state()
-        page_size = request.max_characters if "max_characters" in request.model_fields_set else 40000
+        page_size = request.max_characters if "max_characters" in request.model_fields_set else 12000
         if "cursor" in request.model_fields_set:
             view_id, offset = _cursor_view_and_offset(request.cursor)
             view_row = self._inspect_view_row(state, view_id)
