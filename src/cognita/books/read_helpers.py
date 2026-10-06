@@ -20,14 +20,14 @@ def text_page(text: str, start: int, maximum: int) -> dict[str, object]:
     }
 
 
-def spoken_interval(
+def spoken_coordinates(
     speech_text: str,
     spoken_text: str,
     start: int,
     end: int,
     tag_deletion_spans: list[list[int]] | tuple[tuple[int, int], ...] | None = None,
-) -> str:
-    """Return the frozen spoken projection for a speech-coordinate interval.
+) -> tuple[int, int]:
+    """Map a frozen speech-coordinate interval into spoken-text coordinates.
 
     Spans are the validated tag deletions captured when the snapshot was
     prepared. Older snapshots without spans are safe only when both frozen
@@ -38,7 +38,7 @@ def spoken_interval(
     if tag_deletion_spans is None:
         if speech_text != spoken_text:
             raise ValueError("frozen tag deletion spans are unavailable")
-        return speech_text[start:end]
+        return start, end
 
     previous_end = 0
     removed_total = 0
@@ -61,6 +61,20 @@ def spoken_interval(
                              for left, right in tag_deletion_spans if left < end)
     mapped_start = start - removed_before_start
     mapped_end = end - removed_before_end
+    return mapped_start, mapped_end
+
+
+def spoken_interval(
+    speech_text: str,
+    spoken_text: str,
+    start: int,
+    end: int,
+    tag_deletion_spans: list[list[int]] | tuple[tuple[int, int], ...] | None = None,
+) -> str:
+    """Return the frozen spoken projection for a speech-coordinate interval."""
+    mapped_start, mapped_end = spoken_coordinates(
+        speech_text, spoken_text, start, end, tag_deletion_spans,
+    )
     return spoken_text[mapped_start:mapped_end]
 
 
@@ -103,4 +117,7 @@ def parse_read_cursor(cursor: str, view: str) -> tuple[int, int]:
         raise ReadCursorError("cursor does not belong to this immutable read") from exc
 
 
-__all__ = ["ReadCursorError", "paired_text_page", "parse_read_cursor", "read_cursor", "spoken_interval", "text_page"]
+__all__ = [
+    "ReadCursorError", "paired_text_page", "parse_read_cursor", "read_cursor",
+    "spoken_coordinates", "spoken_interval", "text_page",
+]

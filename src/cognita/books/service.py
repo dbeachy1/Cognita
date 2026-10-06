@@ -43,7 +43,8 @@ from .docx import (
     parse_docx, require_unlocked,
 )
 from .read_helpers import (
-    ReadCursorError, paired_text_page, parse_read_cursor, read_cursor, spoken_interval, text_page,
+    ReadCursorError, paired_text_page, parse_read_cursor, read_cursor,
+    spoken_coordinates, spoken_interval, text_page,
 )
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
@@ -1784,13 +1785,27 @@ class BookService:
                 searched_snapshots.append(snapshot_id)
                 snapshot = stored["payload"]
                 text = snapshot.get("spoken_projection", "")
+                speech_text = snapshot.get("speech_text", "")
                 start = 0
                 while query and (at := text.find(query, start)) >= 0:
                     end = at + len(query)
                     if ((before is None or text[max(0, at-len(before)):at] == before)
                             and (after is None or text[end:end+len(after)] == after)):
                         chunks = snapshot.get("result", {}).get("chunks", [])
-                        overlapping = [c["chunk_id"] for c in chunks if c["start"] < end and c["end"] > at]
+                        try:
+                            overlapping = []
+                            for chunk in chunks:
+                                spoken_start, spoken_end = spoken_coordinates(
+                                    speech_text, text, chunk["start"], chunk["end"],
+                                    snapshot.get("tag_deletion_spans"),
+                                )
+                                if spoken_start < end and spoken_end > at:
+                                    overlapping.append(chunk["chunk_id"])
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise BookServiceError(
+                                "state_unavailable",
+                                "The frozen spoken projection could not be mapped to its prepared chunks.",
+                            ) from exc
                         search_scope_key = stored["scope_key"]
                         historical_builds = state.builds(chapter_id=chapter_id, scope_key=search_scope_key)
                         matched = next((build for build in historical_builds

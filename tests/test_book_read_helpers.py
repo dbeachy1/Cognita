@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from cognita.books.read_helpers import spoken_interval
+from cognita.books.read_helpers import spoken_coordinates, spoken_interval
 
 
 def test_spoken_interval_uses_frozen_tag_spans_with_repeated_text() -> None:
@@ -17,6 +17,9 @@ def test_spoken_interval_uses_frozen_tag_spans_with_repeated_text() -> None:
     second_repeat = speech.rindex("repeat")
     assert spoken_interval(speech, spoken, second_repeat, len(speech), spans) == "repeat"
     assert spoken_interval(speech, spoken, start - 2, end + 2, spans) == "t  r"
+    assert spoken_coordinates(speech, spoken, start - 2, end + 2, spans) == (
+        start - 2, end + 2 - len(deletion),
+    )
     assert spoken_interval(speech, spoken, start + 1, end - 1, spans) == ""
 
 

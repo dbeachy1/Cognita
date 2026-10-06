@@ -923,6 +923,43 @@ def test_prepare_freezes_exact_tag_spans_and_chunk_spoken_facts(tmp_path):
     assert chapter["returned_texts"][0]["spoken_text"]["text"] == spoken
 
 
+def test_find_chunk_maps_tagged_chunk_ranges_into_frozen_spoken_coordinates(tmp_path):
+    service, _, _ = _fixture(tmp_path)
+    prose = _docx("repeat  repeat")
+    tagged = _tagged_docx_with_audio_tag()
+    (tmp_path / "Chapters/1/chapter.docx").write_bytes(prose)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(tagged)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["test_authorizations"][0]["source_raw_sha256"] = hashlib.sha256(prose).hexdigest()
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+
+    inspected = _inspect(service)
+    assert inspected["speech_text"] == "repeat [tag] repeat"
+    tag_start = inspected["speech_text"].index("[tag]")
+    prepared = _prepare_test_plan(service, "prepare-quote-coordinates", prose, tagged, None, [
+        {"chunk_id": "opening", "start": 0, "end": tag_start, "request_spec": None},
+        {"chunk_id": "closing", "start": tag_start, "end": len(inspected["speech_text"]), "request_spec": None},
+    ])
+
+    repeated = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "query": {"kind": "quote", "text": "repeat", "snapshot_id": prepared["snapshot_id"]},
+    }))
+    assert [match["chunk_ids"] for match in repeated["matches"]] == [
+        [prepared["chunks"][0]["chunk_id"]],
+        [prepared["chunks"][1]["chunk_id"]],
+    ]
+
+    across_boundary = service.find_chunk(FindChunkRequest.model_validate({
+        "project": "fixture", "chapter_id": "ch1",
+        "query": {"kind": "quote", "text": "t  r", "snapshot_id": prepared["snapshot_id"]},
+    }))
+    assert across_boundary["matches"][0]["chunk_ids"] == [
+        prepared["chunks"][0]["chunk_id"], prepared["chunks"][1]["chunk_id"],
+    ]
+
+
 def test_bootstrap_inspect_is_read_only_and_prepare_receipt_survives_restart(tmp_path):
     service, prose, tagged = _fixture(tmp_path)
     inspected = _inspect(service)
