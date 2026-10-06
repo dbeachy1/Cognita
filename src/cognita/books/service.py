@@ -2012,7 +2012,7 @@ class BookService:
         state, _, layout = self._enabled_layout()
         item = request.input
         assert isinstance(item, dto.ChapterBuildInput)
-        if request.outputs.master or "mp3_bitrate_kbps" in request.outputs.model_fields_set or request.gaps:
+        if request.outputs.master or request.gaps:
             raise BookServiceError("unsupported_build_mode", "Test MP3 stream-copy has no PCM master, bitrate conversion, or silence gaps.")
         stored = state.snapshot(item.snapshot_id)
         if stored is None or stored["chapter_id"] != item.chapter_id or stored["manifest_revision"] != item.expected_manifest_revision:
@@ -2027,16 +2027,26 @@ class BookService:
         if snapshot.get("request_plan_sha256") != item.request_plan_sha256 or [v.chunk_id for v in item.takes] != [v["chunk_id"] for v in snapshot["chunks"]]:
             raise BookServiceError("coverage_incomplete", "Test MP3 takes must cover frozen chunks exactly once in order.")
         take_ids: list[str] = []
+        source_bitrate: int | None = None
         for supplied, frozen in zip(item.takes, snapshot["chunks"], strict=True):
             take = state.take(supplied.take_id)
             media = None if take is None else take.get("media", {})
             if take is None or take.get("chapter_id") != item.chapter_id or take.get("snapshot_id") != item.snapshot_id or take.get("chunk_id") != supplied.chunk_id or take.get("request_sha256") != supplied.request_sha256 or frozen.get("request_sha256") != supplied.request_sha256 or media.get("codec") != "mp3" or media.get("encoding") != "compressed":
                 raise BookServiceError("stale_dependency", "A selected test take is not a matching verified MP3 chunk.")
+            bitrate = media.get("bitrate_bps")
+            if not isinstance(bitrate, int) or bitrate <= 0 or bitrate % 1000:
+                raise BookServiceError("media_mismatch", "Test MP3 takes require an exact verified source bitrate.")
+            if source_bitrate is None:
+                source_bitrate = bitrate // 1000
+            elif source_bitrate != bitrate // 1000:
+                raise BookServiceError("media_mismatch", "Test MP3 takes must have one matching source bitrate.")
             take_ids.append(supplied.take_id)
+        if "mp3_bitrate_kbps" in request.outputs.model_fields_set and request.outputs.mp3_bitrate_kbps != source_bitrate:
+            raise BookServiceError("settings_mismatch", "Test MP3 stream-copy cannot change the verified source bitrate.")
         pinned = {"mode": "test_mp3_stream_copy", "chapter_id": item.chapter_id, "scope_key": stored["scope_key"],
                   "snapshot_id": item.snapshot_id, "manifest_revision": item.expected_manifest_revision,
                   "request_plan_sha256": item.request_plan_sha256, "take_ids": take_ids,
-                  "chunk_ids": [v.chunk_id for v in item.takes], "metadata": _data(request.metadata)}
+                  "chunk_ids": [v.chunk_id for v in item.takes], "source_bitrate_kbps": source_bitrate, "metadata": _data(request.metadata)}
         try:
             disposition, result = state.reserve_build_job(job={"job_id": str(uuid.uuid4()), "payload": pinned, "created_at": datetime.now(timezone.utc).isoformat(), "pinned_inputs_sha256": canonical_json_sha256(pinned)}, owner_key=owner_key, project=self.project_name, operation_id=request.operation_id, args_sha256=canonical_json_sha256(_data(request)))
         except ProjectStateError as exc:
@@ -2138,7 +2148,7 @@ class BookService:
         timeline = directory / "timeline.json"
         _write_immutable_json(timeline, {"mode": "test_mp3_stream_copy", "packet_count": proof.packet_count,
                                          "ordered_packets_sha256": proof.ordered_packets_sha256,
-                                         "duration_seconds": inspected.media.duration_seconds, "delay_padding_verified": True})
+                                         "duration_seconds": inspected.media.duration_seconds, "delay_padding_verified": False})
         result = dto.BuildResult.model_validate({"kind": "build", "build_id": build_id, "scope": "chapter", "namespace": json.loads(pinned["scope_key"]), "source_snapshot_ids": [pinned["snapshot_id"]], "input_take_ids": pinned["take_ids"], "chapter_dependencies": [], "request_plan_sha256": pinned["request_plan_sha256"], "outputs": [{"kind": "mp3_download", "filepath": f"{relative}/listening.mp3", "bytes_sha256": inspected.bytes_sha256, "size_bytes": inspected.size_bytes, "media": inspected.media.model_dump(mode="json")}], "timeline_filepath": f"{relative}/timeline.json", "recipe_sha256": canonical_json_sha256({"pinned": pinned, "proof": proof.ordered_packets_sha256}), "validation": {"complete": True, "media_integrity": True, "coverage": True, "sample_or_packet_verification": True, "errors": []}, "needs_listening_review": True}).model_dump(mode="json")
         _write_immutable_json(directory / "build.json", {"schema_version": 1, "build": result})
         state.finish_build_success(job_id=job_id, build={"scope": "chapter", "build_id": build_id,
