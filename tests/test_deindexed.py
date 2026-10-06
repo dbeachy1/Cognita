@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from cognita.deindexed import FILENAME, DeindexedPaths
+from cognita.deindexed import DeindexedPaths, DeindexedPathsError, FILENAME
 
 
 def make(tmp_path) -> DeindexedPaths:
@@ -118,3 +118,30 @@ def test_no_temp_file_is_left_behind(tmp_path):
     listing.discard("a.md")
     listing.add("b.md")
     assert sorted(p.name for p in (tmp_path / "data").iterdir()) == [FILENAME]
+
+
+def test_rebase_prefix_moves_only_descendant_decisions_and_survives_reopen(tmp_path):
+    listing = make(tmp_path)
+    for path in ("source/a.md", "source/nested/b.md", "elsewhere/c.md"):
+        listing.add(path)
+
+    assert listing.rebase_prefix("source", "archive/source") == 2
+    assert listing.sorted() == [
+        "archive/source/a.md", "archive/source/nested/b.md", "elsewhere/c.md",
+    ]
+    assert make(tmp_path).sorted() == listing.sorted()
+
+
+def test_rebase_prefix_refuses_damaged_or_colliding_decisions(tmp_path):
+    path = tmp_path / "data" / FILENAME
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken", encoding="utf-8")
+    with pytest.raises(DeindexedPathsError, match="unreadable"):
+        DeindexedPaths(path).rebase_prefix("source", "archive")
+
+    listing = make(tmp_path / "valid")
+    listing.add("source/a.md")
+    listing.add("archive/a.md")
+    with pytest.raises(DeindexedPathsError, match="overwrite"):
+        listing.rebase_prefix("source", "archive")
+    assert listing.sorted() == ["archive/a.md", "source/a.md"]

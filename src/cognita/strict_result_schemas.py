@@ -688,10 +688,16 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
             "backups": arr(DELETION_BACKUP)},
             ("result_key", "on_error", "documents", "succeeded", "failed", "skipped", "backups"))
             for status in ("success", "partial_failure")]),
-        "move_document": contract(branch("success", {"old_filepath": S, "new_filepath": S,
-            "filepath": S, "old_source": S, "new_source": S, "source": S, "doc_id": S,
-            "chunks_moved": NNI, "previous_backup_id": NULL_S},
-            ("old_filepath", "new_filepath", "filepath", "old_source", "new_source", "source", "doc_id", "chunks_moved"))),
+        "move_document": contract(
+            branch("success", {"old_filepath": S, "new_filepath": S,
+                "filepath": S, "old_source": S, "new_source": S, "source": S, "doc_id": S,
+                "chunks_moved": NNI, "previous_backup_id": NULL_S},
+                ("old_filepath", "new_filepath", "filepath", "old_source", "new_source", "source", "doc_id", "chunks_moved")),
+            branch("success", {"filepath": S, "new_filepath": S, "kind": {"const": "directory"},
+                "policy_revision": NNI,
+                "indexing": obj({"state": {"enum": ["pending", "indexed", "stale", "excluded", "blocked", "failed"]},
+                                 "job_id": NULL_S}, ("state", "job_id"))},
+                ("filepath", "new_filepath", "kind", "policy_revision", "indexing"))),
         "reindex_documents": contract(
             branch("started", {"operation": S, "message": S}, ("operation", "message")),
             branch("already_running", {"operation": nullable(S), "progress": S, "hint": S},

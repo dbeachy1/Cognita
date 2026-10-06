@@ -1164,6 +1164,16 @@ class BookService:
         saved["policy_revision"] = revision if disposition == "committed" else saved["policy_revision"]
         return saved, disposition == "replay"
 
+    def update_folder_policy_job(self, job_id: str, state: str, details: dict[str, Any]) -> None:
+        """Record derived-index progress after the source-side rule committed."""
+        authority = self.discover_state()
+        if authority is None:
+            raise BookServiceError("state_unavailable", "Folder policy state is unavailable.")
+        try:
+            authority.update_policy_job(job_id, state, details)
+        except ProjectStateError as exc:
+            raise BookServiceError("state_unavailable", "Folder policy job state could not be recorded.") from exc
+
 
 def _mkdir_safe(root: Path, relative: str) -> None:
     target = root

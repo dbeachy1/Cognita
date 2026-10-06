@@ -12,6 +12,7 @@ import pytest
 from starlette.requests import Request
 
 from cognita.config import CognitaConfig
+from cognita.books.state import ProjectState
 from cognita.connectors import ConnectorStore
 from cognita.engine_local import LocalEngineHost
 from cognita.proxy import _forward_headers
@@ -82,12 +83,19 @@ class _Core:
         self.sync_conflict_patterns = []
         self.index_calls: list[tuple[str, Path]] = []
         self._locks: dict[str, _Lock] = {}
+        self._deindexed: dict[str, object] = {}
 
     def write_lock(self, project_name: str) -> _Lock:
         return self._locks.setdefault(project_name, _Lock())
 
     def effective_index_policy_for(self, _project_name: str):
         return None
+
+    def deindexed_for(self, project_name: str):
+        return self._deindexed.get(project_name)
+
+    def set_deindexed(self, project_name: str, paths) -> None:
+        self._deindexed[project_name] = paths
 
     async def index_project(self, project_name, documents_dir, *, force, progress):
         self.index_calls.append((project_name, documents_dir))
@@ -266,6 +274,46 @@ async def test_move_document_actual_engine_payload_passes_result_contract(tmp_pa
     assert payload["doc_id"] == "abc123def456"
     assert not source.exists()
     assert (project.documents_dir / "moved.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_directory_move_preserves_explicit_rules_and_per_file_exclusions(tmp_path):
+    """The directory variant carries only durable policy decisions, not backups."""
+    host, project, core = _host(tmp_path)
+    source = project.documents_dir / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "note.md").write_text("fixture", encoding="utf-8")
+    core._locks[project.name] = _ReentrantLock()
+    state = host.project_state_for(project)
+    assert state is None
+    state = ProjectState.initialize(project.documents_dir)
+    assert state.set_folder_rule(
+        "source", False, 0, owner_key="principal:local-admin", project=project.name,
+        tool="set_folder_indexing", operation_id="disable-source", args_sha256="a" * 64,
+        result={"path": "source"},
+    )[0] == "committed"
+    host.deindexed(project).add("source/nested/note.md")
+
+    args = {
+        "filepath": "source", "new_filepath": "archive/source",
+        "expected_policy_revision": 1, "operation_id": "move-source-1",
+    }
+    payload = await _post(host, project.name, "move_document", args)
+    assert payload == {
+        "status": "success", "filepath": "source", "new_filepath": "archive/source",
+        "kind": "directory", "policy_revision": 2,
+        "indexing": {"state": "pending", "job_id": payload["indexing"]["job_id"]},
+    }
+    assert not source.exists()
+    assert (project.documents_dir / "archive" / "source" / "nested" / "note.md").is_file()
+    assert host.deindexed(project).sorted() == ["archive/source/nested/note.md"]
+    assert state.folder_policy().rules == (("archive/source", False),)
+
+    replay = await _post(host, project.name, "move_document", args)
+    assert replay == payload
+    task = host._reindex_tasks.get(project.name)
+    if task is not None:
+        await task
 
 
 @pytest.mark.asyncio

@@ -628,6 +628,84 @@ class ProjectState:
             )
             return "committed", value, next_revision
 
+    def rebase_folder_rules(
+        self, old_prefix: str, new_prefix: str, expected_revision: int,
+        *, owner_key: str, project: str, tool: str, operation_id: str,
+        args_sha256: str, result: dict, job_id: str | None = None,
+    ) -> tuple[str, dict, int]:
+        """Atomically carry explicit folder rules across one directory rename.
+
+        Inherited policy is intentionally not copied: it is evaluated at the
+        destination.  Only explicit rules at the moved directory and its
+        descendants move, preserving both explicit inclusions and exclusions.
+        The receipt/CAS shape mirrors ``set_folder_rule`` so a retry after the
+        source directory is gone is still safely replayable.
+        """
+        old_prefix = normalize_project_path(old_prefix)
+        new_prefix = normalize_project_path(new_prefix)
+        old_marker = old_prefix + "/"
+        with self.transaction() as connection:
+            receipt = connection.execute(
+                "SELECT args_sha256,payload_json FROM operation_receipts "
+                "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+                (owner_key, project, tool, operation_id),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["args_sha256"] != args_sha256:
+                    return "conflict", {}, -1
+                return "replay", json.loads(receipt["payload_json"]), -1
+            row = connection.execute(
+                "SELECT policy_revision FROM folder_policy WHERE singleton=1"
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("folder policy state is missing")
+            current = int(row["policy_revision"])
+            if current != expected_revision:
+                return "stale", {}, current
+            rules = connection.execute(
+                "SELECT path,indexed FROM folder_rules ORDER BY path"
+            ).fetchall()
+            moving = {
+                item["path"]: new_prefix + item["path"][len(old_prefix):]
+                for item in rules
+                if item["path"] == old_prefix or item["path"].startswith(old_marker)
+            }
+            destinations = set(moving.values())
+            existing_destinations = {
+                item["path"] for item in rules
+                if item["path"] not in moving and item["path"] in destinations
+            }
+            if existing_destinations:
+                raise ProjectStateError("directory move conflicts with destination folder rules")
+            for source in moving:
+                connection.execute("DELETE FROM folder_rules WHERE path=?", (source,))
+            for item in rules:
+                destination = moving.get(item["path"])
+                if destination is not None:
+                    connection.execute(
+                        "INSERT INTO folder_rules(path,indexed) VALUES(?,?)",
+                        (destination, item["indexed"]),
+                    )
+            next_revision = current + 1
+            connection.execute(
+                "UPDATE folder_policy SET policy_revision=? WHERE singleton=1",
+                (next_revision,),
+            )
+            if job_id is not None:
+                connection.execute(
+                    "INSERT INTO policy_jobs(job_id,revision,state,details_json) VALUES(?,?,?,?)",
+                    (job_id, next_revision, "queued", "{}"),
+                )
+            value = dict(result)
+            value["policy_revision"] = next_revision
+            connection.execute(
+                "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) "
+                "VALUES(?,?,?,?,?,?)",
+                (owner_key, project, tool, operation_id, args_sha256,
+                 json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+            )
+            return "committed", value, next_revision
+
     def update_policy_job(self, job_id: str, state: str, details: dict) -> None:
         with self.transaction() as connection:
             cursor = connection.execute(

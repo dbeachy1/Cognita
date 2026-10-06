@@ -732,6 +732,46 @@ class LocalEngineHost(
                         expected_policy_revision=request_model.expected_policy_revision,
                         owner_key=owner_key,
                     )
+                    if not replayed:
+                        # Policy authority commits before PostgreSQL work.  A
+                        # disabled path is therefore invisible to search as soon
+                        # as this call returns even if physical cleanup cannot
+                        # run.  When the index is healthy, use the existing
+                        # targeted reconciler immediately; it deletes derived
+                        # rows under the path and re-admits only currently
+                        # eligible descendants on an enable.
+                        job_id = data["job_id"]
+                        try:
+                            service.update_folder_policy_job(job_id, "running", {})
+                            dirty_path = request_model.path or "."
+                            summary = await self.core.reconcile_paths(
+                                project.name, project.documents_dir, [dirty_path],
+                            )
+                            if summary.get("failed", 0):
+                                raise RuntimeError("derived policy reconciliation failed")
+                            terminal = "indexed" if request_model.indexed else "excluded"
+                            service.update_folder_policy_job(
+                                job_id, terminal,
+                                {"indexed": summary.get("indexed", 0),
+                                 "removed": summary.get("removed", 0)},
+                            )
+                        except Exception as exc:
+                            # Do not turn a committed source-side exclusion into
+                            # a false success about derived cleanup.  The durable
+                            # job remains pending for startup/reindex recovery.
+                            try:
+                                service.update_folder_policy_job(
+                                    job_id, "pending", {"error": type(exc).__name__},
+                                )
+                            except BookServiceError:
+                                pass
+                            return error_envelope(
+                                tool, reason="index_cleanup_pending",
+                                message=("Folder policy was committed, but derived index cleanup is "
+                                         "pending until PostgreSQL is available."),
+                                operation_outcome="committed", correlation_id=correlation_id,
+                                details={"job_id": job_id},
+                            )
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 return success_envelope(tool, data)
 
@@ -894,6 +934,15 @@ class LocalEngineHost(
         if mistyped is not None:
             log.info("Refused %s: wrong type for %s", tool, mistyped["invalid_arguments"])
             return mistyped
+        if tool == "move_document":
+            # Directory-move receipts are durable project state, so their owner
+            # must be trusted route identity rather than a client-supplied field.
+            args = dict(args)
+            args["_owner_key"] = (
+                f"principal:{trusted_principal_id}" if trusted_principal_id else
+                f"connector:{trusted_connector_id}" if trusted_connector_id else
+                "principal:local-admin"
+            )
         # 5.1: the single-writer gate belongs to the ENGINE, not to one caller of
         # it. proxy._intercept holds _worker_write_lock for every mutating call,
         # but LocalEngineHost.call_tool dispatches straight past that — the admin

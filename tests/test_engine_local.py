@@ -18,6 +18,7 @@ import httpx
 import pytest
 
 from cognita.config import CognitaConfig
+from cognita.books.schemas import ALL_ADDITIVE_TOOL_NAMES
 from cognita.editing import content_sha256
 from cognita.manifest import file_facts
 from cognita.engine_local import ENGINE_TOOL_DEFS, LocalEngineHost, make_snippet
@@ -41,6 +42,13 @@ EXPECTED_TOOLS = {
     "write_documents",  # 6.0.13 — atomic multi-document write
     "put_asset", "update_asset_metadata", "search_assets", "list_assets",
     "get_asset_info", "get_asset", "reindex_assets", "ocr_asset", "remove_asset",  # 10.1
+} | {
+    # M1 exposes the implemented inspection/prepare/read/finding subset and
+    # all three general-storage tools; later audiobook operations stay absent
+    # until their owning durable service checkpoint adds them to the catalog.
+    "audiobook_inspect_chapter", "audiobook_prepare_chapter",
+    "audiobook_get_chapter", "audiobook_find_chunk",
+    "set_folder_indexing", "list_project_files", "read_project_file",
 }
 
 
@@ -120,11 +128,15 @@ async def test_tools_list_serves_the_engine_tools(proto_host):
     # spot-check argument names carried over from 3.x
     by_name = {t["name"]: t for t in tools}
     assert set(by_name["search_knowledge"]["inputSchema"]["properties"]) == {
-        "query", "max_results", "category", "hybrid_alpha", "min_score", "snippet_mode"}
+        "query", "max_results", "category", "hybrid_alpha", "min_score", "snippet_mode",
+        "retrieval_profile"}
     assert by_name["search_knowledge"]["inputSchema"]["required"] == ["query"]
     assert set(by_name["reindex_documents"]["inputSchema"]["properties"]) == {
         "force", "full_rebuild"}
     assert by_name["move_document"]["inputSchema"]["required"] == ["filepath", "new_filepath"]
+    assert set(by_name["move_document"]["inputSchema"]["properties"]).issuperset({
+        "expected_policy_revision", "operation_id",
+    })
 
 
 async def test_unknown_project_404(proto_host):
@@ -158,8 +170,7 @@ def test_make_snippet_truncates_at_natural_break():
 
 def test_engine_tool_defs_have_no_duplicates():
     names = [t["name"] for t in ENGINE_TOOL_DEFS]
-    # Existing tools plus 10.1's guarded asset-removal operation.
-    assert len(names) == len(set(names)) == 30
+    assert len(names) == len(set(names)) == len(EXPECTED_TOOLS)
 
 
 async def test_asset_mutation_uses_project_lock_and_type_gate(tmp_path):

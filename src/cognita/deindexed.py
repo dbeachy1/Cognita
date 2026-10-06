@@ -48,6 +48,10 @@ FILENAME = "deindexed.json"
 FORMAT_VERSION = 1
 
 
+class DeindexedPathsError(RuntimeError):
+    """A durable per-file decision cannot safely be transformed."""
+
+
 class DeindexedPaths:
     """A project's de-indexed paths, persisted as JSON beside its data dir.
 
@@ -126,6 +130,40 @@ class DeindexedPaths:
         current.discard(source)
         self._save()
         return True
+
+    def rebase_prefix(self, old_prefix: str, new_prefix: str) -> int:
+        """Move explicit per-file decisions with an already-authorized directory.
+
+        The caller has resolved and pinned the directory rename.  This operation
+        deliberately changes only exact ``old_prefix`` descendants; unrelated
+        decisions remain byte-for-byte equivalent in the persisted set.  A
+        malformed legacy file is a hard stop because accepting its historical
+        empty fallback would silently re-admit files during a directory move.
+        """
+        current = self.paths()
+        if self.load_error is not None:
+            raise DeindexedPathsError("per-file exclusion state is unreadable")
+        old_prefix = old_prefix.rstrip("/")
+        new_prefix = new_prefix.rstrip("/")
+        if not old_prefix or not new_prefix:
+            raise ValueError("directory prefixes must be nonempty")
+        old_marker = old_prefix + "/"
+        rebased: dict[str, str] = {
+            source: new_prefix + source[len(old_prefix):]
+            for source in current
+            if source == old_prefix or source.startswith(old_marker)
+        }
+        if not rebased:
+            return 0
+        unaffected = current.difference(rebased)
+        collisions = sorted(set(rebased.values()).intersection(unaffected))
+        if collisions:
+            raise DeindexedPathsError(
+                "directory move would overwrite existing per-file exclusions"
+            )
+        self._paths = unaffected.union(rebased.values())
+        self._save()
+        return len(rebased)
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

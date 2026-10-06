@@ -2139,6 +2139,14 @@ async def _intercept(
         if bad_id is not None:
             return _tool_result(msg_id, bad_id)
         request_digest = operation_request_digest(message)
+        # A directory move carries its receipt in source-side ProjectState.  The
+        # source may already be gone on a retry, so classification is based on
+        # its required policy CAS argument rather than a fresh ``is_dir`` check.
+        # It must bypass the gateway's file backup/replay cache entirely.
+        directory_move = (
+            tool == "move_document"
+            and "expected_policy_revision" in _arguments_of(message)
+        )
         # SINGLE-WRITER GATE (3.0): hold the per-worker write lock for the whole
         # (synchronous) write so no two mutating calls to this project's worker
         # overlap — the engine leaves its add/update/remove paths unlocked, so
@@ -2154,7 +2162,7 @@ async def _intercept(
                 )
                 return _tool_error(msg_id, reason, message)
 
-            if (operation_id is not None and tool not in ASSET_MUTATING_TOOLS
+            if (operation_id is not None and not directory_move and tool not in ASSET_MUTATING_TOOLS
                     and tool not in ALL_ADDITIVE_MUTATING_TOOLS):
                 # Check after acquiring the project lock as well as the policy
                 # authorization above. Two simultaneous retries must not both
@@ -2198,7 +2206,7 @@ async def _intercept(
                         client, request, worker_url, message, documents_dir,
                         backup_keep,
                     ), msg_id, request_digest)
-            if tool in _BACKUP_TOOLS and documents_dir is not None:
+            if tool in _BACKUP_TOOLS and not directory_move and documents_dir is not None:
                 return _remember_operation(connector_id, project_name, tool, operation_id,
                     await _handle_engine_write(
                         client, request, worker_url, message, documents_dir, backup_keep,
@@ -2220,7 +2228,7 @@ async def _intercept(
             # project's FULL-synchronous state database. The process-local
             # gateway cache must not strip their operation_id or shadow that
             # durable authority.
-            if tool in ALL_ADDITIVE_MUTATING_TOOLS:
+            if tool in ALL_ADDITIVE_MUTATING_TOOLS or directory_move:
                 return _rewrite_buffered_response(forwarded)
             return _remember_operation(connector_id, project_name, tool, operation_id,
                                        forwarded, msg_id, request_digest)

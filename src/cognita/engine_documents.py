@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
+import uuid
 from pathlib import Path
 from .backups import (
     BACKUPS_DIRNAME,
@@ -33,6 +35,8 @@ from .parsing import (
 )
 from .registry import Project
 from .books.policy import MutationDecision
+from .books.state import ProjectState, ProjectStateError
+from .deindexed import DeindexedPathsError
 from .toolargs import wire_error
 from .engine_contract import MAX_BATCH_DOCUMENTS, MAX_CONTENT_BYTES, MAX_PLURAL_PATHS, _collection, log
 
@@ -1273,6 +1277,8 @@ class EngineDocumentOperations:
         if new_t is None:
             return {"status": "error", "reason": "invalid_path",
                     "message": f"new_filepath resolves outside this project: {new_fp!r}"}
+        if old_t.is_dir() or "expected_policy_revision" in args:
+            return await self._move_directory(project, args, old_t, new_t)
         source_mutation, _ = self._book_mutation_decision(
             project, old_t, operation="move", source_exists=old_t.is_file(),
         )
@@ -1317,3 +1323,205 @@ class EngineDocumentOperations:
                 "old_filepath": old_rel, "new_filepath": new_rel, "filepath": new_rel,
                 "old_source": str(old_t), "new_source": str(new_t), "source": str(new_t),
                 "doc_id": doc_id, "chunks_moved": chunks_moved}
+
+    def _book_directory_move_error(
+        self, project: Project, old_rel: str, new_rel: str,
+    ) -> dict | None:
+        """General directory moves must never relocate registered book authority."""
+        snapshot_provider = getattr(self, "book_config_snapshot_for", None)
+        if snapshot_provider is None:
+            return None
+        snapshot = snapshot_provider(project)
+        layout = getattr(snapshot, "layout", None)
+        if layout is None:
+            return None
+        protected: list[str] = []
+        if layout.source_master_filepath:
+            protected.append(layout.source_master_filepath)
+        protected.extend((
+            layout.shared_paths.production_settings_filepath,
+            layout.shared_paths.book_audio_root,
+        ))
+        for chapter in layout.chapters:
+            protected.extend((
+                chapter.chapter_state_filepath, chapter.working_filepath,
+                chapter.tagged_filepath, chapter.originals_root, chapter.audio_root,
+            ))
+            if chapter.summary_filepath:
+                protected.append(chapter.summary_filepath)
+        protected.extend(item.filepath for item in layout.indexed_references)
+        protected.extend(item.filepath for item in layout.indexed_instructions)
+        protected.extend(item.filepath for item in layout.indexed_workflow_documents)
+        old_folded, new_folded = old_rel.casefold(), new_rel.casefold()
+        for path in protected:
+            folded = path.casefold()
+            if (folded == old_folded or folded.startswith(old_folded + "/")
+                    or folded == new_folded or folded.startswith(new_folded + "/")):
+                return {
+                    "status": "error", "reason": "protected",
+                    "message": "General directory moves cannot relocate registered book paths.",
+                    "filepath": old_rel,
+                }
+        return None
+
+    async def _move_directory(
+        self, project: Project, args: dict, old_t: Path, new_t: Path,
+    ) -> dict:
+        """Atomically rename one ordinary project directory and carry policy facts.
+
+        File moves retain their legacy contract.  This branch is deliberately
+        selected before file-only admission and backup work: a directory has no
+        single source snapshot, and policy receipt replay must remain possible
+        once its old path has disappeared.
+        """
+        expected = args.get("expected_policy_revision")
+        operation_id = args.get("operation_id")
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            return {"status": "error", "reason": "invalid",
+                    "message": "expected_policy_revision is required for a directory move."}
+        if not isinstance(operation_id, str) or not operation_id:
+            return {"status": "error", "reason": "invalid",
+                    "message": "operation_id is required for a directory move."}
+        docs = Path(project.documents_dir).resolve()
+        old_rel, new_rel = self._rel(project, old_t), self._rel(project, new_t)
+        owner_key = str(args.get("_owner_key") or "principal:local-admin")
+        operation_args = {
+            "filepath": old_rel, "new_filepath": new_rel,
+            "expected_policy_revision": expected,
+        }
+        args_sha256 = hashlib.sha256(
+            json.dumps(operation_args, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        # Replay is deliberately checked before source/destination existence.
+        # A completed directory rename makes the old source disappear and the
+        # new destination appear, neither of which may turn a retry into an
+        # ordinary not-found/destination-exists result.
+        try:
+            prior_state = self.project_state_for(project)
+            if prior_state is not None:
+                receipt = prior_state.receipt(
+                    owner_key=owner_key, project=project.name, tool="move_document",
+                    operation_id=operation_id,
+                )
+                if receipt is not None:
+                    if receipt[0] != args_sha256:
+                        return {"status": "error", "reason": "operation_id_conflict",
+                                "message": "operation_id was already used for different move content."}
+                    return receipt[1]
+        except ProjectStateError:
+            return {"status": "error", "reason": "state_unavailable",
+                    "message": "Folder policy state is unavailable; directory move was not started."}
+        if old_t == new_t:
+            return {"status": "error", "reason": "same_path",
+                    "message": "filepath and new_filepath are the same"}
+        if new_t.is_relative_to(old_t):
+            return {"status": "error", "reason": "invalid",
+                    "message": "A directory cannot be moved inside itself."}
+        for rejected in (self._reject_backups_write(project, old_t),
+                         self._reject_backups_write(project, new_t)):
+            if rejected is not None:
+                return rejected
+        if old_t.is_symlink() or new_t.is_symlink():
+            return {"status": "error", "reason": "invalid_path",
+                    "message": "Directory moves do not permit linked roots."}
+        if new_t.exists():
+            return {"status": "error", "reason": "destination_exists",
+                    "message": f"destination already exists: {new_rel}"}
+        if refused := self._book_directory_move_error(project, old_rel, new_rel):
+            return refused
+        try:
+            for child in old_t.rglob("*"):
+                if child.is_symlink():
+                    return {"status": "error", "reason": "invalid_path",
+                            "message": "Directory moves do not permit linked descendants."}
+        except OSError:
+            return {"status": "error", "reason": "source_unavailable",
+                    "message": "Directory contents could not be verified before the move."}
+
+        job_id = str(uuid.uuid4())
+        if not old_t.is_dir():
+            return {"status": "error", "reason": "not_found",
+                    "message": f"Directory not found: {old_rel}"}
+        async with self.core.write_lock(project.name):
+            try:
+                state = self.project_state_for(project) or ProjectState.initialize(docs)
+                legacy = self.deindexed(project)
+                legacy.paths()
+                if legacy.load_error is not None:
+                    return {"status": "error", "reason": "state_unavailable",
+                            "message": "Per-file exclusion state is damaged; directory move was not started."}
+                policy = state.folder_policy()
+            except ProjectStateError:
+                return {"status": "error", "reason": "state_unavailable",
+                        "message": "Folder policy state is unavailable; directory move was not started."}
+
+            receipt = state.receipt(
+                owner_key=owner_key, project=project.name, tool="move_document",
+                operation_id=operation_id,
+            )
+            if receipt is not None:
+                if receipt[0] != args_sha256:
+                    return {"status": "error", "reason": "operation_id_conflict",
+                            "message": "operation_id was already used for different move content."}
+                return receipt[1]
+            if policy.policy_revision != expected:
+                return {"status": "error", "reason": "stale_policy_revision",
+                        "message": "Folder policy changed; read it and retry.",
+                        "policy_revision": policy.policy_revision}
+            old_marker = old_rel + "/"
+            moved_rules = {
+                path: new_rel + path[len(old_rel):]
+                for path, _indexed in policy.rules
+                if path == old_rel or path.startswith(old_marker)
+            }
+            if any(path not in moved_rules and path in set(moved_rules.values())
+                   for path, _indexed in policy.rules):
+                return {"status": "error", "reason": "policy_conflict",
+                        "message": "Destination already has an explicit folder policy rule."}
+            try:
+                legacy.rebase_prefix(old_rel, new_rel)
+            except DeindexedPathsError as exc:
+                return {"status": "error", "reason": "policy_conflict", "message": str(exc)}
+            # Same-filesystem os.replace supplies the only supported byte move.
+            # State updates immediately follow while the project write lock blocks
+            # watcher publication.  If either durable publication step fails,
+            # revert only the directory identity and per-file paths this call
+            # owns; never overwrite an external replacement.
+            try:
+                new_t.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(os.replace, str(old_t), str(new_t))
+                result = {
+                    "status": "success", "filepath": old_rel,
+                    "new_filepath": new_rel, "kind": "directory",
+                    "policy_revision": expected + 1,
+                    "indexing": {"state": "pending", "job_id": job_id},
+                }
+                disposition, saved, _revision = state.rebase_folder_rules(
+                    old_rel, new_rel, expected, owner_key=owner_key,
+                    project=project.name, tool="move_document", operation_id=operation_id,
+                    args_sha256=args_sha256, result=result, job_id=job_id,
+                )
+                if disposition != "committed":
+                    raise ProjectStateError(f"unexpected directory move state: {disposition}")
+            except (OSError, ProjectStateError) as exc:
+                restored = False
+                try:
+                    if new_t.is_dir() and not old_t.exists():
+                        await asyncio.to_thread(os.replace, str(new_t), str(old_t))
+                        legacy.rebase_prefix(new_rel, old_rel)
+                        restored = True
+                except (OSError, DeindexedPathsError):
+                    restored = False
+                return {"status": "error", "reason": "state_unavailable",
+                        "message": ("Directory move was rolled back after durable policy publication failed."
+                                    if restored else
+                                    "Directory move outcome is unknown after durable policy publication failed; reconciliation is required."),
+                        "details": {"error": type(exc).__name__, "rolled_back": restored}}
+
+        # The scheduled full reconciliation removes old derived rows and indexes
+        # only paths currently admitted at the destination.  Pending is truthful
+        # until that existing background route has run.
+        started = self.start_background_reindex(project, "incremental")
+        if not started:
+            state.update_policy_job(job_id, "pending", {"reason": "reindex_already_running"})
+        return saved

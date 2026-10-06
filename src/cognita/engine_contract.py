@@ -405,10 +405,15 @@ ENGINE_TOOL_DEFS: list[dict] = [
         "on disk and updates the index in place (content is unchanged, so it is not "
         "re-embedded). The source is backed up first and the result's "
         "previous_backup_id names that backup. Refuses if new_filepath already "
-        "exists. A rename is a move whose new name is in the same folder.",
+        "exists. A rename is a move whose new name is in the same folder. An authorized "
+        "directory move additionally requires operation_id and expected_policy_revision; it "
+        "preserves explicit folder and per-file exclusion decisions.",
         {
             "filepath": {"type": "string", "description": "Current path of the indexed document"},
             "new_filepath": {"type": "string", "description": "Destination path (relative; parent dirs are created)"},
+            "operation_id": {"type": "string", "description": "Required idempotency key for directory moves"},
+            "expected_policy_revision": {"type": "integer", "minimum": 0,
+                                         "description": "Required current policy revision for directory moves"},
         },
         ["filepath", "new_filepath"],
     ),

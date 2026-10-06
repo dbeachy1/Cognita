@@ -81,6 +81,50 @@ def test_stale_policy_revision_does_not_change_rule_or_consume_receipt(tmp_path)
     ) is None
 
 
+def test_folder_rule_rebase_preserves_explicit_children_and_replays_before_cas(tmp_path):
+    state = ProjectState.initialize(tmp_path)
+    for path, indexed, revision in (
+        ("source", False, 0),
+        ("source/selected", True, 1),
+        ("outside", False, 2),
+    ):
+        assert state.set_folder_rule(
+            path, indexed, revision, owner_key="owner", project="fixture",
+            tool="set_folder_indexing", operation_id=f"rule-{revision}",
+            args_sha256=(str(revision) * 64)[:64], result={"path": path},
+        )[0] == "committed"
+    kwargs = dict(
+        owner_key="owner", project="fixture", tool="move_document",
+        operation_id="move-source", args_sha256="a" * 64,
+        result={"filepath": "archive/source", "kind": "directory"},
+    )
+    first = state.rebase_folder_rules("source", "archive/source", 3, **kwargs)
+    replay = state.rebase_folder_rules("source", "archive/source", 3, **kwargs)
+
+    assert first[0] == "committed" and first[2] == 4
+    assert replay == ("replay", first[1], -1)
+    assert state.folder_policy().rules == (
+        ("archive/source", False), ("archive/source/selected", True), ("outside", False),
+    )
+
+
+def test_folder_rule_rebase_rejects_destination_policy_collision_without_mutation(tmp_path):
+    state = ProjectState.initialize(tmp_path)
+    for path, revision in (("source", 0), ("archive/source", 1)):
+        assert state.set_folder_rule(
+            path, False, revision, owner_key="owner", project="fixture",
+            tool="set_folder_indexing", operation_id=f"rule-{revision}",
+            args_sha256=(str(revision) * 64)[:64], result={"path": path},
+        )[0] == "committed"
+    with pytest.raises(ProjectStateError, match="conflicts"):
+        state.rebase_folder_rules(
+            "source", "archive/source", 2, owner_key="owner", project="fixture",
+            tool="move_document", operation_id="move", args_sha256="a" * 64, result={},
+        )
+    assert state.folder_policy().policy_revision == 2
+    assert state.folder_policy().rules == (("archive/source", False), ("source", False))
+
+
 def test_existing_state_evidence_with_missing_database_fails_closed(tmp_path):
     root = tmp_path / STATE_DIRECTORY
     root.mkdir()
