@@ -1,0 +1,74 @@
+# Audiobook MCP
+
+This page describes the Cognita book and audiobook workflow exposed through the combined MCP connector. Requests and results use strict versioned schemas. Cognita owns durable project-side source snapshots, media facts, jobs, and accepted build references; the assistant owns editorial choices, provider interaction, and listening judgment.
+
+## Tool surface
+
+The audiobook tools cover `audiobook_inspect_chapter`, `audiobook_prepare_chapter`, `audiobook_get_chapter`, `audiobook_find_chunk`, `audiobook_record_generation`, `audiobook_import_audio`, `audiobook_build`, `audiobook_commit_build`, `audiobook_get_job`, `audiobook_cancel_job`, `book_get_index_status`, `audiobook_get_generations`, and `audiobook_get_book`. Inspection and reads do not mutate the book. Preparation, evidence updates, imports, builds, cancellation, and commits are explicit operations with source or revision guards. Project inventory and exact byte access use `list_project_files` and `read_project_file`; folder policy uses `set_folder_indexing` (see [File storage](FILE-STORAGE.md)).
+
+The generated strict JSON Schemas packaged at `cognita.books.schemas/book-tool-schemas.json` are normative. The table identifies the required top-level request fields and the required fields in a successful result's `data`; nested fields, enums, nullability, and bounds come from that generated schema. Every success envelope has `status: "success"`, `replayed`, and `data`; each mutating success also has `operation_id`. Every error envelope has `status: "error"`, `reason`, `message`, `operation_outcome`, and `correlation_id`.
+
+| Tool | Required request fields | Required success `data` fields |
+| --- | --- | --- |
+| `audiobook_inspect_chapter` | `project`, `chapter_id`, `prose_filepath`, `tagged_filepath` | `document_view_id`, prose/tagged/projection/speech hashes, bounded text/paragraph/exclusion maps, warnings, cursor |
+| `audiobook_prepare_chapter` | `project`, `operation_id`, `chapter_id`, `document_view_id`, prose/tagged/manifest guards, `scope`, `speech_selection_confirmed`, limit/settings/target, `chunks`, bookmark-publication flag | snapshot/manifest and projection hashes, plan, paths, chunk/coverage facts, retired IDs, stale-output status |
+| `audiobook_get_chapter` | `project`, `chapter_id` | chapter namespace/revisions, snapshot and accepted-build facts, source status, chunks/takes/text pages, cursor |
+| `audiobook_find_chunk` | `project`, `query` | `matches`, `ambiguous`, `searched_version`, cursor |
+| `audiobook_record_generation` | `project`, `operation_id`, `change` | generation record |
+| `audiobook_import_audio` | `project`, `operation_id`, `generation_record_id`, `expected_generation_revision`, `source`, `provenance` | `job_id`, job revision/state/poll interval, pinned-input hash |
+| `audiobook_build` | `project`, `operation_id`, `expected_head_revision`, `input`, `mode`, `outputs`, `gaps`, `metadata` | `job_id`, job revision/state/poll interval, pinned-input hash |
+| `audiobook_commit_build` | `project`, `operation_id`, `build_id`, `expected_head_revision`, `intent`, `acceptance` | accepted/previous build and head facts, exports, dependency/staleness facts, rollback availability |
+| `audiobook_get_job` | `project`, `job_id` | job/revision/state/phase/progress/poll interval, result or error |
+| `audiobook_cancel_job` | `project`, `operation_id`, `job_id`, `expected_job_revision` | job/revision/state |
+| `book_get_index_status` | `project` | `policy_revision`, `catalog_revision`, `entries`, cursor |
+| `audiobook_get_generations` | `project`, `query` | generation records, recovered prompts, cursor |
+| `audiobook_get_book` | `project`, `book_id` | layout/head/build and dependency facts, chapter order/readiness, exports, cursor |
+
+The companion storage schemas require `project` and a project-relative path for `list_project_files` and `read_project_file`; `set_folder_indexing` additionally requires `indexed`, `operation_id`, and `expected_policy_revision`. They return bounded pages or exact byte-range facts as described in [File storage](FILE-STORAGE.md).
+
+## Prepare a view
+
+Register the exact chapter working and tagged paths in `Project Files/Book_Layout.json`. `audiobook_inspect_chapter` reads those registered DOCX files and returns raw-byte SHA-256 values, projection hashes, a pinned `document_view_id`, paragraph metadata, and a bounded slice of the exact speech text. Follow `next_cursor` until `has_more` is false before deciding selections and boundaries. A saved Word document is a new source revision: inspect again and use the new view and hashes.
+
+M1 accepts ordinary body paragraphs and ordinary run text, tabs, and explicit line breaks. It reports unsupported potentially spoken structures with their part and exact XML location instead of silently dropping them. Headers and footers are reported separately and excluded. Tables, text boxes/drawings, fields, tracked revisions, footnotes/endnotes, and other unsupported spoken structures must be resolved in Word before using the affected source. Malformed bookmark pairs are errors. A DOCX open/lock condition is reported separately from a missing file.
+
+Only an explicit `CognitaAudioTag` paragraph/run style or caller-provided, hash-checked tag spans identify added speech directions. The implementation does not infer tags from square brackets, text color, highlighting, or editorial appearance. Removing exactly the identified spans must reproduce the corresponding prose paragraph; mismatches block preparation. Literal brackets and green prose remain source text unless a caller explicitly identifies a span. Two selected paragraphs join with exactly two LF characters; omitted paragraphs remain omitted, with explicit exclusion reasons and segmented source mappings.
+
+All text coordinates and lengths are Unicode code points (Python string indices), with half-open `[start, end)` ranges. UTF-16 request-limit units count UTF-16 code units; they do not change the coordinates. Hashes use the exact UTF-8 text bytes. The assistant supplies every ordered, nonempty chunk range, each chunk ID, request limit, and optional actual `RequestSpec`; Cognita never chooses boundaries, rewrites wording, normalizes Unicode, or automatically rechunks. Boundaries must be valid Unicode grapheme boundaries and cannot split a tag span or the two-LF paragraph separator. Chunk ranges must cover selected speech exactly once, within the declared limit. For a chunk whose range crosses an excluded paragraph, the stored source map remains segmented; a Word bookmark is only a navigation aid.
+
+The frozen view binds source bytes and projection policy. Prepare checks the view, raw hashes, selected speech, range coverage, namespace and expected manifest revision again. Stale inputs require a fresh inspect. Preparation stores immutable prose/tagged snapshot bytes and the exact projection/source map. The `publish_bookmarks_to_working_tagged_docx` flag is explicit; when bookmark publication is requested, the working tagged file is updated under its source guard and backup path. It is never an implicit repair of missing or ambiguous bookmarks. Historical snapshots remain readable independently of later Word edits.
+
+## Scope and approvals
+
+A test scope names an active, unrevoked test authorization bound to a chapter, the exact prose/tagged source paths and source hash, an expiry, and allowed paragraph ordinals. It is suitable for the authorized excerpt only. It does not approve prose for production.
+
+Production preparation is separate. It requires the completed-book production authorization, current chapter approval bound to the original prose hash and prose-projection hash, and current settings hash/target. A production target or request limit must agree with validated settings. A formatting-only save can be compared through the deterministic prose projection; changed prose invalidates approval. Test and production namespaces and revisions are independent. Write access is still checked by Cognita's existing project/connector gateway; a document approval is not a substitute for connector permission.
+
+## Read, locate, and retry
+
+`audiobook_get_chapter` reads the current prepared snapshot by default, or a named historical snapshot in its namespace. It returns bounded metadata and exact frozen prompts/spoken text through version-pinned pages, never silently truncating a field. `audiobook_get_generations` recovers pending and completed generation records and, when requested, their frozen prompts; it never resubmits work. `audiobook_find_chunk` searches literal quotes in a frozen spoken projection or a specific immutable build timeline and returns every occurrence with version context. Resolve ambiguous matches with the author; do not guess a location or repair a missing bookmark.
+
+Mutations take a caller operation ID and expected revision. A successful prepare replay with the same trusted owner, tool, operation ID, and canonical arguments returns its durable receipt before new staleness checks. Reusing that ID with different arguments returns `operation_id_conflict`. A timeout or missing response is not evidence that a write failed: retry the same operation and arguments or read its result. The mutation envelope distinguishes `not_applied`, `committed`, and `outcome_unknown`; never repeat a paid generation to resolve uncertainty. Request fingerprints in the full generation contract use RFC 8785 over the exact prompt hash and actual supplied `RequestSpec`, preserving omitted fields versus explicit defaults. Credentials, transport headers, URLs, and provider response IDs are not request-fingerprint inputs.
+
+## Generation and audio stages in the target workflow
+
+The intended caller sequence is: inspect every view page; choose speech and chunks; prepare; retrieve exact frozen prompts; submit each request through the separately authorized provider workflow; record the returned provider evidence; import each result; build a candidate; listen; then explicitly commit or retain the previous accepted build. Whole-book builds use explicit accepted chapter dependencies and layout order. The assistant, not Cognita, owns provider calls and listening judgment. No tool silently submits TTS or retries an unknown paid outcome.
+
+The generation, import, build, and commit sequence follows these rules:
+
+- Imports pin an authorized project/workspace/HTTPS source and expected bytes hash. Headered media is inspected. Headerless PCM requires an explicit supported `RawFormat` and provider format evidence, complete sample frames, and finite float samples. Native bytes remain the source of truth; decoded lossy audio cannot become a native master.
+- Production assembly uses compatible native PCM only, with no implicit rate/channel/bit-depth conversion, gain, trimming, or crossfade. Explicit gaps are whole sample frames. RF64 is required when a supported single master exceeds RIFF limits. Production encodes one continuous chapter/book MP3 from the PCM master at the configured bitrate; it does not concatenate chapter MP3s. The chapter-only `test_mp3_stream_copy` mode preserves compatible encoded packets and checks decoder/duration boundaries separately; it is lossy test output and never a native/lossless master.
+- A build is a candidate. Automated hashes, coverage, sample/packet checks, and decoder checks do not establish pronunciation or seam quality. The caller records an asserted reviewer, time, notes, and `passed` or an explicit listening waiver at commit; authenticated identity is recorded separately. Commit rechecks current raw source, settings, authorization, head, and chapter dependencies. A failed or stale candidate leaves the previously accepted head intact. Rollback selects an archived same-approved-prose build without editing the working DOCX; historical facts stay immutable.
+- Durable import/build jobs report truthful queued/running/terminal state, cancellation revision, and errors. Polling never resubmits TTS. An interrupted paid-provider request with no trustworthy outcome remains `outcome_unknown`; resolve it only with provider evidence.
+
+The public contract includes bounded result envelopes and stable error reasons such as `unsupported_docx_structure`, `source_text_mismatch`, `tag_metadata_incomplete`, `invalid_range`, `coverage_gap`, `coverage_overlap`, `request_too_long`, `stale_file`, `stale_manifest`, `operation_id_conflict`, `media_invalid`, `media_mismatch`, and `stale_dependency`. Error text is diagnostic, not authorization to mutate or retry a paid action.
+
+## Backups and connector schema
+
+Ordinary Cognita file backups cover individual files changed through supported document write tools. They are not a full audiobook backup, and a PostgreSQL index dump does not contain binary media. The release backup/restore procedure must take a quiesced, project-scoped copy of the layout/configuration, working sources, originals, immutable snapshots, native chunks, builds, and SQLite state/receipts; use SQLite's backup API for consistent metadata and verify a manifest of file hashes before activation. Rebuild only registered knowledge-index content after restore. Never remove old accepted media automatically. The scoped media backup/restore path and a representative actual media restore must be verified before production; do not infer external backup coverage.
+
+The complete audiobook catalog is part of combined MCP contract v6. When the v6 release is installed, recreate the affected combined Cognita connector in its client (for example, the ChatGPT or Claude connector) so it fetches the new tool catalog and schemas. Restarting Cognita does not invalidate a client's cached catalog. The Workspace-only connector contract remains separate. Verify the recreated client catalog before relying on new tools; a server-side tool list alone is not client-visible verification.
+
+## Offline example
+
+Run [`synthetic_m1_walkthrough.py`](../examples/audiobook/synthetic_m1_walkthrough.py) from the repository root with the service dependencies installed. It creates a synthetic prose/tagged DOCX pair and temporary approval/settings records, explicitly tags a phrase, prepares one chunk, restarts the service object, replays the same operation receipt, reads the snapshot, locates a literal quote, and inspects a silent synthetic WAV's PCM facts. It deliberately exercises the local preparation/read path only: it makes no network or provider calls and does not import audio. All fixture records live under a temporary project that is removed on exit; they do not authorize or alter a real book.
