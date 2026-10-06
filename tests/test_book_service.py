@@ -4141,26 +4141,58 @@ def test_owned_build_cleanup_preserves_unexpected_files_and_refuses_replaced_dir
     known.write_bytes(b"known")
     unexpected.write_bytes(b"preserve")
     identity = service_module._owned_directory_identity(build_dir)
-    with caplog.at_level("ERROR", logger="cognita.books"):
-        service_module._cleanup_owned_build_files(
-            tmp_path, build_dir, identity, ("master.pcm",),
-        )
-    assert not known.exists()
-    assert unexpected.read_bytes() == b"preserve"
-    assert "Owned build cleanup incomplete" in caplog.text
-    assert str(unexpected) in caplog.text
+    try:
+        with caplog.at_level("ERROR", logger="cognita.books"):
+            service_module._cleanup_owned_build_files(
+                tmp_path, build_dir, identity, ("master.pcm",),
+            )
+        assert not known.exists()
+        assert unexpected.read_bytes() == b"preserve"
+        assert "Owned build cleanup incomplete" in caplog.text
+        assert str(unexpected) in caplog.text
 
-    unexpected.unlink()
-    build_dir.rmdir()
+        unexpected.unlink()
+        build_dir.rmdir()
+        build_dir.mkdir()
+        replacement = build_dir / "master.pcm"
+        replacement.write_bytes(b"replacement")
+        with caplog.at_level("ERROR", logger="cognita.books"):
+            service_module._cleanup_owned_build_files(
+                tmp_path, build_dir, identity, ("master.pcm",),
+            )
+        assert replacement.read_bytes() == b"replacement"
+        assert "Owned build cleanup refused" in caplog.text
+    finally:
+        identity.close()
+
+
+@pytest.mark.parametrize("fail_build", [False, True])
+def test_build_job_closes_owned_directory_identity_on_exit(tmp_path, monkeypatch, fail_build):
+    build_dir = tmp_path / "owned-build"
     build_dir.mkdir()
-    replacement = build_dir / "master.pcm"
-    replacement.write_bytes(b"replacement")
-    with caplog.at_level("ERROR", logger="cognita.books"):
-        service_module._cleanup_owned_build_files(
-            tmp_path, build_dir, identity, ("master.pcm",),
-        )
-    assert replacement.read_bytes() == b"replacement"
-    assert "Owned build cleanup refused" in caplog.text
+    finish_calls = []
+    state = SimpleNamespace(
+        claim_build_job=lambda job_id: {"payload": {"scope": "book"}},
+        finish_build_failure=lambda **kwargs: finish_calls.append(kwargs),
+    )
+    service = BookService.__new__(BookService)
+    service._active_build_jobs = set()
+    monkeypatch.setattr(service, "_state_required", lambda: state)
+    identities = []
+
+    def run_book_build(job_id, pinned, *, before_finalize, after_finalize, owned_directories):
+        identity = service_module._owned_directory_identity(build_dir)
+        identities.append(identity)
+        owned_directories.append(identity)
+        if fail_build:
+            raise BookServiceError("job_failed", "fixture failure")
+
+    monkeypatch.setattr(service, "_run_book_build", run_book_build)
+    service.run_build_job("job")
+
+    assert len(identities) == 1
+    assert identities[0].handle == -1
+    assert bool(finish_calls) is fail_build
 
 
 def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):

@@ -17,7 +17,7 @@ import shutil
 import stat
 import uuid
 from urllib.parse import parse_qsl, urlsplit
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -63,6 +63,41 @@ class BookServiceError(ValueError):
         super().__init__(message)
         self.reason = reason
         self.outcome = outcome
+
+
+@dataclass(slots=True)
+class _OwnedDirectoryIdentity:
+    """Keep the directory object alive so its filesystem ID cannot be recycled."""
+
+    resolved_path: Path
+    file_identity: tuple[int, int]
+    handle: int
+    windows_handle: bool
+
+    def matches(self, directory: Path) -> bool:
+        if self.windows_handle:
+            handle, file_identity = _open_windows_directory_identity(directory)
+            _close_windows_handle(handle)
+        else:
+            handle = os.open(
+                directory,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                facts = os.fstat(handle)
+                file_identity = facts.st_dev, facts.st_ino
+            finally:
+                os.close(handle)
+        return file_identity == self.file_identity
+
+    def close(self) -> None:
+        if self.handle == -1:
+            return
+        handle, self.handle = self.handle, -1
+        if self.windows_handle:
+            _close_windows_handle(handle)
+        else:
+            os.close(handle)
 
 
 def _provider_fact_key(value: str) -> str:
@@ -4042,7 +4077,8 @@ class BookService:
 
     def _run_test_mp3_build(self, job_id: str, pinned: dict[str, Any], *,
                             before_finalize: Callable[[], None] | None = None,
-                            after_finalize: Callable[[], None] | None = None) -> None:
+                            after_finalize: Callable[[], None] | None = None,
+                            owned_directories: list[_OwnedDirectoryIdentity]) -> None:
         """Copy verified MP3 packets in frozen chunk order; never decode to a master."""
         state = self._state_required()
         _, _, layout = self._enabled_layout()
@@ -4068,6 +4104,7 @@ class BookService:
         _mkdir_safe(self.root, relative)
         directory = _path(self.root, relative)
         directory_identity = _owned_directory_identity(directory)
+        owned_directories.append(directory_identity)
         manifest, output = directory / "inputs.ffconcat", directory / "listening.mp3"
         write_ffconcat_manifest([source.filepath for source in sources], manifest)
         stream_copy_argv = build_test_mp3_stream_copy_argv(
@@ -4157,14 +4194,21 @@ class BookService:
         if claimed is None:
             return
         self._active_build_jobs.add(job_id)
-        staged: list[Path] = []
+        staged: list[tuple[Path, _OwnedDirectoryIdentity]] = []
+        owned_directories: list[_OwnedDirectoryIdentity] = []
         try:
             pinned = claimed["payload"]
             if pinned.get("scope") == "book":
-                self._run_book_build(job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize)
+                self._run_book_build(
+                    job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize,
+                    owned_directories=owned_directories,
+                )
                 return
             if pinned.get("mode") == "test_mp3_stream_copy":
-                self._run_test_mp3_build(job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize)
+                self._run_test_mp3_build(
+                    job_id, pinned, before_finalize=before_finalize, after_finalize=after_finalize,
+                    owned_directories=owned_directories,
+                )
                 return
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
@@ -4194,11 +4238,12 @@ class BookService:
             _mkdir_safe(self.root, build_relative)
             build_dir = _path(self.root, build_relative)
             build_directory_identity = _owned_directory_identity(build_dir)
+            owned_directories.append(build_directory_identity)
             pcm = build_dir / "master.pcm"
             pcm_stage = build_dir / "master.pcm.part"
             timeline = build_dir / "timeline.json"
             timeline_stage = build_dir / "timeline.json.part"
-            staged.extend([pcm_stage, timeline_stage])
+            staged.extend([(pcm_stage, build_directory_identity), (timeline_stage, build_directory_identity)])
             with pcm_stage.open("xb") as output:
                 assembled = assemble_pcm_stream(sources, gaps, target, output)
                 output.flush()
@@ -4308,8 +4353,9 @@ class BookService:
                                        message=str(exc) if isinstance(exc, (BookServiceError, MediaValidationError, AssemblyError, ProcessRunnerError, ProjectStateError)) else "The local build could not complete safely.",
                                        cancelled=reason == "cancelled")
         finally:
-            for path in staged:
-                path.unlink(missing_ok=True)
+            for path, identity in staged:
+                _unlink_owned_build_stage(path, identity)
+            _close_owned_directory_identities(owned_directories)
             self._active_build_jobs.discard(job_id)
 
     def _registered_media_executables(self) -> tuple[Path, Path]:
@@ -4328,7 +4374,8 @@ class BookService:
 
     def _run_book_build(self, job_id: str, pinned: dict[str, Any], *,
                         before_finalize: Callable[[], None] | None = None,
-                        after_finalize: Callable[[], None] | None = None) -> None:
+                        after_finalize: Callable[[], None] | None = None,
+                        owned_directories: list[_OwnedDirectoryIdentity]) -> None:
         """Assemble one continuous book candidate from pinned chapter heads."""
         state, _, layout = self._enabled_layout()
         target = dto.ProductionTarget.model_validate(pinned["target"], strict=True)
@@ -4368,6 +4415,7 @@ class BookService:
         _mkdir_safe(self.root, root_relative)
         build_dir = _path(self.root, root_relative)
         build_directory_identity = _owned_directory_identity(build_dir)
+        owned_directories.append(build_directory_identity)
         pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
         timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
         with pcm_stage.open("xb") as output:
@@ -4822,25 +4870,140 @@ def _mkdir_safe(root: Path, relative: str) -> None:
             raise BookServiceError("permission_denied", "Managed snapshot directories cannot contain links.")
 
 
-def _owned_directory_identity(directory: Path) -> tuple[Path, int, int]:
-    """Capture the exact directory that this job created for later cleanup."""
+def _windows_directory_file_identity(handle: int) -> tuple[int, int]:
+    """Return the volume serial and 128-bit file ID for an open Win32 handle."""
+    import ctypes
+    from ctypes import wintypes
+
+    class FileIdInfo(ctypes.Structure):
+        _fields_ = [("volume_serial", ctypes.c_uint64), ("file_id", ctypes.c_ubyte * 16)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    get_information = kernel32.GetFileInformationByHandleEx
+    get_information.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    get_information.restype = wintypes.BOOL
+    information = FileIdInfo()
+    if not get_information(ctypes.c_void_p(handle), 18, ctypes.byref(information), ctypes.sizeof(information)):
+        raise OSError(ctypes.get_last_error(), "GetFileInformationByHandleEx(FileIdInfo) failed")
+    file_id = int.from_bytes(bytes(information.file_id), byteorder="little")
+    return int(information.volume_serial), file_id
+
+
+def _open_windows_directory_identity(directory: Path) -> tuple[int, tuple[int, int]]:
+    """Open a directory with delete sharing and read its native file identity."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(str(directory), 0x80, 0x1 | 0x2 | 0x4, None, 3, 0x02000000, None)
+    raw_handle = handle if isinstance(handle, int) else ctypes.cast(handle, ctypes.c_void_p).value
+    if raw_handle is None or raw_handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "CreateFileW could not open the owned build directory")
+    try:
+        return int(raw_handle), _windows_directory_file_identity(int(raw_handle))
+    except BaseException:
+        _close_windows_handle(int(raw_handle))
+        raise
+
+
+def _close_windows_handle(handle: int) -> None:
+    """Close one native handle acquired for directory identity checks."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    if not close_handle(ctypes.c_void_p(handle)):
+        raise OSError(ctypes.get_last_error(), "CloseHandle failed for the owned build directory")
+
+
+def _close_owned_directory_identities(identities: list[_OwnedDirectoryIdentity]) -> None:
+    """Release every captured directory handle when the build job exits."""
+    for identity in identities:
+        try:
+            identity.close()
+        except OSError as exc:
+            log.error("Owned build directory handle close failed path=%s error=%s", identity.resolved_path, exc)
+
+
+def _unlink_owned_build_stage(path: Path, identity: _OwnedDirectoryIdentity) -> None:
+    """Remove a temporary stage only while its captured build directory remains current."""
+    try:
+        parent = path.parent
+        facts = parent.lstat()
+        if (stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode)
+                or parent.resolve(strict=True) != identity.resolved_path
+                or not identity.matches(parent)):
+            raise OSError("owned build directory identity changed")
+        item = path.lstat()
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+            raise OSError("owned build stage is not a regular file")
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        log.error("Owned build cleanup refused path=%s error=%s", path, exc)
+
+
+def _owned_directory_identity(directory: Path) -> _OwnedDirectoryIdentity:
+    """Capture and retain this job's directory object for later cleanup checks."""
     facts = directory.lstat()
     if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
         raise BookServiceError("permission_denied", "The owned build directory is unsafe.")
-    return directory.resolve(strict=True), facts.st_dev, facts.st_ino
+    resolved = directory.resolve(strict=True)
+    windows_handle = os.name == "nt"
+    if windows_handle:
+        handle, file_identity = _open_windows_directory_identity(directory)
+    else:
+        handle = os.open(
+            directory,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(handle)
+        except BaseException:
+            os.close(handle)
+            raise
+        file_identity = opened.st_dev, opened.st_ino
+    identity = _OwnedDirectoryIdentity(resolved, file_identity, handle, windows_handle)
+    try:
+        current = directory.lstat()
+        current_path = directory.resolve(strict=True)
+        if stat.S_ISLNK(current.st_mode) or not stat.S_ISDIR(current.st_mode) or current_path != resolved:
+            raise OSError("owned build directory changed while its identity was captured")
+        if windows_handle:
+            current_handle, current_identity = _open_windows_directory_identity(directory)
+            try:
+                if current_identity != file_identity:
+                    raise OSError("owned build directory changed while its identity was captured")
+            finally:
+                _close_windows_handle(current_handle)
+        elif (current.st_dev, current.st_ino) != file_identity:
+            raise OSError("owned build directory changed while its identity was captured")
+        return identity
+    except BaseException:
+        identity.close()
+        raise
 
 
-def _cleanup_owned_build_files(project_root: Path, directory: Path, identity: tuple[Path, int, int],
+def _cleanup_owned_build_files(project_root: Path, directory: Path, identity: _OwnedDirectoryIdentity,
                                filenames: tuple[str, ...]) -> None:
     """Remove only known artifacts after unregistered build publication fails."""
     try:
         root = project_root.resolve(strict=True)
         facts = directory.lstat()
         resolved = directory.resolve(strict=True)
-        expected_path, expected_device, expected_inode = identity
+        expected_path = identity.resolved_path
         if (stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode)
                 or resolved != expected_path
-                or (facts.st_dev, facts.st_ino) != (expected_device, expected_inode)):
+                or not identity.matches(directory)):
             raise OSError("owned build directory identity changed")
         resolved.relative_to(root)
     except (OSError, ValueError) as exc:
