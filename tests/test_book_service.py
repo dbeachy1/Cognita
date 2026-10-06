@@ -8,7 +8,15 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from cognita.books.models import GetGenerationsRequest, InspectRequest, PrepareRequest, RecordGenerationRequest
+from cognita.books.models import (
+    CancelJobRequest,
+    GetGenerationsRequest,
+    GetJobRequest,
+    ImportAudioRequest,
+    InspectRequest,
+    PrepareRequest,
+    RecordGenerationRequest,
+)
 from cognita.books.service import BookService, BookServiceError
 from cognita.books.state import ProjectState, ProjectStateError
 import cognita.books.service as service_module
@@ -373,3 +381,111 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
         "include_prompt": True, "limit": 1,
     }))
     assert recovered["prompts"][0]["prompt"]["text"] == "hello"
+
+
+def _completed_raw_generation(service: BookService, prose: bytes, tagged: bytes) -> tuple[dict, dict]:
+    inspected = _inspect(service)
+    spec = {
+        "provider": "synthetic", "route": "fixture", "model_id": "model",
+        "voice_id": "voice", "parameters": {}, "context_fields": {},
+    }
+    prepared, _ = service.prepare(PrepareRequest.model_validate({
+        "project": "fixture", "operation_id": "prepare-import", "chapter_id": "ch1",
+        "document_view_id": inspected["document_view_id"],
+        "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+        "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+        "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+        "speech_selection_confirmed": True,
+        "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+        "expected_settings_sha256": None, "production_target": None,
+        "chunks": [{"chunk_id": "chunk-raw", "start": 0, "end": 5, "request_spec": spec}],
+        "publish_bookmarks_to_working_tagged_docx": False,
+    }), owner_key="principal:fixture")
+    reserved, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "reserve-raw", "change": {
+            "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+            "chunk_id": "chunk-raw", "expected_manifest_revision": prepared["manifest_revision"],
+            "request": {"prompt_sha256": prepared["chunks"][0]["prompt_sha256"], "spec": spec},
+        },
+    }), owner_key="principal:fixture")
+    submitted, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "submit-raw", "change": {
+            "kind": "update", "generation_record_id": reserved["generation"]["generation_record_id"],
+            "expected_generation_revision": 1, "state": "submitted",
+            "provider_ids": {"generation_ids": ["synthetic-complete"]},
+            "provider_response_metadata": {"format": "synthetic raw s16le"},
+        },
+    }), owner_key="principal:fixture")
+    completed, _ = service.record_generation(RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "complete-raw", "change": {
+            "kind": "update", "generation_record_id": reserved["generation"]["generation_record_id"],
+            "expected_generation_revision": submitted["generation"]["generation_revision"], "state": "completed",
+            "provider_ids": {"generation_ids": ["synthetic-complete"]},
+        },
+    }), owner_key="principal:fixture")
+    raw_format = {
+        "container": "raw_pcm", "encoding": "signed_integer", "sample_rate_hz": 8000,
+        "channels": 1, "storage_bits": 16, "valid_bits": 16, "endianness": "little",
+        "interleaving": "interleaved", "provider_format_evidence": "synthetic raw s16le",
+    }
+    return completed["generation"], raw_format
+
+
+def test_raw_pcm_project_import_is_durable_idempotent_and_cancel_safe(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    generation, raw_format = _completed_raw_generation(service, prose, tagged)
+    samples = b"\x00\x00\x01\x00\xff\xff\x02\x00"
+    source = tmp_path / "Audiobook/Chapters/1/provider-output.pcm"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(samples)
+    digest = hashlib.sha256(samples).hexdigest()
+    request = ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "import-raw", "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.pcm", "expected_sha256": digest},
+        "provenance": "native_generation", "source_format": raw_format,
+    })
+    queued, replayed = service.import_audio(request, owner_key="principal:fixture")
+    assert not replayed and queued["state"] == "queued"
+    replay, replayed = service.import_audio(request, owner_key="principal:fixture")
+    assert replayed and replay == queued
+    with pytest.raises(BookServiceError) as altered:
+        service.import_audio(ImportAudioRequest.model_validate({
+            **request.model_dump(mode="json"),
+            "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/provider-output.pcm", "expected_sha256": "0" * 64},
+        }), owner_key="principal:fixture")
+    assert altered.value.reason == "operation_id_conflict"
+
+    cancel, replayed = service.cancel_job(CancelJobRequest(
+        project="fixture", operation_id="cancel-raw", job_id=queued["job_id"], expected_job_revision=1,
+    ), owner_key="principal:fixture")
+    assert not replayed and cancel["state"] == "cancel_requested"
+    pending_cancel = service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert pending_cancel["state"] == "running" and pending_cancel["phase"] == "cancel_requested"
+    service.run_import_job(queued["job_id"])
+    assert service.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))["state"] == "cancelled"
+    retry_generation = service.get_generations(GetGenerationsRequest.model_validate({
+        "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
+    }))["generations"][0]
+    assert retry_generation["media_registered"] is False and retry_generation["import_job_id"] is None
+    retry_request = request.model_copy(update={
+        "operation_id": "import-raw-retry",
+        "expected_generation_revision": retry_generation["generation_revision"],
+    })
+    queued, replayed = service.import_audio(retry_request, owner_key="principal:fixture")
+    assert not replayed and queued["job_id"] != cancel["job_id"]
+
+    # A fresh service instance opens the same FULL/rollback-journal authority;
+    # it can complete a queued local job without reconstructing a provider call.
+    restarted = BookService(tmp_path, "fixture")
+    restarted.run_import_job(queued["job_id"])
+    completed = restarted.get_job(GetJobRequest(project="fixture", job_id=queued["job_id"]))
+    assert completed["state"] == "succeeded"
+    take = completed["result"]["take"]
+    assert take["media"]["container"] == "raw_pcm"
+    assert take["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
+    assert (tmp_path / take["filepath"]).read_bytes() == samples
+    generation_after = restarted.get_generations(GetGenerationsRequest.model_validate({
+        "project": "fixture", "query": {"kind": "record", "generation_record_id": generation["generation_record_id"]},
+    }))["generations"][0]
+    assert generation_after["media_registered"] is True and generation_after["take_id"] == take["take_id"]

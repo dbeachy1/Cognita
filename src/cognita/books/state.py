@@ -134,6 +134,7 @@ class ProjectState:
             state._validate_database()
             state._ensure_indexed_role_schema()
             state._ensure_generation_schema()
+            state._ensure_import_schema()
             return state
         except ProjectStateError:
             raise
@@ -171,6 +172,7 @@ class ProjectState:
         state._create_schema()
         state._ensure_indexed_role_schema()
         state._ensure_generation_schema()
+        state._ensure_import_schema()
         marker = {
             "schema_version": SCHEMA_VERSION,
             "database": DATABASE_FILENAME,
@@ -409,6 +411,55 @@ class ProjectState:
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("generation state schema is unavailable") from exc
 
+    def _ensure_import_schema(self) -> None:
+        """Create durable local-import jobs and immutable take facts.
+
+        These records deliberately live beside generation evidence rather than
+        the disposable workspace-job database.  The JSON payloads are the
+        authoritative wire facts; indexed columns only support ownership and
+        conflict checks while a short transaction is open.
+        """
+        try:
+            with self.transaction() as connection:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_import_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        generation_record_id TEXT NOT NULL,
+                        owner_key TEXT NOT NULL,
+                        operation_id TEXT NOT NULL,
+                        job_revision INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        result_json TEXT,
+                        error_json TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS book_import_jobs_active_generation "
+                    "ON book_import_jobs(generation_record_id) "
+                    "WHERE state IN ('queued','running','cancel_requested')"
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_takes (
+                        take_id TEXT PRIMARY KEY,
+                        generation_record_id TEXT NOT NULL UNIQUE,
+                        chapter_id TEXT NOT NULL,
+                        media_revision INTEGER NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_chapter_media (
+                        chapter_id TEXT PRIMARY KEY,
+                        media_revision INTEGER NOT NULL
+                    )"""
+                )
+        except (sqlite3.DatabaseError, OSError) as exc:
+            raise ProjectStateError("import job state schema is unavailable") from exc
+
     def reserve_generation(
         self, *, record: dict, owner_key: str, project: str, tool: str,
         operation_id: str, args_sha256: str,
@@ -494,6 +545,238 @@ class ProjectState:
             else:
                 rows = []
         return [json.loads(row["payload_json"]) for row in rows]
+
+    @staticmethod
+    def _receipt_in(
+        connection: sqlite3.Connection, *, owner_key: str, project: str,
+        tool: str, operation_id: str, args_sha256: str,
+    ) -> dict | None:
+        row = connection.execute(
+            "SELECT args_sha256,payload_json FROM operation_receipts "
+            "WHERE owner_key=? AND project=? AND tool=? AND operation_id=?",
+            (owner_key, project, tool, operation_id),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["args_sha256"] != args_sha256:
+            raise ProjectStateError("operation_id_conflict")
+        return json.loads(row["payload_json"])
+
+    @staticmethod
+    def _put_receipt_in(
+        connection: sqlite3.Connection, *, owner_key: str, project: str,
+        tool: str, operation_id: str, args_sha256: str, result: dict,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO operation_receipts(owner_key,project,tool,operation_id,args_sha256,payload_json) "
+            "VALUES(?,?,?,?,?,?)",
+            (owner_key, project, tool, operation_id, args_sha256,
+             json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))),
+        )
+
+    def reserve_import_job(
+        self, *, generation_record_id: str, expected_generation_revision: int,
+        owner_key: str, project: str, operation_id: str, args_sha256: str,
+        job_id: str, pinned_inputs_sha256: str, payload: dict,
+    ) -> tuple[str, dict]:
+        """Reserve one local import and its receipt in the same transaction."""
+        now = payload["created_at"]
+        with self.transaction() as connection:
+            prior = self._receipt_in(
+                connection, owner_key=owner_key, project=project,
+                tool="audiobook_import_audio", operation_id=operation_id,
+                args_sha256=args_sha256,
+            )
+            if prior is not None:
+                return "replay", prior
+            row = connection.execute(
+                "SELECT payload_json,generation_revision FROM book_generations WHERE generation_record_id=?",
+                (generation_record_id,),
+            ).fetchone()
+            if row is None:
+                raise ProjectStateError("generation_not_found")
+            generation = json.loads(row["payload_json"])
+            if int(row["generation_revision"]) != expected_generation_revision:
+                raise ProjectStateError("stale_generation")
+            if generation.get("state") != "completed":
+                raise ProjectStateError("generation_not_completed")
+            if generation.get("media_registered"):
+                raise ProjectStateError("import_already_registered")
+            active = connection.execute(
+                "SELECT job_id FROM book_import_jobs WHERE generation_record_id=? "
+                "AND state IN ('queued','running','cancel_requested')",
+                (generation_record_id,),
+            ).fetchone()
+            if active is not None:
+                raise ProjectStateError("import_in_progress")
+            generation["generation_revision"] = expected_generation_revision + 1
+            generation["import_job_id"] = job_id
+            generation["updated_at"] = now
+            connection.execute(
+                "UPDATE book_generations SET generation_revision=?,payload_json=?,updated_at=? WHERE generation_record_id=?",
+                (generation["generation_revision"], json.dumps(generation, ensure_ascii=False, separators=(",", ":")),
+                 now, generation_record_id),
+            )
+            connection.execute(
+                "INSERT INTO book_import_jobs(job_id,generation_record_id,owner_key,operation_id,job_revision,state,payload_json,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (job_id, generation_record_id, owner_key, operation_id, 1, "queued",
+                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")), now, now),
+            )
+            result = {"job_id": job_id, "job_revision": 1, "state": "queued",
+                      "poll_after_seconds": 1, "pinned_inputs_sha256": pinned_inputs_sha256}
+            self._put_receipt_in(
+                connection, owner_key=owner_key, project=project,
+                tool="audiobook_import_audio", operation_id=operation_id,
+                args_sha256=args_sha256, result=result,
+            )
+            return "committed", result
+
+    def import_job(self, job_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload_json"])
+        return {
+            "job_id": row["job_id"], "generation_record_id": row["generation_record_id"],
+            "owner_key": row["owner_key"], "operation_id": row["operation_id"],
+            "job_revision": int(row["job_revision"]), "state": row["state"],
+            "payload": payload, "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "error": json.loads(row["error_json"]) if row["error_json"] else None,
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+
+    def claim_import_job(self, job_id: str) -> dict | None:
+        with self.transaction() as connection:
+            row = connection.execute("SELECT * FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None or row["state"] != "queued":
+                return None
+            connection.execute(
+                "UPDATE book_import_jobs SET state='running',job_revision=job_revision+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (job_id,),
+            )
+        return self.import_job(job_id)
+
+    def request_import_cancellation(
+        self, *, job_id: str, expected_job_revision: int, owner_key: str,
+        project: str, operation_id: str, args_sha256: str,
+    ) -> tuple[str, dict]:
+        with self.transaction() as connection:
+            prior = self._receipt_in(
+                connection, owner_key=owner_key, project=project,
+                tool="audiobook_cancel_job", operation_id=operation_id,
+                args_sha256=args_sha256,
+            )
+            if prior is not None:
+                return "replay", prior
+            row = connection.execute("SELECT job_revision,state FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None:
+                raise ProjectStateError("job_not_found")
+            if int(row["job_revision"]) != expected_job_revision:
+                raise ProjectStateError("stale_job")
+            state = row["state"]
+            if state in {"succeeded", "failed", "cancelled"}:
+                result = {"job_id": job_id, "job_revision": int(row["job_revision"]), "state": state}
+            else:
+                connection.execute(
+                    "UPDATE book_import_jobs SET state='cancel_requested',job_revision=job_revision+1,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                    (job_id,),
+                )
+                result = {"job_id": job_id, "job_revision": int(row["job_revision"]) + 1, "state": "cancel_requested"}
+            self._put_receipt_in(
+                connection, owner_key=owner_key, project=project,
+                tool="audiobook_cancel_job", operation_id=operation_id,
+                args_sha256=args_sha256, result=result,
+            )
+            return "committed", result
+
+    def finish_import_failure(self, *, job_id: str, reason: str, message: str,
+                              cancelled: bool = False) -> dict | None:
+        """Terminally fail an unregistered import and release only its reservation."""
+        with self.transaction() as connection:
+            row = connection.execute("SELECT * FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None or row["state"] == "succeeded":
+                return None
+            if row["state"] in {"failed", "cancelled"}:
+                payload = json.loads(row["payload_json"])
+                return {
+                    "job_id": row["job_id"], "generation_record_id": row["generation_record_id"],
+                    "owner_key": row["owner_key"], "operation_id": row["operation_id"],
+                    "job_revision": int(row["job_revision"]), "state": row["state"],
+                    "payload": payload,
+                    "result": json.loads(row["result_json"]) if row["result_json"] else None,
+                    "error": json.loads(row["error_json"]) if row["error_json"] else None,
+                    "created_at": row["created_at"], "updated_at": row["updated_at"],
+                }
+            terminal = "cancelled" if cancelled or row["state"] == "cancel_requested" else "failed"
+            error = {"reason": reason, "message": message, "operation_outcome": "not_applied", "correlation_id": None}
+            connection.execute(
+                "UPDATE book_import_jobs SET state=?,job_revision=job_revision+1,error_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (terminal, json.dumps(error, separators=(",", ":")), job_id),
+            )
+            grow = connection.execute("SELECT payload_json FROM book_generations WHERE generation_record_id=?", (row["generation_record_id"],)).fetchone()
+            if grow is not None:
+                generation = json.loads(grow["payload_json"])
+                if generation.get("import_job_id") == job_id and not generation.get("media_registered"):
+                    generation["import_job_id"] = None
+                    generation["generation_revision"] += 1
+                    generation["updated_at"] = row["updated_at"]
+                    connection.execute(
+                        "UPDATE book_generations SET generation_revision=?,payload_json=?,updated_at=? WHERE generation_record_id=?",
+                        (generation["generation_revision"], json.dumps(generation, ensure_ascii=False, separators=(",", ":")),
+                         generation["updated_at"], row["generation_record_id"]),
+                    )
+        return self.import_job(job_id)
+
+    def finish_import_success(self, *, job_id: str, generation_payload: dict,
+                              take_payload: dict) -> dict:
+        """Register an immutable take and terminal job under one short transaction."""
+        with self.transaction() as connection:
+            row = connection.execute("SELECT * FROM book_import_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is None:
+                raise ProjectStateError("job_not_found")
+            if row["state"] == "succeeded":
+                return json.loads(row["result_json"])
+            if row["state"] == "cancel_requested":
+                raise ProjectStateError("cancel_requested")
+            if row["state"] not in {"queued", "running"}:
+                raise ProjectStateError("job_not_active")
+            current = connection.execute("SELECT payload_json FROM book_generations WHERE generation_record_id=?", (row["generation_record_id"],)).fetchone()
+            if current is None:
+                raise ProjectStateError("generation_not_found")
+            generation = json.loads(current["payload_json"])
+            if generation.get("import_job_id") != job_id or generation.get("media_registered"):
+                raise ProjectStateError("import_reservation_lost")
+            media_row = connection.execute("SELECT media_revision FROM book_chapter_media WHERE chapter_id=?", (take_payload["chapter_id"],)).fetchone()
+            media_revision = 1 if media_row is None else int(media_row["media_revision"]) + 1
+            generation_payload["generation_revision"] = int(generation["generation_revision"]) + 1
+            generation_payload["media_registered"] = True
+            generation_payload["take_id"] = take_payload["take_id"]
+            generation_payload["import_job_id"] = job_id
+            result = {"kind": "import", "generation_record_id": row["generation_record_id"],
+                      "generation_revision": generation_payload["generation_revision"],
+                      "media_revision": media_revision, "take": take_payload}
+            connection.execute(
+                "UPDATE book_generations SET generation_revision=?,payload_json=?,updated_at=? WHERE generation_record_id=?",
+                (generation_payload["generation_revision"], json.dumps(generation_payload, ensure_ascii=False, separators=(",", ":")),
+                 generation_payload["updated_at"], row["generation_record_id"]),
+            )
+            connection.execute(
+                "INSERT INTO book_takes(take_id,generation_record_id,chapter_id,media_revision,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                (take_payload["take_id"], row["generation_record_id"], take_payload["chapter_id"], media_revision,
+                 json.dumps(take_payload, ensure_ascii=False, separators=(",", ":")), generation_payload["updated_at"]),
+            )
+            connection.execute(
+                "INSERT INTO book_chapter_media(chapter_id,media_revision) VALUES(?,?) "
+                "ON CONFLICT(chapter_id) DO UPDATE SET media_revision=excluded.media_revision",
+                (take_payload["chapter_id"], media_revision),
+            )
+            connection.execute(
+                "UPDATE book_import_jobs SET state='succeeded',job_revision=job_revision+1,result_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
+                (json.dumps(result, ensure_ascii=False, separators=(",", ":")), job_id),
+            )
+            return result
 
     def put_indexed_role_provenance(self, record: IndexedRoleProvenance) -> None:
         """Atomically replace the derived admission facts for one source path."""

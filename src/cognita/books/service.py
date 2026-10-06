@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import stat
 import uuid
 from dataclasses import asdict
@@ -27,6 +28,7 @@ from .configuration import (
     BINDING_PATH, LAYOUT_PATH, STATE_ROOT, BookConfigSnapshot, load_book_config,
 )
 from .fingerprint import canonical_json_sha256, request_fingerprint
+from .media import MediaValidationError, inspect_media_file
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .state import ProjectState, ProjectStateError
 from .storage import ProjectFileError, list_project_files, read_project_file
@@ -131,6 +133,10 @@ class BookService:
         self.project_name = project_name
         self.state = state
         self._pending_views: dict[str, dict[str, Any]] = {}
+        # Runtime ownership only. Durable rows remain the restart authority;
+        # an unfinished row absent from this set is never assumed to have a
+        # surviving worker.
+        self._active_import_jobs: set[str] = set()
 
     def discover_state(self) -> ProjectState | None:
         if self.state is None:
@@ -1124,6 +1130,254 @@ class BookService:
         end = offset + len(page)
         return {"generations": page, "prompts": prompts, "has_more": end < len(records),
                 "next_cursor": _cursor(view, end) if end < len(records) else None}
+
+    @staticmethod
+    def _metadata_contains(value: object, expected: str) -> bool:
+        if isinstance(value, str):
+            return value == expected
+        if isinstance(value, dict):
+            return any(BookService._metadata_contains(item, expected) for item in value.values())
+        if isinstance(value, list):
+            return any(BookService._metadata_contains(item, expected) for item in value)
+        return False
+
+    def _import_paths(self, layout, chapter, job_id: str, take_id: str, *, raw_pcm: bool) -> tuple[Path, Path, str]:
+        staging_root = self.root / STATE_ROOT / "audiobook-staging"
+        staging_root.mkdir(mode=0o700, exist_ok=True)
+        staging = staging_root / f"{job_id}.part"
+        extension = "pcm" if raw_pcm else "wav"
+        relative = f"{chapter.audio_root}/takes/{take_id}/native.{extension}"
+        target = _path(self.root, relative, allow_missing=True)
+        return staging, target, relative
+
+    def _available_import_space(self, layout, chapter, source_size: int) -> None:
+        audio_root = _path(self.root, layout.shared_paths.book_audio_root, allow_missing=True)
+        usage = shutil.disk_usage(audio_root if audio_root.exists() else self.root)
+        # The job temporarily owns both a staged source and its immutable take.
+        required = source_size * 2 + layout.storage.reserve_bytes
+        if usage.free < required:
+            raise BookServiceError("insufficient_storage", "The configured media reserve leaves insufficient free space.")
+        if source_size * 2 > layout.storage.quota_bytes:
+            raise BookServiceError("insufficient_storage", "The source exceeds the configured audiobook media quota.")
+
+    def import_audio(self, request: dto.ImportAudioRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        """Reserve a durable project-file PCM import; worker execution is separate.
+
+        URL and workspace bytes are intentionally not accepted until their
+        respective guarded transfer boundaries are installed.  In particular,
+        no signed URL is placed into a durable job payload.
+        """
+        state, _, layout = self._enabled_layout()
+        if not isinstance(request.source, dto.ProjectAudioSource):
+            raise BookServiceError("source_unavailable", "This installation currently supports authorized project-file audio imports only.")
+        if "source_format" not in request.model_fields_set:
+            raise BookServiceError("native_pcm_required", "Headerless raw PCM imports require an explicit RawFormat.")
+        raw_format = request.source_format
+        args_sha256 = canonical_json_sha256({
+            "project": request.project, "generation_record_id": request.generation_record_id,
+            "expected_generation_revision": request.expected_generation_revision,
+            "source": _data(request.source), "provenance": request.provenance,
+            "source_format": _data(raw_format),
+        })
+        prior = state.receipt(
+            owner_key=owner_key, project=self.project_name,
+            tool="audiobook_import_audio", operation_id=request.operation_id,
+        )
+        if prior is not None:
+            if prior[0] != args_sha256:
+                raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.")
+            return prior[1], True
+        generation = state.generation(request.generation_record_id)
+        if generation is None:
+            raise BookServiceError("file_not_found", "The generation record does not exist.")
+        if generation["generation_revision"] != request.expected_generation_revision:
+            raise BookServiceError("stale_generation", "The generation evidence has changed.")
+        chapter = self._chapter(layout, generation["chapter_id"])
+        # Validate the source guard before creating any durable reservation.
+        source_path = _path(self.root, request.source.filepath)
+        facts = source_path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(facts.st_mode):
+            raise BookServiceError("source_unavailable", "The project-file source is not a regular file.")
+        if not self._metadata_contains(generation["provider_response_metadata"], raw_format.provider_format_evidence):
+            raise BookServiceError("media_mismatch", "RawFormat provider evidence is not present in saved generation evidence.")
+        job_id, take_id = str(uuid.uuid4()), str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        # This deliberately contains no source URL and pins only the guarded
+        # project path and immutable generation/request facts needed by worker.
+        pinned = {
+            "generation_record_id": generation["generation_record_id"],
+            "generation_revision": generation["generation_revision"],
+            "chapter_id": generation["chapter_id"], "snapshot_id": generation["snapshot_id"],
+            "chunk_id": generation["chunk_id"], "request_sha256": generation["request_sha256"],
+            "source_kind": "project_file", "source_filepath": request.source.filepath,
+            "expected_sha256": request.source.expected_sha256, "provenance": request.provenance,
+            "source_format": _data(raw_format), "take_id": take_id, "created_at": now,
+        }
+        pinned_sha256 = canonical_json_sha256(pinned)
+        try:
+            disposition, result = state.reserve_import_job(
+                generation_record_id=request.generation_record_id,
+                expected_generation_revision=request.expected_generation_revision,
+                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                args_sha256=args_sha256, job_id=job_id, pinned_inputs_sha256=pinned_sha256,
+                payload=pinned,
+            )
+        except ProjectStateError as exc:
+            code = str(exc)
+            reasons = {
+                "operation_id_conflict": "operation_id_conflict", "stale_generation": "stale_generation",
+                "generation_not_found": "file_not_found", "generation_not_completed": "generation_outcome_unknown",
+                "import_already_registered": "import_already_registered", "import_in_progress": "import_in_progress",
+            }
+            raise BookServiceError(reasons.get(code, "state_unavailable"), "The import reservation could not be persisted.") from exc
+        return result, disposition == "replay"
+
+    def _stream_project_audio(self, source_relative: str, staging: Path, expected_sha256: str,
+                              *, source_size: int, job_id: str) -> None:
+        source = _path(self.root, source_relative)
+        before = source.stat(follow_symlinks=False)
+        digest = hashlib.sha256()
+        copied = 0
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(source, flags)
+            with os.fdopen(descriptor, "rb") as input_stream, staging.open("xb") as output_stream:
+                while block := input_stream.read(1024 * 1024):
+                    current = self._state_required().import_job(job_id)
+                    if current is None or current["state"] == "cancel_requested":
+                        raise BookServiceError("cancelled", "The import was cancelled.")
+                    digest.update(block)
+                    copied += len(block)
+                    output_stream.write(block)
+                output_stream.flush()
+                os.fsync(output_stream.fileno())
+        except FileExistsError as exc:
+            raise BookServiceError("job_failed", "The owned import staging file already exists.") from exc
+        after = source.stat(follow_symlinks=False)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ) or copied != source_size:
+            raise BookServiceError("stale_file", "The guarded source changed while it was imported.")
+        if digest.hexdigest() != expected_sha256:
+            raise BookServiceError("media_mismatch", "The imported bytes do not match expected_sha256.")
+
+    def run_import_job(self, job_id: str) -> None:
+        """Run one owned import outside SQLite transactions and finalize atomically."""
+        state = self._state_required()
+        claimed = state.claim_import_job(job_id)
+        if claimed is None:
+            pending = state.import_job(job_id)
+            if pending is not None and pending["state"] == "cancel_requested":
+                state.finish_import_failure(job_id=job_id, reason="cancelled",
+                                            message="The import was cancelled before it started.", cancelled=True)
+            return
+        self._active_import_jobs.add(job_id)
+        staging: Path | None = None
+        try:
+            pinned = claimed["payload"]
+            _, _, layout = self._enabled_layout()
+            generation = state.generation(pinned["generation_record_id"])
+            if generation is None:
+                raise BookServiceError("job_failed", "The pinned generation record is unavailable.")
+            chapter = self._chapter(layout, pinned["chapter_id"])
+            source = _path(self.root, pinned["source_filepath"])
+            source_size = source.stat(follow_symlinks=False).st_size
+            self._available_import_space(layout, chapter, source_size)
+            staging, target, relative = self._import_paths(layout, chapter, job_id, pinned["take_id"], raw_pcm=True)
+            self._stream_project_audio(pinned["source_filepath"], staging, pinned["expected_sha256"],
+                                       source_size=source_size, job_id=job_id)
+            inspection = inspect_media_file(
+                staging, raw_format=pinned["source_format"],
+                provider_format_evidence=pinned["source_format"]["provider_format_evidence"],
+            )
+            if not inspection.native_pcm:
+                raise BookServiceError("native_pcm_required", "The imported media is not verified native PCM.")
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if target.exists():
+                raise BookServiceError("job_failed", "The immutable take path already exists.")
+            os.replace(staging, target)
+            staging = None
+            now = datetime.now(timezone.utc).isoformat()
+            take = dto.TakeRecord.model_validate({
+                "take_id": pinned["take_id"], "namespace": generation["scope"],
+                "chapter_id": pinned["chapter_id"], "snapshot_id": pinned["snapshot_id"],
+                "chunk_id": pinned["chunk_id"], "generation_record_id": pinned["generation_record_id"],
+                "request_sha256": pinned["request_sha256"], "filepath": relative,
+                "bytes_sha256": inspection.bytes_sha256, "size_bytes": inspection.size_bytes,
+                "media": inspection.media.model_dump(mode="json"), "provenance": pinned["provenance"],
+                "assembly_derivative": None,
+            }, strict=True).model_dump(mode="json", exclude_unset=True)
+            completed = dict(generation)
+            completed["updated_at"] = now
+            completed["state"] = "completed"
+            state.finish_import_success(job_id=job_id, generation_payload=completed, take_payload=take)
+        except (BookServiceError, MediaValidationError, OSError, ProjectStateError) as exc:
+            if isinstance(exc, MediaValidationError):
+                reason, message = exc.code, exc.message
+            elif isinstance(exc, BookServiceError):
+                reason, message = exc.reason, str(exc)
+            elif isinstance(exc, ProjectStateError) and str(exc) == "cancel_requested":
+                reason, message = "cancelled", "The import was cancelled before it could be finalized."
+            else:
+                reason, message = "job_failed", "The local import could not complete safely."
+            state.finish_import_failure(job_id=job_id, reason=reason, message=message,
+                                        cancelled=reason == "cancelled")
+        finally:
+            self._active_import_jobs.discard(job_id)
+            if staging is not None:
+                try:
+                    staging.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def mark_import_worker_started(self, job_id: str) -> None:
+        """Record in-process ownership before the event loop yields to its worker."""
+        self._active_import_jobs.add(job_id)
+
+    def mark_import_worker_finished(self, job_id: str) -> None:
+        """Clear pre-start ownership when task scheduling itself is cancelled."""
+        self._active_import_jobs.discard(job_id)
+
+    def get_job(self, request: dto.GetJobRequest) -> dict[str, Any]:
+        state = self._state_required()
+        job = state.import_job(request.job_id)
+        if job is None:
+            raise BookServiceError("file_not_found", "The durable job does not exist.")
+        if job["state"] in {"queued", "running"} and request.job_id not in self._active_import_jobs:
+            # A fresh service instance proves no worker survived restart.  Do
+            # not silently repeat local work or reuse a transient source.
+            state.finish_import_failure(job_id=request.job_id, reason="job_failed",
+                                        message="The unfinished import was interrupted by restart.")
+            job = state.import_job(request.job_id)
+            assert job is not None
+        phase = "completed" if job["state"] == "succeeded" else (
+            "cancel_requested" if job["state"] == "cancel_requested" else job["state"]
+        )
+        public_state = "running" if job["state"] == "cancel_requested" else job["state"]
+        value = {
+            "job_id": job["job_id"], "operation_id": job["operation_id"],
+            "job_revision": job["job_revision"], "state": public_state, "phase": phase,
+            "progress": {"completed_units": 1 if job["state"] == "succeeded" else 0, "total_units": 1},
+            "poll_after_seconds": 1 if job["state"] in {"queued", "running", "cancel_requested"} else None,
+            "result": job["result"], "error": job["error"],
+        }
+        return dto.GetJobResult.model_validate(value, strict=True).model_dump(mode="json", exclude_unset=True)
+
+    def cancel_job(self, request: dto.CancelJobRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        state = self._state_required()
+        args_sha256 = canonical_json_sha256({"project": request.project, "job_id": request.job_id,
+                                             "expected_job_revision": request.expected_job_revision})
+        try:
+            disposition, result = state.request_import_cancellation(
+                job_id=request.job_id, expected_job_revision=request.expected_job_revision,
+                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                args_sha256=args_sha256,
+            )
+        except ProjectStateError as exc:
+            reason = {"operation_id_conflict": "operation_id_conflict", "job_not_found": "file_not_found",
+                      "stale_job": "stale_generation"}.get(str(exc), "state_unavailable")
+            raise BookServiceError(reason, "The import cancellation could not be persisted.") from exc
+        return result, disposition == "replay"
 
     def set_folder_indexing(
         self, *, path: str, indexed: bool, operation_id: str,

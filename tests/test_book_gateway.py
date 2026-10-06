@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import asyncio
 
 import httpx
 import pytest
@@ -134,6 +135,97 @@ async def test_prepare_receipt_is_principal_scoped_and_permission_precedes_repla
     other_owner = await _post(host, message, headers={"x-cognita-principal-id": "bob"})
     other_payload = json.loads(other_owner.json()["result"]["content"][0]["text"])
     assert other_payload["status"] == "error" and other_payload["reason"] == "stale_manifest"
+
+
+@pytest.mark.asyncio
+async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_job(host):
+    headers = {"x-cognita-principal-id": "alice"}
+    inspected = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_inspect_chapter", "arguments": {
+            "project": "fixture", "chapter_id": "ch1",
+            "prose_filepath": "Chapters/1/chapter.docx",
+            "tagged_filepath": "Chapters/1/chapter_audio-tags.docx",
+        },
+    }), headers=headers)
+    view = json.loads(inspected.json()["result"]["content"][0]["text"])["data"]
+    documents = host.registry.get("fixture").documents_dir
+    prose = (documents / "Chapters/1/chapter.docx").read_bytes()
+    tagged = (documents / "Chapters/1/chapter_audio-tags.docx").read_bytes()
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared_response = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_prepare_chapter", "arguments": {
+            "project": "fixture", "operation_id": "gateway-prepare-import", "chapter_id": "ch1",
+            "document_view_id": view["document_view_id"],
+            "expected_prose_sha256": hashlib.sha256(prose).hexdigest(),
+            "expected_tagged_sha256": hashlib.sha256(tagged).hexdigest(),
+            "expected_manifest_revision": None, "scope": {"kind": "test", "authorization_id": "test-auth"},
+            "speech_selection_confirmed": True,
+            "request_limit": {"value": 100, "unit": "unicode_codepoints"},
+            "expected_settings_sha256": None, "production_target": None,
+            "chunks": [{"chunk_id": "gateway-raw", "start": 0, "end": 5, "request_spec": spec}],
+            "publish_bookmarks_to_working_tagged_docx": False,
+        },
+    }), headers=headers)
+    prepared = json.loads(prepared_response.json()["result"]["content"][0]["text"])["data"]
+    reserved_response = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_record_generation", "arguments": {
+            "project": "fixture", "operation_id": "gateway-reserve-import", "change": {
+                "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+                "chunk_id": "gateway-raw", "expected_manifest_revision": prepared["manifest_revision"],
+                "request": {"prompt_sha256": prepared["chunks"][0]["prompt_sha256"], "spec": spec},
+            },
+        },
+    }), headers=headers)
+    generation = json.loads(reserved_response.json()["result"]["content"][0]["text"])["data"]["generation"]
+    for operation_id, state, revision, extra in (
+        ("gateway-submit-import", "submitted", 1, {
+            "provider_ids": {"generation_ids": ["synthetic-gateway"]},
+            "provider_response_metadata": {"format": "synthetic raw s16le"},
+        }),
+        ("gateway-complete-import", "completed", 2, {}),
+    ):
+        response = await _post(host, _rpc("tools/call", {
+            "name": "audiobook_record_generation", "arguments": {
+                "project": "fixture", "operation_id": operation_id, "change": {
+                    "kind": "update", "generation_record_id": generation["generation_record_id"],
+                    "expected_generation_revision": revision, "state": state, **extra,
+                },
+            },
+        }), headers=headers)
+        generation = json.loads(response.json()["result"]["content"][0]["text"])["data"]["generation"]
+    samples = b"\x00\x00\x01\x00\xff\xff\x02\x00"
+    source = documents / "Audiobook/Chapters/1/gateway.pcm"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(samples)
+    imported = await _post(host, _rpc("tools/call", {
+        "name": "audiobook_import_audio", "arguments": {
+            "project": "fixture", "operation_id": "gateway-import-raw",
+            "generation_record_id": generation["generation_record_id"],
+            "expected_generation_revision": generation["generation_revision"],
+            "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/gateway.pcm",
+                       "expected_sha256": hashlib.sha256(samples).hexdigest()},
+            "provenance": "native_generation",
+            "source_format": {"container": "raw_pcm", "encoding": "signed_integer",
+                              "sample_rate_hz": 8000, "channels": 1, "storage_bits": 16,
+                              "valid_bits": 16, "endianness": "little", "interleaving": "interleaved",
+                              "provider_format_evidence": "synthetic raw s16le"},
+        },
+    }), headers=headers)
+    job = json.loads(imported.json()["result"]["content"][0]["text"])["data"]
+    final = None
+    for _ in range(40):
+        read = await _post(host, _rpc("tools/call", {
+            "name": "audiobook_get_job", "arguments": {"project": "fixture", "job_id": job["job_id"]},
+        }), headers=headers)
+        final = json.loads(read.json()["result"]["content"][0]["text"])["data"]
+        if final["state"] in {"succeeded", "failed", "cancelled"}:
+            break
+        await asyncio.sleep(0.01)
+    assert final is not None
+    assert final["error"] is None, final["error"]
+    assert final["state"] == "succeeded"
+    assert final["result"]["take"]["media"]["canonical_sample_sha256"] == hashlib.sha256(samples).hexdigest()
 
 
 def test_book_wire_capture_suppresses_source_and_malformed_bodies():

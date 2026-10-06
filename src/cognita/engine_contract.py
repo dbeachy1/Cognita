@@ -539,16 +539,19 @@ ENGINE_TOOL_DEFS: list[dict] = [
 # Additive 7.1 core-engine surface. The legacy workers engine is filtered by the
 # gateway and never receives these definitions.
 ENGINE_TOOL_DEFS.extend(ASSET_TOOL_DEFS)
-# D4 M1 ships only operations with implemented durable service behavior. The
-# remaining book tools are added by their owning orchestration checkpoint.
+# The implemented reservation/recovery and local raw-PCM import job surface is
+# advertised together. Assembly/commit/index-status/book-read remain withheld
+# until their durable implementations exist.
 from .books.schemas import book_tool_definitions, project_storage_tool_definitions
 
-_M1_BOOK_TOOLS = {
+_IMPLEMENTED_BOOK_TOOLS = {
     "audiobook_inspect_chapter", "audiobook_prepare_chapter",
     "audiobook_get_chapter", "audiobook_find_chunk",
+    "audiobook_record_generation", "audiobook_import_audio",
+    "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
 }
 ENGINE_TOOL_DEFS.extend(
-    item for item in book_tool_definitions() if item["name"] in _M1_BOOK_TOOLS
+    item for item in book_tool_definitions() if item["name"] in _IMPLEMENTED_BOOK_TOOLS
 )
 ENGINE_TOOL_DEFS.extend(project_storage_tool_definitions())
 ENGINE_TOOL_DEFS[:] = [attach_output_schema(tool) for tool in ENGINE_TOOL_DEFS]

@@ -450,6 +450,8 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "get_asset", "reindex_assets", "ocr_asset", "remove_asset",
     "audiobook_inspect_chapter", "audiobook_prepare_chapter",
     "audiobook_get_chapter", "audiobook_find_chunk",
+    "audiobook_record_generation", "audiobook_import_audio",
+    "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
     "set_folder_indexing", "list_project_files", "read_project_file",
     "read_document", "list_backups", "diff_backup",
     "get_self_test_plan", "edit_document", "edit_document_batch", "insert_in_document",

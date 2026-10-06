@@ -208,6 +208,7 @@ class LocalEngineHost(
         self._reindex_progress: dict[str, dict[str, Any]] = {}
         self._reindex_tasks: dict[str, asyncio.Task] = {}
         self._asset_reconcile_tasks: dict[str, asyncio.Task] = {}
+        self._book_import_tasks: dict[tuple[str, str], asyncio.Task] = {}
         self.watcher = None  # WatcherManager, set by startup() when enabled (M4)
         self._asset_services: dict[tuple[str, str | None], AssetService] = {}
         self._book_services: dict[str, BookService] = {}
@@ -417,7 +418,8 @@ class LocalEngineHost(
             self._probe_task = None
         if self.watcher is not None:
             await self.watcher.stop()
-        background = [*self._reindex_tasks.values(), *self._asset_reconcile_tasks.values()]
+        background = [*self._reindex_tasks.values(), *self._asset_reconcile_tasks.values(),
+                      *self._book_import_tasks.values()]
         for task in background:
             task.cancel()
         if background:
@@ -725,6 +727,9 @@ class LocalEngineHost(
             "audiobook_get_chapter": book_dto.GetChapterRequest,
             "audiobook_find_chunk": book_dto.FindChunkRequest,
             "audiobook_record_generation": book_dto.RecordGenerationRequest,
+            "audiobook_import_audio": book_dto.ImportAudioRequest,
+            "audiobook_get_job": book_dto.GetJobRequest,
+            "audiobook_cancel_job": book_dto.CancelJobRequest,
             "audiobook_get_generations": book_dto.GetGenerationsRequest,
             "set_folder_indexing": book_dto.SetFolderIndexingRequest,
             "list_project_files": book_dto.ListProjectFilesRequest,
@@ -755,6 +760,30 @@ class LocalEngineHost(
                     data = service.find_chunk(request_model)
                 elif tool == "audiobook_record_generation":
                     data, replayed = service.record_generation(request_model, owner_key=owner_key)
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_import_audio":
+                    data, replayed = service.import_audio(request_model, owner_key=owner_key)
+                    if not replayed:
+                        key = (project.name, data["job_id"])
+                        service.mark_import_worker_started(data["job_id"])
+
+                        async def run_import() -> None:
+                            # The durable reservation was committed under the
+                            # admission lock. The worker deliberately runs its
+                            # stream/hash work after that lock is released.
+                            await asyncio.to_thread(service.run_import_job, data["job_id"])
+
+                        task = asyncio.create_task(run_import())
+                        self._book_import_tasks[key] = task
+                        def finished(_task, *, key=key, job_id=data["job_id"], service=service) -> None:
+                            self._book_import_tasks.pop(key, None)
+                            service.mark_import_worker_finished(job_id)
+                        task.add_done_callback(finished)
+                    return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
+                elif tool == "audiobook_get_job":
+                    data = service.get_job(request_model)
+                elif tool == "audiobook_cancel_job":
+                    data, replayed = service.cancel_job(request_model, owner_key=owner_key)
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 elif tool == "audiobook_get_generations":
                     data = service.get_generations(request_model)
