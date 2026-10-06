@@ -41,7 +41,7 @@ from .mp3_validation import verify_chapter_mp3_decoder
 from .projection import ProjectionError, project_docx_pair, validate_chunk_ranges
 from .docx import (
     BookmarkLocation, BookmarkPlacement, FileLockedError, add_bookmarks,
-    parse_docx, require_unlocked,
+    PROJECTION_VERSION, DocxProjectionError, parse_docx, require_unlocked,
 )
 from .read_helpers import (
     ReadCursorError, paired_text_page, parse_read_cursor, read_cursor,
@@ -335,6 +335,208 @@ class BookService:
                 return "chapter_summary", chapter, "summary"
         return None
 
+    def index_captured_content(self, source_path: str, suffix: str, raw: bytes):
+        """Capture registered role facts before selecting an extractor."""
+        from .fingerprint import canonical_json_sha256
+        config = self.config()
+        if config.config_state != "enabled" or config.layout is None:
+            return None, None
+        registered = self._registered_role(config.layout, source_path)
+        if registered is None:
+            return None, None
+        role, chapter, chapter_kind = registered
+        raw_sha256 = hashlib.sha256(raw).hexdigest()
+        values: dict[str, Any] = {
+            "source_path": source_path, "raw_sha256": raw_sha256,
+            "extraction_version": "legacy-file-v1", "role": role,
+            "chapter_id": chapter.chapter_id if chapter is not None else None,
+            "layout_sha256": config.layout_sha256, "chapter_state_sha256": None,
+            "annotations_sha256": None, "approval_source_raw_sha256": None,
+            "approval_prose_projection_sha256": None, "approval_projection_version": None,
+            "summary_raw_sha256": None, "summary_source_raw_sha256": None,
+            "summary_source_prose_projection_sha256": None,
+        }
+        chapter_state = None
+        if chapter is not None:
+            try:
+                chapter_state_raw = _read_bytes(self.root, chapter.chapter_state_filepath)
+                chapter_state = validate_chapter_state(chapter_state_raw)
+            except (BookServiceError, ValueError, ProjectFileError) as exc:
+                raise BookServiceError("validation_failed", "Chapter index configuration is unavailable.") from exc
+            if chapter_state.chapter_id != chapter.chapter_id or chapter_state.layout_revision != config.layout.layout_revision:
+                raise BookServiceError("stale_file", "Chapter index configuration is stale.")
+            values["chapter_state_sha256"] = hashlib.sha256(chapter_state_raw).hexdigest()
+            if chapter_state.index_annotations is not None:
+                values["annotations_sha256"] = canonical_json_sha256(
+                    chapter_state.index_annotations.model_dump(mode="json", exclude_unset=True)
+                )
+        context = {"values": values}
+        if chapter is None or chapter_kind != "working":
+            if chapter is not None and chapter_kind == "summary":
+                assert chapter_state is not None
+                summary = chapter_state.summary
+                if (summary is None or not summary.approved or summary.filepath != source_path
+                        or summary.summary_raw_sha256 != raw_sha256):
+                    raise BookServiceError("stale_file", "Chapter summary approval does not match captured source bytes.")
+                prose = _read_bytes(self.root, chapter.working_filepath)
+                tagged = _read_bytes(self.root, chapter.tagged_filepath)
+                pair = project_docx_pair(prose, tagged)
+                if (summary.source_raw_sha256 != hashlib.sha256(prose).hexdigest()
+                        or summary.source_prose_projection_sha256 != pair.prose_projection_sha256):
+                    raise BookServiceError("stale_file", "Chapter summary source binding is stale.")
+                values["summary_raw_sha256"] = summary.summary_raw_sha256
+                values["summary_source_raw_sha256"] = summary.source_raw_sha256
+                values["summary_source_prose_projection_sha256"] = summary.source_prose_projection_sha256
+            return None, context
+        if suffix != ".docx":
+            raise BookServiceError("validation_failed", "A registered chapter source must be a DOCX document.")
+        assert chapter_state is not None
+        content = self._annotation_filtered_text(raw, chapter_state.index_annotations)
+        values["extraction_version"] = PROJECTION_VERSION
+        tagged = _read_bytes(self.root, chapter.tagged_filepath)
+        pair = project_docx_pair(raw, tagged)
+        approval = chapter_state.approval_provenance
+        approval_is_current = (
+            chapter_state.editorial_status == "approved" and approval is not None
+            and chapter_state.approved_source_raw_sha256 == raw_sha256
+            and approval.source_raw_sha256 == raw_sha256
+            and approval.prose_projection_sha256 == pair.prose_projection_sha256
+            and approval.projection_version == pair.projection_version
+            and chapter_state.approved_prose_projection_sha256 == pair.prose_projection_sha256
+            and chapter_state.approval_projection_version == pair.projection_version
+        )
+        if chapter_state.editorial_status == "approved" and not approval_is_current:
+            raise BookServiceError("stale_file", "Chapter approval does not match captured source bytes.")
+        if approval_is_current:
+            values["approval_source_raw_sha256"] = approval.source_raw_sha256
+            values["approval_prose_projection_sha256"] = approval.prose_projection_sha256
+            values["approval_projection_version"] = approval.projection_version
+        return content, context
+
+    @staticmethod
+    def _annotation_filtered_text(raw: bytes, annotations) -> str:
+        """Apply only fully verified source-projection deletion spans."""
+        try:
+            projection = parse_docx(raw)
+        except DocxProjectionError as exc:
+            location = f" at {exc.location}" if exc.location else ""
+            raise BookServiceError(exc.code, f"Registered chapter source is invalid{location}: {exc.message}") from exc
+        if projection.unsupported:
+            item = projection.unsupported[0]
+            raise BookServiceError(
+                "unsupported_docx_structure",
+                f"Registered chapter source has unsupported narrative content at {item.part}:{item.location}: {item.detail}",
+            )
+        if annotations is None:
+            return "\n\n".join(item.text for item in projection.paragraphs)
+        raw_sha256 = hashlib.sha256(raw).hexdigest()
+        if annotations.source_raw_sha256 != raw_sha256:
+            raise BookServiceError("stale_file", "Index annotations bind different chapter source bytes.")
+        if annotations.extraction_version != PROJECTION_VERSION:
+            raise BookServiceError("validation_failed", "Index annotations use an unsupported source projection version.")
+        paragraphs = {item.paragraph_id: item for item in projection.paragraphs}
+        spans_by_paragraph: dict[str, list[Any]] = {}
+        for span in annotations.spans:
+            paragraph = paragraphs.get(span.paragraph_id)
+            if paragraph is None:
+                raise BookServiceError("validation_failed", f"Index annotation paragraph is unknown: {span.paragraph_id}.")
+            if span.start < 0 or span.end > len(paragraph.text):
+                raise BookServiceError("validation_failed", f"Index annotation range is outside {span.paragraph_id}.")
+            actual = hashlib.sha256(paragraph.text[span.start:span.end].encode("utf-8")).hexdigest()
+            if actual != span.expected_text_sha256:
+                raise BookServiceError("validation_failed", f"Index annotation text does not match {span.paragraph_id}:{span.start}-{span.end}.")
+            spans_by_paragraph.setdefault(span.paragraph_id, []).append(span)
+        retained: list[str] = []
+        for paragraph in projection.paragraphs:
+            spans = sorted(spans_by_paragraph.get(paragraph.paragraph_id, ()), key=lambda item: (item.start, item.end))
+            previous = 0
+            pieces: list[str] = []
+            for span in spans:
+                if span.start < previous:
+                    raise BookServiceError("validation_failed", f"Index annotation ranges overlap in {paragraph.paragraph_id}.")
+                pieces.append(paragraph.text[previous:span.start])
+                previous = span.end
+            pieces.append(paragraph.text[previous:])
+            retained.append("".join(pieces))
+        return "\n\n".join(retained)
+
+    def capture_index_document(self, document):
+        """Bind a registered document's parsed text to the exact captured inputs."""
+        from .state import IndexedRoleProvenance
+        from .fingerprint import canonical_json_sha256
+        from .config import validate_chapter_state
+
+        captured_context = getattr(document, "book_index_context", None)
+        if captured_context is not None:
+            values = dict(captured_context["values"])
+            values["doc_id"] = document.doc_id
+            values["extracted_sha256"] = document.content_hash
+            document.book_index_record = IndexedRoleProvenance(**values)
+            document.book_index_context = None
+            return document
+        raw = getattr(document, "captured_raw", None)
+        if raw is None:
+            raise BookServiceError("source_unavailable", "Indexed source bytes were not captured.")
+        state = self.discover_state()
+        config = load_book_config(self.root, state)
+        if state is None or config.config_state != "enabled" or config.layout is None:
+            return document
+        registered = self._registered_role(config.layout, document.source)
+        if registered is None:
+            return document
+        role, chapter, chapter_kind = registered
+        raw_sha256 = hashlib.sha256(raw).hexdigest()
+        values: dict[str, Any] = {
+            "source_path": document.source, "doc_id": document.doc_id,
+            "extracted_sha256": document.content_hash, "raw_sha256": raw_sha256,
+            "extraction_version": "legacy-file-v1", "role": role,
+            "chapter_id": chapter.chapter_id if chapter is not None else None,
+            "layout_sha256": config.layout_sha256, "chapter_state_sha256": None,
+            "annotations_sha256": None, "approval_source_raw_sha256": None,
+            "approval_prose_projection_sha256": None, "approval_projection_version": None,
+            "summary_raw_sha256": None, "summary_source_raw_sha256": None,
+            "summary_source_prose_projection_sha256": None,
+        }
+        if chapter is not None:
+            try:
+                chapter_state_raw = _read_bytes(self.root, chapter.chapter_state_filepath)
+                chapter_state = validate_chapter_state(chapter_state_raw)
+            except (BookServiceError, ValueError, ProjectFileError) as exc:
+                raise BookServiceError("validation_failed", "Chapter index configuration is unavailable.") from exc
+            if chapter_state.chapter_id != chapter.chapter_id or chapter_state.layout_revision != config.layout.layout_revision:
+                raise BookServiceError("stale_file", "Chapter index configuration is stale.")
+            values["chapter_state_sha256"] = hashlib.sha256(chapter_state_raw).hexdigest()
+            if chapter_state.index_annotations is not None:
+                values["annotations_sha256"] = canonical_json_sha256(
+                    chapter_state.index_annotations.model_dump(mode="json", exclude_unset=True)
+                )
+            if chapter_kind == "working":
+                document.content = self._annotation_filtered_text(raw, chapter_state.index_annotations)
+                document.content_hash = hashlib.sha256(document.content.encode()).hexdigest()
+                document.doc_id = compute_doc_id(document.source, document.content_hash)
+                values.update({"doc_id": document.doc_id, "extracted_sha256": document.content_hash,
+                               "extraction_version": PROJECTION_VERSION})
+                tagged = _read_bytes(self.root, chapter.tagged_filepath)
+                pair = project_docx_pair(raw, tagged)
+                approval = chapter_state.approval_provenance
+                approval_is_current = (
+                    chapter_state.editorial_status == "approved" and approval is not None
+                    and chapter_state.approved_source_raw_sha256 == raw_sha256
+                    and approval.source_raw_sha256 == raw_sha256
+                    and approval.prose_projection_sha256 == pair.prose_projection_sha256
+                    and approval.projection_version == pair.projection_version
+                    and chapter_state.approved_prose_projection_sha256 == pair.prose_projection_sha256
+                    and chapter_state.approval_projection_version == pair.projection_version
+                )
+                if chapter_state.editorial_status == "approved" and not approval_is_current:
+                    raise BookServiceError("stale_file", "Chapter approval does not match captured source bytes.")
+                if approval_is_current:
+                    values["approval_source_raw_sha256"] = approval.source_raw_sha256
+                    values["approval_prose_projection_sha256"] = approval.prose_projection_sha256
+                    values["approval_projection_version"] = approval.projection_version
+        document.book_index_record = IndexedRoleProvenance(**values)
+        return document
+
     def index_provenance_for(
         self, source_path: str, doc_id: str, extracted_sha256: str,
         raw_sha256: str, extraction_version: str,
@@ -563,18 +765,21 @@ class BookService:
             "next_cursor": _cursor(cursor_view, next_offset) if next_offset < len(entries) else None,
         }
 
-    def record_index_provenance(
-        self, source_path: str, doc_id: str, extracted_sha256: str,
-        raw_sha256: str, extraction_version: str,
-    ):
-        """Persist derived index evidence only while its source bindings remain current."""
+    def record_index_provenance(self, record, *legacy):
+        """Persist the exact captured record only while its bindings remain current."""
         state = self.discover_state()
         if state is None:
             return None
-        record = self.index_provenance_for(
-            source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
-        )
-        if record is None:
+        if isinstance(record, str):
+            if len(legacy) != 4:
+                raise TypeError("legacy index provenance requires complete source facts")
+            doc_id, extracted_sha256, raw_sha256, extraction_version = legacy
+            record = self.index_provenance_for(
+                record, doc_id, extracted_sha256, raw_sha256, extraction_version,
+            )
+            if record is None:
+                return None
+        if not self.index_provenance_is_current(record):
             return None
         try:
             state.put_indexed_role_provenance(record)

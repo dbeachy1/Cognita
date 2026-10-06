@@ -220,14 +220,22 @@ class LocalEngineHost(
                 lambda project, sources, retrieval_profile=None:
                     self.book_index_admission_for(project, sources, retrieval_profile)
             )
+        if hasattr(self.core, "set_book_index_capture_provider"):
+            self.core.set_book_index_capture_provider(
+                lambda project, document: self.capture_book_index_document_for(project, document)
+            )
+        if hasattr(self.core, "set_book_index_content_provider"):
+            self.core.set_book_index_content_provider(
+                lambda project, source_path, suffix, raw:
+                    self.book_index_captured_content_for(project, source_path, suffix, raw)
+            )
+        if hasattr(self.core, "set_book_index_currentness_provider"):
+            self.core.set_book_index_currentness_provider(
+                lambda project, record: self.book_index_provenance_is_current(project, record)
+            )
         if hasattr(self.core, "set_book_index_provenance_recorder"):
             self.core.set_book_index_provenance_recorder(
-                lambda project, source_path, doc_id, extracted_sha256,
-                       raw_sha256, extraction_version:
-                    self.record_book_index_provenance_for(
-                        project, source_path, doc_id, extracted_sha256,
-                        raw_sha256, extraction_version,
-                    )
+                lambda project, record: self.record_book_index_provenance_for(project, record)
             )
         # One admission queue per host, shared by every project and connector.
         # AssetService remains project-scoped for authorization and path rules.
@@ -765,17 +773,28 @@ class LocalEngineHost(
             return False
         return self.book_service_for(project).index_provenance_is_current(record)
 
-    def record_book_index_provenance_for(
-        self, project: Project | str, source_path: str, doc_id: str,
-        extracted_sha256: str, raw_sha256: str, extraction_version: str,
-    ):
+    def capture_book_index_document_for(self, project: Project | str, document):
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return document
+        return self.book_service_for(project).capture_index_document(document)
+
+    def book_index_captured_content_for(
+        self, project: Project | str, source_path: str, suffix: str, raw: bytes,
+    ) -> str | None:
         if isinstance(project, str):
             project = self.registry.get(project)
         if project is None:
             return None
-        return self.book_service_for(project).record_index_provenance(
-            source_path, doc_id, extracted_sha256, raw_sha256, extraction_version,
-        )
+        return self.book_service_for(project).index_captured_content(source_path, suffix, raw)
+
+    def record_book_index_provenance_for(self, project: Project | str, record):
+        if isinstance(project, str):
+            project = self.registry.get(project)
+        if project is None:
+            return None
+        return self.book_service_for(project).record_index_provenance(record)
 
     def book_index_admission_for(
         self, project_or_name, sources, retrieval_profile: str | None = None,

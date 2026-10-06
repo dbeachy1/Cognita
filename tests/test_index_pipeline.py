@@ -471,6 +471,41 @@ async def test_a_registered_document_never_reaches_the_embedder(tmp_path):
     assert sum(emb.calls) == len(store.docs["notes.md"])
 
 
+async def test_single_file_book_capture_precedes_legacy_docx_and_records_same_facts(tmp_path):
+    """A registered chapter source is selected from captured bytes before docx parsing."""
+    source = tmp_path / "chapter.docx"
+    source.write_bytes(b"not a python-docx package")
+    store, embedder = FakeStore(), RecordingEmbedder()
+    core = core_for(store, embedder)
+    seen: list[tuple[str, object]] = []
+    record = object()
+
+    def content_provider(project, relative, suffix, raw):
+        seen.append(("content", (project, relative, suffix, raw)))
+        return "captured chapter prose", {"role": "chapter_working"}
+
+    def capture_provider(project, document):
+        assert project == "P"
+        assert document.content == "captured chapter prose"
+        assert document.captured_raw is None
+        assert document.book_index_context == {"role": "chapter_working"}
+        document.book_index_record = record
+        document.book_index_context = None
+        seen.append(("capture", document.doc_id))
+        return document
+
+    core.set_book_index_content_provider(content_provider)
+    core.set_book_index_capture_provider(capture_provider)
+    core.set_book_index_currentness_provider(lambda project, candidate: project == "P" and candidate is record)
+    core.set_book_index_provenance_recorder(lambda project, candidate: seen.append(("record", candidate)) or candidate)
+
+    outcome = await core.index_file("P", tmp_path, source)
+
+    assert outcome is not None and outcome.indexed
+    assert [item[0] for item in seen] == ["content", "capture", "record"]
+    assert store.writes == [("chapter.docx", 1)]
+
+
 async def test_a_parse_failure_does_not_stop_the_walk(tmp_path):
     """The producer runs on its own task; an exception there must surface as one
     document's error, not as a hung consumer waiting on a dead producer."""

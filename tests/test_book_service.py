@@ -2392,6 +2392,118 @@ def test_registered_index_provenance_is_persisted_and_revalidated(tmp_path):
     assert service.index_admitted_doc_ids([candidate]) == {}
 
 
+def test_captured_chapter_index_projection_removes_only_verified_spans_and_refuses_config_rebind(tmp_path):
+    from cognita.parsing import compute_doc_id, parse_file
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    raw = _docx_paragraphs("keep [literal] delete-me", "retain second paragraph")
+    source = tmp_path / "Chapters/1/chapter.docx"
+    source.write_bytes(raw)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(raw)
+    projection = parse_docx(raw)
+    first = projection.paragraphs[0]
+    start = first.text.index("delete-me")
+    chapter_state_path = tmp_path / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    chapter_state["index_annotations"] = {
+        "source_raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "extraction_version": "cognita-docx-v1",
+        "spans": [{
+            "paragraph_id": first.paragraph_id, "start": start, "end": start + len("delete-me"),
+            "expected_text_sha256": hashlib.sha256(b"delete-me").hexdigest(), "reason": "editorial",
+        }],
+    }
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+
+    parsed = parse_file(
+        source, tmp_path,
+        captured_content=lambda path, suffix, captured: service.index_captured_content(path, suffix, captured),
+    )
+    assert parsed is not None
+    assert parsed.content == "keep [literal] \n\nretain second paragraph"
+    assert "delete-me" not in parsed.content
+    assert parsed.book_index_context is not None
+    assert parsed.captured_raw is None
+    captured = service.capture_index_document(parsed)
+    record = captured.book_index_record
+    assert record is not None
+    assert record.extraction_version == "cognita-docx-v1"
+    assert record.doc_id == compute_doc_id(record.source_path, captured.content_hash)
+
+    # A new configuration cannot relabel the already projected source bytes.
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["chapters"] = []
+    layout["chapter_order"] = []
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    assert not service.index_provenance_is_current(record)
+
+
+async def test_registered_reference_reconcile_persists_refreshed_captured_provenance(tmp_path):
+    from cognita.retrieval import RetrievalCore
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    store = ReconcileStore()
+    async def no_existing_document(_project, _source):
+        return None
+    store.get_document = no_existing_document
+    core = RetrievalCore(store, HashEmbedder())
+    core.set_book_index_content_provider(
+        lambda _project, source, suffix, raw: service.index_captured_content(source, suffix, raw)
+    )
+    core.set_book_index_capture_provider(lambda _project, document: service.capture_index_document(document))
+    core.set_book_index_currentness_provider(lambda _project, record: service.index_provenance_is_current(record))
+    core.set_book_index_provenance_recorder(lambda _project, record: service.record_index_provenance(record))
+    source = tmp_path / "Project Files/ref.md"
+
+    first = await core.index_file("fixture", tmp_path, source)
+    assert first is not None and first.indexed
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    initial = state.indexed_role_provenance("Project Files/ref.md")
+    assert initial is not None
+
+    source.write_text("Reference facts changed externally", encoding="utf-8")
+    reconciled = await core.reconcile_paths("fixture", tmp_path, ["Project Files/ref.md"])
+    refreshed = state.indexed_role_provenance("Project Files/ref.md")
+    assert reconciled["indexed"] == 1
+    assert refreshed is not None and refreshed.raw_sha256 != initial.raw_sha256
+    assert store.sources["Project Files/ref.md"].doc_id == refreshed.doc_id
+    candidate = SimpleNamespace(
+        source="Project Files/ref.md", doc_id=refreshed.doc_id,
+        content_hash=refreshed.extracted_sha256,
+    )
+    assert set(service.index_admitted_doc_ids([candidate])) == {refreshed.doc_id}
+
+
+def test_invalid_captured_chapter_annotation_blocks_before_legacy_docx_extraction(tmp_path):
+    from cognita.parsing import parse_file
+
+    service, prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    projection = parse_docx(prose)
+    chapter_state_path = tmp_path / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    chapter_state["index_annotations"] = {
+        "source_raw_sha256": "0" * 64,
+        "extraction_version": "cognita-docx-v1",
+        "spans": [],
+    }
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+
+    with pytest.raises(BookServiceError, match="different chapter source bytes") as raised:
+        parse_file(
+            tmp_path / "Chapters/1/chapter.docx", tmp_path,
+            captured_content=lambda path, suffix, raw: service.index_captured_content(path, suffix, raw),
+        )
+    assert raised.value.reason == "stale_file"
+    assert projection.paragraphs  # Source projection was available; binding blocked publication.
+
+
 @pytest.mark.parametrize("editorial_status", ["draft", "approved"])
 def test_profile_admission_separates_drafts_canon_instructions_and_workflow(tmp_path, editorial_status):
     from cognita.parsing import parse_file

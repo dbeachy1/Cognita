@@ -123,6 +123,7 @@ def test_parse_file_stats_before_one_captured_read(docs, monkeypatch):
     parsed = parse_file(f, docs)
 
     assert reads == [f]
+    assert parsed.captured_raw is None
     assert parsed.content == original
     assert parsed.content_hash == hashlib.sha256(original.encode()).hexdigest()
     assert parsed.file_size == before.st_size

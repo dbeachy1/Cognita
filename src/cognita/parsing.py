@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import Callable
 
 from .chunking import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, TextChunk, chunk_markdown, chunk_text
 from .byte_facts import classify_text_bytes
@@ -154,6 +155,11 @@ class ParsedDocument:
     file_mtime: datetime | None = None
     file_size: int | None = None
     tier: str = TIER_EMBEDDED
+    # In-flight source evidence for the retrieval core.  It is never stored in
+    # the search database; book indexing uses it to bind parsing to one read.
+    captured_raw: bytes | None = field(default=None, repr=False, compare=False)
+    book_index_context: object | None = field(default=None, repr=False, compare=False)
+    book_index_record: object | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_registered(self) -> bool:
@@ -515,6 +521,7 @@ def parse_file(
     category_mappings: dict[str, str] | None = None,
     keyword_routes: dict[str, list[str]] | None = None,
     policy: ExtensionPolicy | None = None,
+    captured_content: Callable[[str, str, bytes], object] | None = None,
 ) -> ParsedDocument | None:
     """Parse one file. Returns None for empty documents (nothing to index).
 
@@ -545,18 +552,25 @@ def parse_file(
     # fails the safe way round: a stale stat costs one redundant reindex and heals.
     stat = filepath.stat()
     raw = filepath.read_bytes()
+    try:
+        source = filepath.relative_to(documents_dir).as_posix()
+    except ValueError:
+        source = filepath.as_posix()
     # Dedicated binary formats (PDF/Office) run through their parser first;
     # only extensions that promise ordinary text use the conservative byte
     # classifier.
     if suffix not in {".pdf", ".docx", ".xlsx", ".pptx"}:
         _validate_text_bytes(raw)
-    content = _extract_pdf_bytes(raw, name=filepath.name) if suffix == ".pdf" else extractor(raw)
+    selected = captured_content(source, suffix, raw) if captured_content is not None else None
+    book_index_context = None
+    if isinstance(selected, tuple):
+        content, book_index_context = selected
+    else:
+        content = selected
+    if content is None:
+        content = _extract_pdf_bytes(raw, name=filepath.name) if suffix == ".pdf" else extractor(raw)
     if not content or not content.strip():
         return None
-    try:
-        source = filepath.relative_to(documents_dir).as_posix()
-    except ValueError:
-        source = filepath.as_posix()
     content_hash = hashlib.sha256(content.encode()).hexdigest()
     return ParsedDocument(
         source=source,
@@ -569,6 +583,11 @@ def parse_file(
         file_mtime=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
         file_size=stat.st_size,
         tier=tier,
+        # The project callback has already bound any role/configuration facts;
+        # ParsedDocument keeps extracted text and immutable facts, never media
+        # or source buffers, while it waits for embedding/publication.
+        captured_raw=None,
+        book_index_context=book_index_context,
     )
 
 

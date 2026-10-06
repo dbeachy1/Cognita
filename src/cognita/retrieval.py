@@ -347,6 +347,9 @@ class RetrievalCore:
         self._deindexed: dict[str, DeindexedPaths] = {}
         self._effective_index_policy_provider: Callable[[str], EffectiveIndexPolicy] | None = None
         self._book_index_admission_provider: Callable[..., Any] | None = None
+        self._book_index_content_provider: Callable[..., Any] | None = None
+        self._book_index_capture_provider: Callable[..., Any] | None = None
+        self._book_index_currentness_provider: Callable[..., Any] | None = None
         self._book_index_provenance_recorder: Callable[..., Any] | None = None
         self._write_locks: dict[str, _ProjectWriteLock] = {}
         self._caches: dict[str, QueryCache] = {}
@@ -809,7 +812,9 @@ class RetrievalCore:
                                 summary["skipped"] += 1
                                 continue
                             before = await asyncio.to_thread(self._stat_identity, filepath)
-                            doc = await asyncio.to_thread(self._parse, filepath, documents_dir, policy)
+                            doc = await asyncio.to_thread(
+                                self._parse, filepath, documents_dir, policy, project=project,
+                            )
                             after = await asyncio.to_thread(self._stat_identity, filepath)
                             if before != after:
                                 raise RuntimeError("file changed during reconciliation read")
@@ -821,6 +826,7 @@ class RetrievalCore:
                                     summary["removed"] += 1
                                     changed = True
                                 continue
+                            doc = await self._capture_book_index_document(project, doc)
                             if known is not None:
                                 doc.category = known.category
                             if known is not None and known.tier == tier \
@@ -937,6 +943,18 @@ class RetrievalCore:
     def set_book_index_admission_provider(self, provider: Callable[..., Any] | None) -> None:
         """Install the host's current-source/doc-id approval admission check."""
         self._book_index_admission_provider = provider
+
+    def set_book_index_capture_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned captured role/configuration binding provider."""
+        self._book_index_capture_provider = provider
+
+    def set_book_index_content_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned pre-extraction chapter projection provider."""
+        self._book_index_content_provider = provider
+
+    def set_book_index_currentness_provider(self, provider: Callable[..., Any] | None) -> None:
+        """Install the host-owned final captured-record guard."""
+        self._book_index_currentness_provider = provider
 
     def set_book_index_provenance_recorder(self, provider: Callable[..., Any] | None) -> None:
         """Install the host-owned writer for source-bound role provenance."""
@@ -1956,34 +1974,12 @@ class RetrievalCore:
                     return IndexFileOutcome(
                         None, 0, False, decision.reason,
                     )
-            provenance_recorder = self._book_index_provenance_recorder
-            provenance_enabled = (
-                provenance_recorder is not None
-                and effective_policy is not None
-                and getattr(effective_policy, "layout", None) is not None
-            )
-            raw_sha256 = None
-            if provenance_enabled:
-                raw_sha256 = await asyncio.to_thread(
-                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
-                )
             doc = await asyncio.to_thread(
-                self._parse, filepath, documents_dir, extension_policy
+                self._parse, filepath, documents_dir, extension_policy, project=project,
             )
             if doc is None:
                 return None
-            if provenance_enabled:
-                parsed_source_sha = await asyncio.to_thread(
-                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
-                )
-                if parsed_source_sha != raw_sha256:
-                    # A Word save raced the parser. Do not attach approval
-                    # provenance to content whose exact source bytes are
-                    # unknown; a later reconcile can index the stable version.
-                    return IndexFileOutcome(
-                        None, 0, False, "source_changed_during_indexing",
-                        doc.content_hash, False,
-                    )
+            doc = await self._capture_book_index_document(project, doc)
             if category_override:
                 doc.category = category_override
             else:
@@ -1997,23 +1993,7 @@ class RetrievalCore:
             # reported success and then silently lost its document.
             self.readmit(project, doc.source)
             self.query_cache(project).invalidate()
-            provenance_current = None
-            if provenance_enabled:
-                current_raw_sha = await asyncio.to_thread(
-                    lambda: hashlib.sha256(filepath.read_bytes()).hexdigest()
-                )
-                if current_raw_sha == raw_sha256:
-                    from .books.docx import PROJECTION_VERSION
-
-                    record = provenance_recorder(
-                        project, doc.source, doc.doc_id, doc.content_hash,
-                        raw_sha256, PROJECTION_VERSION,
-                    )
-                    if inspect.isawaitable(record):
-                        record = await record
-                    provenance_current = record is not None
-                else:
-                    provenance_current = False
+            provenance_current = doc.book_index_record is None or self._book_index_currentness(project, doc.book_index_record)
             return IndexFileOutcome(
                 doc.doc_id, chunks, provenance_current is not False,
                 None if provenance_current is not False else "provenance_unavailable",
@@ -2101,15 +2081,53 @@ class RetrievalCore:
             return doc.doc_id, chunks
 
     def _parse(
-        self, filepath: Path, documents_dir: Path, policy: ExtensionPolicy | None = None
+        self, filepath: Path, documents_dir: Path, policy: ExtensionPolicy | None = None,
+        *, project: str | None = None,
     ) -> ParsedDocument | None:
+        captured_content = None
+        provider = self._book_index_content_provider
+        if project is not None and provider is not None:
+            def captured_content(source_path: str, suffix: str, raw: bytes):
+                return provider(project, source_path, suffix, raw)
         return parse_file(
             filepath,
             documents_dir,
             category_mappings=self.category_mappings,
             keyword_routes=self.keyword_routes,
             policy=policy,
+            captured_content=captured_content,
         )
+
+    async def _capture_book_index_document(self, project: str, doc: ParsedDocument) -> ParsedDocument:
+        provider = self._book_index_capture_provider
+        if provider is None:
+            return doc
+        captured = provider(project, doc)
+        if inspect.isawaitable(captured):
+            captured = await captured
+        return captured
+
+    def _book_index_currentness(self, project: str, record: object) -> bool:
+        provider = self._book_index_currentness_provider
+        return bool(provider(project, record)) if provider is not None else True
+
+    async def _replace_captured_document(self, project: str, doc: ParsedDocument, records: list[ChunkRecord]) -> None:
+        record = doc.book_index_record
+        if record is not None and not self._book_index_currentness(project, record):
+            raise RuntimeError("captured_book_index_facts_stale")
+        await self.store.replace_document(
+            project, self._document_record(doc, content=doc.content if doc.is_registered else None), records,
+        )
+        if record is None:
+            return
+        recorder = self._book_index_provenance_recorder
+        if recorder is None:
+            raise RuntimeError("captured_book_index_recorder_unavailable")
+        persisted = recorder(project, record)
+        if inspect.isawaitable(persisted):
+            persisted = await persisted
+        if persisted is None:
+            raise RuntimeError("captured_book_index_facts_stale")
 
     async def _index_parsed(self, project: str, doc: ParsedDocument) -> int:
         """Embed + transactionally store one parsed document. Returns chunk count.
@@ -2119,9 +2137,7 @@ class RetrievalCore:
         filesystem plus one INSERT.
         """
         if doc.is_registered:
-            await self.store.replace_document(
-                project, self._document_record(doc, content=doc.content), []
-            )
+            await self._replace_captured_document(project, doc, [])
             return 0
         text_chunks = doc.chunks(self.chunk_size, self.chunk_overlap)
         if not text_chunks:
@@ -2168,7 +2184,7 @@ class RetrievalCore:
         if vectors is None:
             vectors = await asyncio.to_thread(self.embedder.embed, texts)
         records = self._chunk_records(doc, text_chunks, vectors)
-        await self.store.replace_document(project, self._document_record(doc), records)
+        await self._replace_captured_document(project, doc, records)
         return len(records)
 
     @asynccontextmanager
