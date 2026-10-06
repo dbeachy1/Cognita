@@ -2482,6 +2482,225 @@ async def test_registered_reference_reconcile_persists_refreshed_captured_proven
     assert set(service.index_admitted_doc_ids([candidate])) == {refreshed.doc_id}
 
 
+def _book_bulk_core(service, store, embedder):
+    """Wire the production book capture callbacks to a small bulk-store fake."""
+    from cognita.retrieval import RetrievalCore
+    from cognita.books.policy import EffectiveIndexPolicy
+
+    async def ensure_project(_project):
+        return None
+
+    async def chunk_count(_project, source):
+        item = store.docs.get(source)
+        return len(item[1]) if item is not None else 0
+
+    async def delete_documents_not_in(_project, live):
+        removed = [source for source in store.sources if source not in live]
+        for source in removed:
+            await store.delete_document(_project, source)
+        return len(removed)
+
+    async def delete_all_documents(_project):
+        removed = list(store.sources)
+        for source in removed:
+            await store.delete_document(_project, source)
+        return len(removed)
+
+    store.ensure_project = ensure_project
+    store.chunk_count = chunk_count
+    store.delete_documents_not_in = delete_documents_not_in
+    store.delete_all_documents = delete_all_documents
+    core = RetrievalCore(store, embedder)
+    core.set_effective_index_policy_provider(
+        lambda _project: EffectiveIndexPolicy([], book_layout=service.config().layout)
+    )
+    core.set_book_index_content_provider(
+        lambda _project, source, suffix, raw: service.index_captured_content(source, suffix, raw)
+    )
+    core.set_book_index_capture_provider(
+        lambda _project, document: service.capture_index_document(document)
+    )
+    core.set_book_index_currentness_provider(
+        lambda _project, record: service.index_provenance_is_current(record)
+    )
+    core.set_book_index_provenance_recorder(
+        lambda _project, record: service.record_index_provenance(record)
+    )
+    return core
+
+
+async def test_bulk_book_capture_refreshes_force_provenance_and_applies_annotations(tmp_path):
+    from cognita.books.docx import parse_docx
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    raw = _docx_paragraphs("keep delete-me", "second paragraph")
+    chapter = tmp_path / "Chapters/1/chapter.docx"
+    chapter.write_bytes(raw)
+    (tmp_path / "Chapters/1/chapter_audio-tags.docx").write_bytes(raw)
+    projection = parse_docx(raw)
+    first = projection.paragraphs[0]
+    start = first.text.index("delete-me")
+    chapter_state_path = tmp_path / "Chapters/1/chapter.json"
+    chapter_state = json.loads(chapter_state_path.read_text(encoding="utf-8"))
+    chapter_state["index_annotations"] = {
+        "source_raw_sha256": hashlib.sha256(raw).hexdigest(),
+        "extraction_version": "cognita-docx-v1",
+        "spans": [{
+            "paragraph_id": first.paragraph_id, "start": start, "end": start + len("delete-me"),
+            "expected_text_sha256": hashlib.sha256(b"delete-me").hexdigest(), "reason": "editorial",
+        }],
+    }
+    chapter_state_path.write_text(json.dumps(chapter_state), encoding="utf-8")
+    store = ReconcileStore()
+    core = _book_bulk_core(service, store, HashEmbedder())
+
+    first_summary = await core.index_project("fixture", tmp_path, force=True)
+    state = ProjectState.discover(tmp_path)
+    assert state is not None and first_summary["indexed"] >= 1
+    first_record = state.indexed_role_provenance("Chapters/1/chapter.docx")
+    assert first_record is not None
+    assert first_record.extraction_version == "cognita-docx-v1"
+    stored_document, _chunks = store.docs["Chapters/1/chapter.docx"]
+    assert stored_document.content_hash == hashlib.sha256(
+        b"keep \n\nsecond paragraph"
+    ).hexdigest()
+
+    (tmp_path / "Project Files/ref.md").write_text("refreshed force source", encoding="utf-8")
+    second_summary = await core.index_project("fixture", tmp_path, force=True)
+    refreshed = state.indexed_role_provenance("Project Files/ref.md")
+    assert second_summary["indexed"] >= 1 and refreshed is not None
+    assert refreshed.raw_sha256 == hashlib.sha256(b"refreshed force source").hexdigest()
+    assert state.indexed_role_provenance("Chapters/1/chapter.docx") == first_record
+
+
+@pytest.mark.parametrize("drift", ["source", "layout", "folder"])
+async def test_bulk_book_capture_refuses_post_embed_drift(tmp_path, drift):
+    from cognita.books.config import FolderRule
+    from cognita.books.policy import EffectiveIndexPolicy
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    class BlockingEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.started, self.release = threading.Event(), threading.Event()
+
+        def embed(self, texts):
+            self.started.set()
+            assert self.release.wait(5)
+            return super().embed(texts)
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    store, embedder = ReconcileStore(), BlockingEmbedder()
+    core = _book_bulk_core(service, store, embedder)
+    current = {"policy": EffectiveIndexPolicy([], book_layout=service.config().layout)}
+    core.set_effective_index_policy_provider(lambda _project: current["policy"])
+    task = asyncio.create_task(core.index_project("fixture", tmp_path, force=True))
+    await asyncio.to_thread(embedder.started.wait, 5)
+    if drift == "source":
+        (tmp_path / "Project Files/ref.md").write_text("changed after bulk capture", encoding="utf-8")
+    elif drift == "layout":
+        path = tmp_path / "Project Files/Book_Layout.json"
+        layout = json.loads(path.read_text(encoding="utf-8"))
+        layout["title"] = "changed after bulk capture"
+        path.write_text(json.dumps(layout), encoding="utf-8")
+    else:
+        current["policy"] = EffectiveIndexPolicy(
+            [FolderRule(path="Project Files", indexed=False)], book_layout=service.config().layout,
+        )
+    embedder.release.set()
+    summary = await task
+
+    assert summary["errors"]
+    assert "Project Files/ref.md" not in store.replacements
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    assert state.indexed_role_provenance("Project Files/ref.md") is None
+    if drift == "folder":
+        assert not any(source.startswith("Project Files/") for source in store.replacements)
+
+
+async def test_bulk_registered_book_role_persists_provenance_without_embedding(tmp_path):
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    layout_path = tmp_path / "Project Files/Book_Layout.json"
+    layout = json.loads(layout_path.read_text(encoding="utf-8"))
+    layout["indexed_references"] = [{"filepath": "Project Files/ref.py", "role": "reference"}]
+    layout["indexed_instructions"] = []
+    layout["indexed_workflow_documents"] = []
+    layout["chapter_order"] = []
+    layout["chapters"] = []
+    layout["test_authorizations"] = []
+    layout_path.write_text(json.dumps(layout), encoding="utf-8")
+    (tmp_path / "Project Files/ref.py").write_text("registered_reference = True\n", encoding="utf-8")
+
+    class CountingEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def embed(self, texts):
+            self.calls.append(list(texts))
+            return super().embed(texts)
+
+    store, embedder = ReconcileStore(), CountingEmbedder()
+    core = _book_bulk_core(service, store, embedder)
+    summary = await core.index_project("fixture", tmp_path, force=True)
+    state = ProjectState.discover(tmp_path)
+    assert state is not None and summary["indexed"] >= 1
+    record = state.indexed_role_provenance("Project Files/ref.py")
+    assert record is not None and record.role == "reference"
+    assert store.docs["Project Files/ref.py"][1] == []
+    assert embedder.calls == []
+
+
+async def test_bulk_embed_fallback_reuses_captured_record_without_relabeling(tmp_path):
+    from retrieval_fakes import HashEmbedder
+    from test_retrieval_reconciliation import ReconcileStore
+
+    class WindowFailureEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def embed(self, texts):
+            self.calls += 1
+            if len(texts) > 1:
+                raise RuntimeError("window only")
+            return super().embed(texts)
+
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    store, embedder = ReconcileStore(), WindowFailureEmbedder()
+    core = _book_bulk_core(service, store, embedder)
+    captures = []
+    original = core._book_index_capture_provider
+
+    def capture(project, document):
+        captures.append((document.source, document.book_index_context))
+        return original(project, document)
+
+    core.set_book_index_capture_provider(capture)
+    summary = await core.index_project("fixture", tmp_path, force=True)
+
+    assert summary["indexed"] >= 2
+    assert {source for source, _context in captures} >= {
+        "Project Files/ref.md", "Project Files/guide.md",
+    }
+    assert len(captures) == len({source for source, _context in captures})
+    state = ProjectState.discover(tmp_path)
+    assert state is not None
+    assert state.indexed_role_provenance("Project Files/ref.md") is not None
+    assert state.indexed_role_provenance("Project Files/guide.md") is not None
+
+
 @pytest.mark.parametrize("drift", ["source", "layout"])
 async def test_captured_book_index_refuses_source_or_config_drift_during_embedding(tmp_path, drift):
     from cognita.retrieval import RetrievalCore

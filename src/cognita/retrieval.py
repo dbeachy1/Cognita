@@ -1292,11 +1292,16 @@ class RetrievalCore:
             # backpressure. See EMBED_WINDOW_CHUNKS above for why.
             queue: asyncio.Queue = asyncio.Queue(maxsize=PARSE_QUEUE_DEPTH)
             producer = asyncio.create_task(
-                self._parse_ahead(queue, files, documents_dir, policy, existing, force)
+                self._parse_ahead(queue, files, documents_dir, policy, existing, force, project=project)
             )
             window: list[_Parsed] = []
             window_chunks = 0
             processed = 0
+
+            def before_publish() -> None:
+                """Keep watcher/rebuild source identity valid through every write."""
+                if before_removal is not None and not before_removal():
+                    raise CapturedIndexPublicationError("source_unavailable")
 
             # Start hardware only when parsed chunks need embedding. A file
             # size estimate once predicted 387 chunks for a three-chunk walk,
@@ -1457,6 +1462,7 @@ class RetrievalCore:
                     pool = await ensure_pool(window_chunks)
                     ok = await self._embed_and_store_window(
                         project, window, summary, pool, scheduler_job=scheduler_job,
+                        before_publish=before_publish,
                     )
                     if not ok:
                         # 6.2: the pool misbehaved. It still gets torn down by the
@@ -1517,7 +1523,9 @@ class RetrievalCore:
                                     # Registered tier, or a document that chunked
                                     # empty: no embedding, so it never joins a
                                     # window and is written on the spot.
-                                    await self._store_unembedded(project, parsed.doc)
+                                    await self._store_unembedded(
+                                        project, parsed.doc, before_publish=before_publish,
+                                    )
                                     summary["indexed"] += 1
                                 else:
                                     window.append(parsed)
@@ -1719,6 +1727,8 @@ class RetrievalCore:
         policy: ExtensionPolicy,
         existing: dict,
         force: bool,
+        *,
+        project: str,
     ) -> None:
         """Read, parse and chunk every file, one ahead of the embedder.
 
@@ -1762,7 +1772,7 @@ class RetrievalCore:
                     want_chunks = force or retier or known is None
                     parsed = await asyncio.to_thread(
                         self._parse_and_chunk, filepath, documents_dir, policy,
-                        known=known, want_chunks=want_chunks,
+                        known=known, want_chunks=want_chunks, project=project,
                     )
                     if parsed is None:  # empty file — nothing to index
                         await queue.put(("empty", source, None))
@@ -1793,6 +1803,7 @@ class RetrievalCore:
         *,
         known=None,
         want_chunks: bool = True,
+        project: str | None = None,
     ) -> tuple[ParsedDocument, list] | None:
         """parse_file + chunking, together, off the event loop.
 
@@ -1807,30 +1818,42 @@ class RetrievalCore:
         change, or a document the store has never seen, because in those cases
         the doc_id comparison cannot authorize a skip.
         """
-        doc = self._parse(filepath, documents_dir, policy)
+        doc = self._parse(filepath, documents_dir, policy, project=project)
         if doc is None:
             return None
+        # Parse-ahead remains store-free, but it must bind the extracted text to
+        # the same role/configuration facts before chunking. The production
+        # BookService callback is synchronous; single-file and reconciliation
+        # retain their asynchronous provider support at their existing seam.
+        provider = self._book_index_capture_provider
+        if project is not None and provider is not None:
+            captured = provider(project, doc)
+            if inspect.isawaitable(captured):
+                raise RuntimeError("bulk captured index provider must not await")
+            doc = captured
         if doc.is_registered:
             return doc, []
         if not want_chunks and known is not None and known.doc_id == doc.doc_id:
             return doc, []
         return doc, doc.chunks(self.chunk_size, self.chunk_overlap)
 
-    async def _store_unembedded(self, project: str, doc: ParsedDocument) -> None:
+    async def _store_unembedded(
+        self, project: str, doc: ParsedDocument, *,
+        before_publish: Callable[[], None] | None = None,
+    ) -> None:
         """Write a document that has no vectors: registered tier, or chunked empty.
 
         Registered documents short-circuit BEFORE the embedder is touched — the
         spec's "genuinely skip, not embed-and-discard", so their reindex cost is
         filesystem plus one INSERT.
         """
-        content = doc.content if doc.is_registered else None
-        await self.store.replace_document(
-            project, self._document_record(doc, content=content), []
+        await self._replace_captured_document(
+            project, doc, [], before_publish=before_publish,
         )
 
     async def _embed_and_store_window(
         self, project: str, window: list[_Parsed], summary: dict, pool=None,
-        *, scheduler_job=None,
+        *, scheduler_job=None, before_publish: Callable[[], None] | None = None,
     ) -> bool:
         """Embed a window's chunks in ONE call, then write each document alone.
 
@@ -1878,7 +1901,9 @@ class RetrievalCore:
             )
             for parsed in window:
                 try:
-                    await self._index_parsed(project, parsed.doc)
+                    await self._index_parsed(
+                        project, parsed.doc, before_publish=before_publish,
+                    )
                     summary["indexed"] += 1
                 except Exception as exc:
                     summary["errors"].append(f"{Path(parsed.source).name}: {exc}")
@@ -1889,10 +1914,10 @@ class RetrievalCore:
             slice_ = vectors[offset:offset + count]
             offset += count
             try:
-                await self.store.replace_document(
-                    project,
-                    self._document_record(parsed.doc),
+                await self._replace_captured_document(
+                    project, parsed.doc,
                     self._chunk_records(parsed.doc, parsed.chunks, slice_),
+                    before_publish=before_publish,
                 )
                 summary["indexed"] += 1
             except Exception as exc:

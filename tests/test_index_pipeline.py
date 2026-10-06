@@ -540,6 +540,39 @@ async def test_single_file_final_policy_change_refuses_captured_publication(tmp_
     assert store.writes == []
 
 
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_bulk_root_guard_runs_before_each_normal_and_fallback_publication(tmp_path, fallback):
+    """A watcher/rebuild root change cannot publish a window after embedding."""
+    write_corpus(tmp_path, {"one.md": 2, "two.md": 2})
+
+    class BlockingEmbedder(HashEmbedder):
+        def __init__(self):
+            super().__init__()
+            self.started, self.release = threading.Event(), threading.Event()
+
+        def embed(self, texts):
+            self.started.set()
+            assert self.release.wait(5)
+            if fallback and len(texts) > 2:
+                raise RuntimeError("force per-document fallback")
+            return super().embed(texts)
+
+    store, embedder = FakeStore(), BlockingEmbedder()
+    core = core_for(store, embedder)
+    source_safe = {"value": True}
+    task = asyncio.create_task(core.index_project(
+        "P", tmp_path, before_removal=lambda: source_safe["value"],
+    ))
+    await asyncio.to_thread(embedder.started.wait, 5)
+    source_safe["value"] = False
+    embedder.release.set()
+    summary = await task
+
+    assert summary["indexed"] == 0
+    assert sum("source_unavailable" in error for error in summary["errors"]) == 2
+    assert store.writes == []
+
+
 async def test_a_parse_failure_does_not_stop_the_walk(tmp_path):
     """The producer runs on its own task; an exception there must surface as one
     document's error, not as a hung consumer waiting on a dead producer."""
