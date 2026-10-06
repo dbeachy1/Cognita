@@ -1497,6 +1497,110 @@ def test_generation_reservation_is_frozen_and_receipt_backed(tmp_path):
     assert second["generation"]["snapshot_id"] == prepared["snapshot_id"]
 
 
+def _generation_cas_fixture(tmp_path):
+    service, prose, tagged = _fixture(tmp_path)
+    spec = {"provider": "synthetic", "route": "fixture", "model_id": "model",
+            "voice_id": "voice", "parameters": {}, "context_fields": {}}
+    prepared = _prepare_test_plan(service, "cas-prepare-1", prose, tagged, None, [
+        {"chunk_id": "cas-chunk", "start": 0, "end": 5, "request_spec": spec},
+    ])
+    request = RecordGenerationRequest.model_validate({
+        "project": "fixture", "operation_id": "cas-reserve-old", "change": {
+            "kind": "reserve", "chapter_id": "ch1", "snapshot_id": prepared["snapshot_id"],
+            "chunk_id": "cas-chunk", "expected_manifest_revision": prepared["manifest_revision"],
+            "request": {"prompt_sha256": prepared["chunks"][0]["prompt_sha256"], "spec": spec},
+        },
+    })
+    return service, prose, tagged, spec, prepared, request
+
+
+def test_generation_current_manifest_cas_preserves_old_replay_updates_and_late_import(tmp_path):
+    service, prose, tagged, spec, old_plan, old_request = _generation_cas_fixture(tmp_path)
+    original, replayed = service.record_generation(old_request, owner_key="principal:fixture")
+    assert not replayed
+    new_plan = _prepare_test_plan(service, "cas-prepare-2", prose, tagged, old_plan["manifest_revision"], [
+        {"chunk_id": "cas-chunk", "start": 0, "end": 5,
+         "request_spec": {**spec, "context_fields": {"previous_text": "new context"}}},
+    ])
+    assert old_plan["manifest_revision"] == 1 and new_plan["manifest_revision"] == 2
+    stale_args = old_request.model_dump(mode="json", exclude_unset=True)
+    stale_args["operation_id"] = "cas-new-stale-reservation"
+    with pytest.raises(BookServiceError) as stale:
+        service.record_generation(RecordGenerationRequest.model_validate(stale_args), owner_key="principal:fixture")
+    assert stale.value.reason == "stale_manifest"
+    state = service._state_required()
+    assert len(state.generations(chapter_id="ch1")) == 1
+    assert state.receipt(owner_key="principal:fixture", project="fixture",
+                         tool="audiobook_record_generation", operation_id=stale_args["operation_id"]) is None
+    assert service.record_generation(old_request, owner_key="principal:fixture") == (original, True)
+
+    generation = original["generation"]
+    for status in ("submitted", "completed"):
+        updated, replayed = service.record_generation(RecordGenerationRequest.model_validate({
+            "project": "fixture", "operation_id": f"cas-old-{status}", "change": {
+                "kind": "update", "generation_record_id": generation["generation_record_id"],
+                "expected_generation_revision": generation["generation_revision"], "state": status,
+                "provider_ids": {"generation_ids": ["synthetic-cas-provider"]},
+                "provider_response_metadata": {"format": "synthetic raw s16le"},
+            },
+        }), owner_key="principal:fixture")
+        assert not replayed
+        generation = updated["generation"]
+    samples = b"\x00\x00\x01\x00"
+    source = tmp_path / "Audiobook/Chapters/1/cas-old.pcm"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(samples)
+    job, _ = service.import_audio(ImportAudioRequest.model_validate({
+        "project": "fixture", "operation_id": "cas-late-import",
+        "generation_record_id": generation["generation_record_id"],
+        "expected_generation_revision": generation["generation_revision"],
+        "source": {"kind": "project_file", "filepath": "Audiobook/Chapters/1/cas-old.pcm",
+                   "expected_sha256": hashlib.sha256(samples).hexdigest()},
+        "provenance": "native_generation", "source_format": {
+            "container": "raw_pcm", "encoding": "signed_integer", "sample_rate_hz": 8000,
+            "channels": 1, "storage_bits": 16, "valid_bits": 16, "endianness": "little",
+            "interleaving": "interleaved", "provider_format_evidence": "synthetic raw s16le",
+        },
+    }), owner_key="principal:fixture")
+    service.run_import_job(job["job_id"])
+    completed = service.get_job(GetJobRequest(project="fixture", job_id=job["job_id"]))
+    assert completed["state"] == "succeeded", completed
+    assert completed["result"]["take"]["snapshot_id"] == old_plan["snapshot_id"]
+    # Use the authoritative stored scope spelling, independent of key order.
+    namespace = state.namespace("ch1", state.snapshot(old_plan["snapshot_id"])["scope_key"])
+    assert namespace["current_snapshot_id"] == new_plan["snapshot_id"]
+    assert namespace["head_revision"] is None
+
+
+@pytest.mark.parametrize("changed_field", [
+    "manifest_revision", "current_snapshot_id", "current_plan_sha256", "missing_namespace",
+])
+def test_generation_cas_rechecks_namespace_inside_receipt_transaction(tmp_path, monkeypatch, changed_field):
+    service, _prose, _tagged, _spec, prepared, request = _generation_cas_fixture(tmp_path)
+    state = service._state_required()
+    scope_key = state.snapshot(prepared["snapshot_id"])["scope_key"]
+    original_reserve = state.reserve_generation
+
+    def race_before_transaction(**kwargs):
+        with state.transaction() as connection:
+            if changed_field == "missing_namespace":
+                connection.execute("DELETE FROM book_namespaces WHERE chapter_id=? AND scope_key=?", ("ch1", scope_key))
+            else:
+                # Column names are fixed test parameters, never request input.
+                value = 2 if changed_field == "manifest_revision" else "0" * 64
+                connection.execute(f"UPDATE book_namespaces SET {changed_field}=? WHERE chapter_id=? AND scope_key=?",
+                                   (value, "ch1", scope_key))
+        return original_reserve(**kwargs)
+
+    monkeypatch.setattr(state, "reserve_generation", race_before_transaction)
+    with pytest.raises(BookServiceError) as stale:
+        service.record_generation(request, owner_key="principal:fixture")
+    assert stale.value.reason == "stale_manifest"
+    assert state.generations(chapter_id="ch1") == []
+    assert state.receipt(owner_key="principal:fixture", project="fixture",
+                         tool="audiobook_record_generation", operation_id=request.operation_id) is None
+
+
 def _completed_raw_generation(service: BookService, prose: bytes, tagged: bytes) -> tuple[dict, dict]:
     inspected = _inspect(service)
     spec = {

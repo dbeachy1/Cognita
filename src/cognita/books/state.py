@@ -616,7 +616,8 @@ class ProjectState:
 
     def reserve_generation(
         self, *, record: dict, owner_key: str, project: str, tool: str,
-        operation_id: str, args_sha256: str,
+        operation_id: str, args_sha256: str, expected_manifest_revision: int,
+        request_plan_sha256: str,
     ) -> tuple[str, dict]:
         """Reserve an immutable provider request with receipt-first replay."""
         with self.transaction() as connection:
@@ -629,6 +630,17 @@ class ProjectState:
                 if prior["args_sha256"] != args_sha256:
                     raise ProjectStateError("operation_id_conflict")
                 return "replay", json.loads(prior["payload_json"])
+            # Fresh paid-request intent must still select the current plan at
+            # the transaction boundary. Historical receipt replay stays valid.
+            namespace = connection.execute(
+                "SELECT manifest_revision,current_snapshot_id,current_plan_sha256 "
+                "FROM book_namespaces WHERE chapter_id=? AND scope_key=?",
+                (record["chapter_id"], record["scope_key"]),
+            ).fetchone()
+            if (namespace is None or namespace["manifest_revision"] != expected_manifest_revision
+                    or namespace["current_snapshot_id"] != record["snapshot_id"]
+                    or namespace["current_plan_sha256"] != request_plan_sha256):
+                raise ProjectStateError("stale_manifest")
             connection.execute(
                 "INSERT INTO book_generations(generation_record_id,chapter_id,scope_key,snapshot_id,"
                 "chunk_id,generation_revision,state,request_sha256,payload_json,created_at,updated_at) "

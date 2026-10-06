@@ -1975,11 +1975,14 @@ class BookService:
             disposition, result = state.reserve_generation(
                 record=record, owner_key=owner_key, project=self.project_name,
                 tool="audiobook_record_generation", operation_id=request.operation_id,
-                args_sha256=args_sha256,
+                args_sha256=args_sha256, expected_manifest_revision=change.expected_manifest_revision,
+                request_plan_sha256=snapshot["result"]["request_plan_sha256"],
             )
         except ProjectStateError as exc:
             if "operation_id_conflict" in str(exc):
                 raise BookServiceError("operation_id_conflict", "The operation ID was used with different arguments.") from exc
+            if str(exc) == "stale_manifest":
+                raise BookServiceError("stale_manifest", "The chapter manifest changed before generation reservation.") from exc
             raise BookServiceError("state_unavailable", "Generation state could not be persisted.") from exc
         return result, disposition == "replay"
 
