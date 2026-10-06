@@ -157,8 +157,14 @@ class CognitaConfig(BaseModel):
     # Audiobook production never resolves media executables from PATH.  The
     # service receives these explicit absolute registrations and refuses MP3
     # output when either is absent or no longer a regular local executable.
-    ffmpeg_executable: Path | None = None
-    ffprobe_executable: Path | None = None
+    ffmpeg_executable: Path | None = Field(
+        default_factory=lambda: Path("/usr/bin/ffmpeg")
+        if Path("/.dockerenv").is_file() and Path("/usr/bin/ffmpeg").is_file() else None
+    )
+    ffprobe_executable: Path | None = Field(
+        default_factory=lambda: Path("/usr/bin/ffprobe")
+        if Path("/.dockerenv").is_file() and Path("/usr/bin/ffprobe").is_file() else None
+    )
     # 14.0.0: worker_port_min/max and worker_probe_interval_s (the 3.x worker
     # port pool and its ChromaDB-wedge deep probe) were removed with the workers.
     # Global kill-switch: force every remote connector project read-only.

@@ -47,6 +47,7 @@ EXPECTED_TOOLS = {
     "audiobook_record_generation", "audiobook_import_audio",
     "audiobook_build", "audiobook_commit_build",
     "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
+    "audiobook_get_book",
     "book_get_index_status",
     "set_folder_indexing", "list_project_files", "read_project_file",
 }
@@ -171,7 +172,7 @@ def test_make_snippet_truncates_at_natural_break():
 def test_engine_tool_defs_have_no_duplicates():
     names = [t["name"] for t in ENGINE_TOOL_DEFS]
     # Core tools plus implemented book generation/import/build and storage.
-    assert len(names) == len(set(names)) == len(EXPECTED_TOOLS) == 45
+    assert len(names) == len(set(names)) == len(EXPECTED_TOOLS) == 46
 
 
 async def test_asset_mutation_uses_project_lock_and_type_gate(tmp_path):

@@ -820,6 +820,7 @@ class LocalEngineHost(
             "audiobook_get_job": book_dto.GetJobRequest,
             "audiobook_cancel_job": book_dto.CancelJobRequest,
             "audiobook_get_generations": book_dto.GetGenerationsRequest,
+            "audiobook_get_book": book_dto.GetBookRequest,
             "book_get_index_status": book_dto.IndexStatusRequest,
             "set_folder_indexing": book_dto.SetFolderIndexingRequest,
             "list_project_files": book_dto.ListProjectFilesRequest,
@@ -911,6 +912,8 @@ class LocalEngineHost(
                     return success_envelope(tool, data, operation_id=request_model.operation_id, replayed=replayed)
                 elif tool == "audiobook_get_generations":
                     data = service.get_generations(request_model)
+                elif tool == "audiobook_get_book":
+                    data = service.get_book(request_model)
                 elif tool == "book_get_index_status":
                     try:
                         indexed_sources = await self.store.indexed_source_paths(project.name)

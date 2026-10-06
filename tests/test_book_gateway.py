@@ -148,6 +148,43 @@ async def test_prepare_receipt_is_principal_scoped_and_permission_precedes_repla
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool", [
+    "audiobook_record_generation", "audiobook_import_audio", "audiobook_build",
+    "audiobook_commit_build", "audiobook_cancel_job",
+])
+async def test_read_only_connector_rejects_book_mutations_before_arguments_or_jobs(host, monkeypatch, tool):
+    """Book reservations must not be reachable through a read-only connector."""
+    monkeypatch.setattr(host, "_connector_write_denial", lambda *_args, **_kwargs: {
+        "reason": "read_only", "message": "The connector is read-only.",
+    })
+    arguments = {
+        "audiobook_record_generation": {"project": "fixture", "operation_id": "readonly-record", "change": {
+            "kind": "reserve", "chapter_id": "ch1", "snapshot_id": "snapshot", "chunk_id": "chunk",
+            "expected_manifest_revision": 1, "request": {"prompt_sha256": "a" * 64,
+                "spec": {"provider": "synthetic", "route": "fixture", "model_id": "model", "voice_id": "voice", "parameters": {}, "context_fields": {}}},
+        }},
+        "audiobook_import_audio": {"project": "fixture", "operation_id": "readonly-import",
+            "generation_record_id": "generation", "expected_generation_revision": 1,
+            "source": {"kind": "project_file", "filepath": "Audiobook/source.wav", "expected_sha256": "a" * 64},
+            "provenance": "native_generation"},
+        "audiobook_build": {"project": "fixture", "operation_id": "readonly-build", "expected_head_revision": None,
+            "input": {"kind": "chapter", "chapter_id": "ch1", "snapshot_id": "snapshot", "expected_manifest_revision": 1,
+                      "request_plan_sha256": "a" * 64, "takes": []}, "mode": "production_pcm", "outputs": {"master": True},
+            "gaps": [], "metadata": {"title": "Fixture", "author": "Fixture", "edition": "test"}},
+        "audiobook_commit_build": {"project": "fixture", "operation_id": "readonly-commit", "build_id": "build",
+            "expected_head_revision": None, "intent": "accept_candidate", "acceptance": {"actor": "fixture",
+                "accepted_at": "2026-10-05T00:00:00+00:00", "listening_review": "passed", "notes": []}},
+        "audiobook_cancel_job": {"project": "fixture", "operation_id": "readonly-cancel", "job_id": "job",
+            "expected_job_revision": 1},
+    }[tool]
+    response = await _post(host, _rpc("tools/call", {
+        "name": tool, "arguments": arguments,
+    }), headers={"x-cognita-connector-id": "read-only-connector"})
+    payload = json.loads(response.json()["result"]["content"][0]["text"])
+    assert payload["status"] == "error" and payload["reason"] == "read_only"
+
+
+@pytest.mark.asyncio
 async def test_gateway_imports_completed_synthetic_raw_pcm_and_reports_durable_job(host):
     headers = {"x-cognita-principal-id": "alice"}
     inspected = await _post(host, _rpc("tools/call", {

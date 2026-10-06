@@ -1483,7 +1483,7 @@ class BookService:
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
             _, target, _ = self._import_paths(layout, chapter, job["job_id"], pinned["take_id"], raw_pcm=True)
-            for artifact in (target, target.with_suffix(".wav")):
+            for artifact in (target, target.with_suffix(".wav"), target.parent / "take.json"):
                 artifact.unlink(missing_ok=True)
         except (BookServiceError, OSError, KeyError, TypeError):
             # The subsequent durable failure remains authoritative. Never
@@ -1570,6 +1570,9 @@ class BookService:
                     "media": wrapped.media.model_dump(mode="json"),
                 },
             }, strict=True).model_dump(mode="json", exclude_unset=True)
+            take_fact = target.parent / "take.json"
+            _write_immutable_json(take_fact, {"schema_version": 1, "take": take})
+            published_paths.append(take_fact)
             completed = dict(generation)
             completed["updated_at"] = now
             completed["state"] = "completed"
@@ -1628,8 +1631,10 @@ class BookService:
         chapter head.  The gateway schedules ``run_build_job`` outside its
         admission lock and a later, explicit commit performs the head CAS.
         """
+        if isinstance(request.input, dto.BookBuildInput):
+            return self._reserve_book_build(request, owner_key=owner_key)
         if not isinstance(request.input, dto.ChapterBuildInput):
-            raise BookServiceError("unsupported_build_mode", "Book assembly is not available until chapter heads are durable.")
+            raise BookServiceError("unsupported_build_mode", "The requested assembly input is unavailable.")
         if request.mode != "production_pcm" or not request.outputs.master:
             raise BookServiceError("unsupported_build_mode", "This checkpoint assembles retained chapter PCM masters only.")
         state, _, layout = self._enabled_layout()
@@ -1722,6 +1727,61 @@ class BookService:
             raise BookServiceError("state_unavailable", "The build reservation could not be persisted.") from exc
         return result, disposition == "replay"
 
+    def _reserve_book_build(self, request: dto.BuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
+        """Pin every current accepted production chapter before book assembly."""
+        if request.mode != "production_pcm" or not request.outputs.master:
+            raise BookServiceError("unsupported_build_mode", "Book builds require retained production PCM masters.")
+        state, _, layout = self._enabled_layout()
+        item = request.input
+        assert isinstance(item, dto.BookBuildInput)
+        if item.book_id != layout.book_id or item.expected_layout_revision != layout.layout_revision:
+            raise BookServiceError("stale_dependency", "The registered book layout changed before build admission.")
+        settings = validate_production_settings(_read_bytes(self.root, layout.shared_paths.production_settings_filepath))
+        target = settings.production_target
+        if target is None or "mp3_bitrate_kbps" not in request.outputs.model_fields_set or request.outputs.mp3_bitrate_kbps != target.mp3_bitrate_kbps:
+            raise BookServiceError("settings_mismatch", "Book builds require the configured production MP3 target.")
+        head = state.book_head(layout.book_id)
+        if (None if head is None else int(head["head_revision"])) != request.expected_head_revision:
+            raise BookServiceError("stale_head", "The accepted book head changed before build admission.")
+        if [value.chapter_id for value in item.chapters] != layout.chapter_order:
+            raise BookServiceError("coverage_incomplete", "Book dependencies must cover registered chapter order exactly once.")
+        production_key = dto.ProductionScope(kind="production").model_dump_json()
+        inputs: list[dict[str, Any]] = []
+        for dependency in item.chapters:
+            chapter_head = state.chapter_head(dependency.chapter_id, production_key)
+            if chapter_head is None or (
+                chapter_head["accepted_build_id"] != dependency.chapter_build_id
+                or int(chapter_head["head_revision"]) != dependency.chapter_head_revision
+                or chapter_head["accepted_snapshot_id"] != dependency.snapshot_id
+                or chapter_head["accepted_plan_sha256"] != dependency.request_plan_sha256
+            ):
+                raise BookServiceError("stale_dependency", "A chapter dependency is not its current accepted production head.")
+            build = state.build(dependency.chapter_build_id)
+            if build is None:
+                raise BookServiceError("stale_dependency", "A current chapter build is unavailable.")
+            output = next((value for value in build["result"]["outputs"] if value["kind"] == "pcm_master"), None)
+            if output is None or output["media"].get("encoding") not in {"signed_integer", "float"}:
+                raise BookServiceError("media_mismatch", "A chapter head lacks a retained native PCM master.")
+            if output["media"].get("sample_rate_hz") != target.sample_rate_hz or output["media"].get("channels") != target.channels or output["media"].get("storage_bits") != target.storage_bits or output["media"].get("encoding") != target.encoding:
+                raise BookServiceError("media_mismatch", "Accepted chapter masters do not match the configured book target.")
+            inputs.append({"dependency": _data(dependency), "output": output})
+        pinned = {"scope": "book", "book_id": layout.book_id, "layout_revision": layout.layout_revision,
+                  "target": _data(target), "chapters": inputs, "gaps": _data(request.gaps),
+                  "metadata": _data(request.metadata), "emit_mp3": True}
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            disposition, result = state.reserve_build_job(
+                job={"job_id": str(uuid.uuid4()), "payload": pinned, "created_at": now,
+                     "pinned_inputs_sha256": canonical_json_sha256(pinned)},
+                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                args_sha256=canonical_json_sha256(_data(request)),
+            )
+        except ProjectStateError as exc:
+            if str(exc) == "operation_id_conflict":
+                raise BookServiceError("operation_id_conflict", "This operation ID was used with different arguments.") from exc
+            raise BookServiceError("state_unavailable", "The book-build reservation could not be persisted.") from exc
+        return result, disposition == "replay"
+
     def run_build_job(self, job_id: str) -> None:
         """Assemble a single immutable PCM candidate from a durable pinned job."""
         state = self._state_required()
@@ -1732,6 +1792,9 @@ class BookService:
         staged: list[Path] = []
         try:
             pinned = claimed["payload"]
+            if pinned.get("scope") == "book":
+                self._run_book_build(job_id, pinned)
+                return
             _, _, layout = self._enabled_layout()
             chapter = self._chapter(layout, pinned["chapter_id"])
             target = dto.ProductionTarget.model_validate(pinned["target"], strict=True)
@@ -1823,8 +1886,9 @@ class BookService:
                                "sample_or_packet_verification": True, "errors": []},
                 "needs_listening_review": True,
             }, strict=True).model_dump(mode="json", exclude_unset=True)
+            _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result})
             state.finish_build_success(job_id=job_id, build={
-                "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
+                "scope": "chapter", "build_id": build_id, "chapter_id": chapter.chapter_id, "scope_key": pinned["scope_key"],
                 "snapshot_id": pinned["snapshot_id"], "request_plan_sha256": pinned["request_plan_sha256"],
                 "input_take_ids": pinned["take_ids"], "created_at": datetime.now(timezone.utc).isoformat(),
                 "was_accepted": False, "result": result,
@@ -1857,6 +1921,97 @@ class BookService:
                 raise BookServiceError("media_tool_unavailable", "Configured media executables must be regular absolute files.")
         return ffmpeg, ffprobe
 
+    def _run_book_build(self, job_id: str, pinned: dict[str, Any]) -> None:
+        """Assemble one continuous book candidate from pinned chapter heads."""
+        state, _, layout = self._enabled_layout()
+        target = dto.ProductionTarget.model_validate(pinned["target"], strict=True)
+        build_id = str(uuid.uuid4())
+        root_relative = f"{layout.shared_paths.book_audio_root}/builds/{build_id}"
+        _mkdir_safe(self.root, root_relative)
+        build_dir = _path(self.root, root_relative)
+        pcm, pcm_stage = build_dir / "master.pcm", build_dir / "master.pcm.part"
+        timeline, timeline_stage = build_dir / "timeline.json", build_dir / "timeline.json.part"
+        sources: list[PcmSource] = []
+        source_snapshots: list[str] = []
+        input_take_ids: list[str] = []
+        dependencies = [entry["dependency"] for entry in pinned["chapters"]]
+        for entry in pinned["chapters"]:
+            output = entry["output"]
+            media = output["media"]
+            path = _path(self.root, output["filepath"])
+            inspected = inspect_media_file(path, raw_format={
+                "container": "raw_pcm", "encoding": media["encoding"],
+                "sample_rate_hz": media["sample_rate_hz"], "channels": media["channels"],
+                "storage_bits": media["storage_bits"], "valid_bits": media["valid_bits"],
+                "endianness": media["endianness"], "interleaving": "interleaved",
+                "provider_format_evidence": "retained-book-master",
+            }, provider_format_evidence="retained-book-master")
+            if inspected.bytes_sha256 != output["bytes_sha256"]:
+                raise BookServiceError("stale_media", "A pinned chapter PCM master changed before book assembly.")
+            dependency = entry["dependency"]
+            sources.append(PcmSource(dependency["chapter_id"], path, inspected))
+            source_snapshots.append(dependency["snapshot_id"])
+            chapter_build = state.build(dependency["chapter_build_id"])
+            if chapter_build is not None:
+                input_take_ids.extend(chapter_build.get("input_take_ids", []))
+        with pcm_stage.open("xb") as output:
+            assembled = assemble_pcm_stream(
+                sources, [dto.SilenceGap.model_validate(item, strict=True) for item in pinned["gaps"]], target, output,
+            )
+            output.flush()
+            os.fsync(output.fileno())
+        media = dto.MediaProperties.model_validate({
+            "codec": ("pcm_f" if target.encoding == "float" else "pcm_s") + f"{target.storage_bits}le",
+            "container": "raw_pcm", "sample_rate_hz": target.sample_rate_hz, "channels": target.channels,
+            "encoding": target.encoding, "storage_bits": target.storage_bits, "valid_bits": target.valid_bits,
+            "endianness": "little", "bitrate_bps": None, "frame_count": assembled.frame_count,
+            "duration_seconds": int(assembled.frame_count) / target.sample_rate_hz,
+            "canonical_sample_sha256": assembled.samples_sha256,
+        }, strict=True).model_dump(mode="json")
+        timeline_value = {"sample_rate_hz": assembled.timeline.sample_rate_hz,
+                          "channels": assembled.timeline.channels, "encoding": assembled.timeline.encoding,
+                          "storage_bits": assembled.timeline.storage_bits, "frame_count": assembled.timeline.frame_count,
+                          "entries": _data(assembled.timeline.entries)}
+        with timeline_stage.open("x", encoding="utf-8") as output:
+            json.dump(timeline_value, output, ensure_ascii=False, separators=(",", ":"))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(pcm_stage, pcm)
+        os.replace(timeline_stage, timeline)
+        outputs = [{"kind": "pcm_master", "filepath": f"{root_relative}/master.pcm",
+                    "bytes_sha256": assembled.bytes_sha256, "size_bytes": assembled.sample_bytes, "media": media}]
+        ffmpeg, ffprobe = self._registered_media_executables()
+        mp3 = build_dir / "listening.mp3"
+        process = asyncio.run(run_process(
+            production_mp3_argv(ffmpeg, pcm, mp3, target,
+                                dto.BuildMetadata.model_validate(pinned["metadata"], strict=True)),
+            timeout_seconds=1800.0, cwd=build_dir,
+        ))
+        if process.cancelled or process.timed_out or process.returncode != 0:
+            raise BookServiceError("tool_failed", "The registered book MP3 encoder did not complete successfully.")
+        encoded = inspect_media_file(mp3, ffprobe=asyncio.run(ffprobe_json(ffprobe, mp3, timeout_seconds=60.0)))
+        if encoded.media.codec != "mp3" or encoded.media.encoding != "compressed":
+            raise BookServiceError("media_mismatch", "The book encoder output was not verified as MP3 audio.")
+        outputs.append({"kind": "mp3_download", "filepath": f"{root_relative}/listening.mp3",
+                        "bytes_sha256": encoded.bytes_sha256, "size_bytes": encoded.size_bytes,
+                        "media": encoded.media.model_dump(mode="json")})
+        recipe = canonical_json_sha256({"pinned": pinned, "timeline": timeline_value})
+        result = dto.BuildResult.model_validate({
+            "kind": "build", "build_id": build_id, "scope": "book", "namespace": {"kind": "production"},
+            "source_snapshot_ids": source_snapshots, "input_take_ids": input_take_ids,
+            "chapter_dependencies": dependencies, "request_plan_sha256": None, "outputs": outputs,
+            "timeline_filepath": f"{root_relative}/timeline.json", "recipe_sha256": recipe,
+            "validation": {"complete": True, "media_integrity": True, "coverage": True,
+                           "sample_or_packet_verification": True, "errors": []},
+            "needs_listening_review": True,
+        }, strict=True).model_dump(mode="json", exclude_unset=True)
+        _write_immutable_json(build_dir / "build.json", {"schema_version": 1, "build": result})
+        state.finish_build_success(job_id=job_id, build={
+            "scope": "book", "build_id": build_id, "book_id": layout.book_id,
+            "created_at": datetime.now(timezone.utc).isoformat(), "was_accepted": False,
+            "dependencies": dependencies, "result": result,
+        })
+
     def commit_build(self, request: dto.CommitBuildRequest, *, owner_key: str) -> tuple[dict[str, Any], bool]:
         state, _, layout = self._enabled_layout()
         args_sha256 = canonical_json_sha256(_data(request))
@@ -1869,6 +2024,8 @@ class BookService:
         build = state.build(request.build_id)
         if build is None:
             raise BookServiceError("file_not_found", "The requested build candidate does not exist.")
+        if build.get("scope") == "book":
+            return self._commit_book_build(request, state, layout, build, owner_key, args_sha256)
         result = build["result"]
         validation = result["validation"]
         if not all(validation[key] for key in ("complete", "media_integrity", "coverage", "sample_or_packet_verification")):
@@ -1923,6 +2080,76 @@ class BookService:
                       "rollback_not_accepted": "stale_dependency"}.get(str(exc), "state_unavailable")
             raise BookServiceError(reason, "The chapter build could not be committed.") from exc
         return committed, disposition == "replay"
+
+    def _commit_book_build(self, request: dto.CommitBuildRequest, state: ProjectState,
+                           layout: BookLayout, build: dict[str, Any], owner_key: str,
+                           args_sha256: str) -> tuple[dict[str, Any], bool]:
+        if build.get("book_id") != layout.book_id:
+            raise BookServiceError("stale_dependency", "The candidate belongs to a different book layout.")
+        if request.intent == "rollback" and not build.get("was_accepted"):
+            raise BookServiceError("stale_dependency", "Only an earlier accepted book build can be restored.")
+        production_key = dto.ProductionScope(kind="production").model_dump_json()
+        for dependency in build.get("dependencies", []):
+            current = state.chapter_head(dependency["chapter_id"], production_key)
+            if current is None or current["accepted_build_id"] != dependency["chapter_build_id"] or int(current["head_revision"]) != dependency["chapter_head_revision"]:
+                raise BookServiceError("stale_dependency", "A chapter head changed after this book candidate was assembled.")
+        exports = [{key: output[key] for key in ("kind", "filepath", "bytes_sha256")}
+                   for output in build["result"]["outputs"]]
+        try:
+            disposition, committed = state.commit_book_build(
+                build_id=request.build_id, book_id=layout.book_id,
+                expected_head_revision=request.expected_head_revision,
+                owner_key=owner_key, project=self.project_name, operation_id=request.operation_id,
+                args_sha256=args_sha256,
+                result={"accepted_build_id": request.build_id, "head_revision": 1, "previous_build_id": None,
+                        "accepted_plan_matches_prepared": True, "exports": exports,
+                        "dependent_book_ids_marked_stale": [], "rollback_available": True},
+            )
+        except ProjectStateError as exc:
+            raise BookServiceError("stale_head" if str(exc) == "stale_head" else "state_unavailable",
+                                   "The book build could not be committed.") from exc
+        return committed, disposition == "replay"
+
+    def get_book(self, request: dto.GetBookRequest) -> dict[str, Any]:
+        state, _, layout = self._enabled_layout()
+        if request.book_id != layout.book_id:
+            raise BookServiceError("file_not_found", "The requested book is not registered.")
+        production_key = dto.ProductionScope(kind="production").model_dump_json()
+        dependencies: list[dict[str, Any]] = []
+        not_ready: list[dict[str, Any]] = []
+        for chapter_id in layout.chapter_order:
+            head = state.chapter_head(chapter_id, production_key)
+            if head is None:
+                not_ready.append({"chapter_id": chapter_id, "reason": "no_accepted_production_head"})
+                continue
+            dependencies.append({"chapter_id": chapter_id, "chapter_build_id": head["accepted_build_id"],
+                                 "chapter_head_revision": int(head["head_revision"]),
+                                 "snapshot_id": head["accepted_snapshot_id"],
+                                 "request_plan_sha256": head["accepted_plan_sha256"]})
+        head = state.book_head(layout.book_id)
+        accepted = state.build(head["accepted_build_id"]) if head else None
+        candidates = state.book_builds(layout.book_id)
+        accepted_dependencies = accepted.get("dependencies", []) if accepted else []
+        limit = request.limit if "limit" in request.model_fields_set else 100
+        view = canonical_json_sha256({"book": layout.book_id, "layout_revision": layout.layout_revision,
+                                      "head": head["head_revision"] if head else None, "dependencies": dependencies})
+        offset = _cursor_offset(request.cursor, view) if "cursor" in request.model_fields_set else 0
+        page = dependencies[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "book_id": layout.book_id, "layout_revision": layout.layout_revision,
+            "head_revision": int(head["head_revision"]) if head else None,
+            "accepted_build_id": head["accepted_build_id"] if head else None,
+            "candidate_build_ids": [item["build_id"] for item in candidates],
+            "current_outputs_stale": bool(head and accepted_dependencies != dependencies),
+            "accepted_plan_matches_prepared": bool(head["accepted_plan_matches_prepared"]) if head else None,
+            "chapter_order": layout.chapter_order, "current_chapter_dependencies": page,
+            "accepted_book_dependencies": accepted_dependencies,
+            "chapters_not_ready": not_ready,
+            "exports": accepted["result"]["outputs"] if accepted else [],
+            "has_more": next_offset < len(dependencies),
+            "next_cursor": _cursor(view, next_offset) if next_offset < len(dependencies) else None,
+        }
 
     def get_job(self, request: dto.GetJobRequest) -> dict[str, Any]:
         state = self._state_required()
@@ -2047,3 +2274,16 @@ def _mkdir_safe(root: Path, relative: str) -> None:
             facts = target.lstat()
         if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
             raise BookServiceError("permission_denied", "Managed snapshot directories cannot contain links.")
+
+
+def _write_immutable_json(path: Path, value: dict[str, Any]) -> None:
+    """Create one durable fact file without making it a second authority."""
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(value, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as exc:
+        raise BookServiceError("publication_conflict", "The immutable media fact path already exists.") from exc
+    except OSError as exc:
+        raise BookServiceError("publication_failed", "The immutable media fact could not be published.") from exc

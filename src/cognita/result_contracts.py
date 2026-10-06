@@ -37,6 +37,7 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "audiobook_record_generation", "audiobook_import_audio",
     "audiobook_build", "audiobook_commit_build",
     "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
+    "audiobook_get_book",
     "book_get_index_status",
     "set_folder_indexing", "list_project_files", "read_project_file",
     "read_document", "list_backups", "diff_backup", "get_self_test_plan",

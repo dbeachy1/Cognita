@@ -551,7 +551,7 @@ _IMPLEMENTED_BOOK_TOOLS = {
     "audiobook_record_generation", "audiobook_import_audio",
     "audiobook_build", "audiobook_commit_build",
     "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
-    "book_get_index_status",
+    "audiobook_get_book", "book_get_index_status",
 }
 ENGINE_TOOL_DEFS.extend(
     item for item in book_tool_definitions() if item["name"] in _IMPLEMENTED_BOOK_TOOLS

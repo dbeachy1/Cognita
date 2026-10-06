@@ -142,11 +142,11 @@ def test_the_documented_tool_counts_are_true():
 
     engine = {t["name"] for t in ENGINE_TOOL_DEFS}
     gateway = set(GATEWAY_TOOL_DEFS)
-    assert len(engine) == 45 and len(gateway) == 9
-    assert len(engine | gateway) == 54, "engine and gateway provide 54 tools; list_projects brings the public catalog to 55"
+    assert len(engine) == 46 and len(gateway) == 9
+    assert len(engine | gateway) == 55, "engine and gateway provide 55 tools; list_projects brings the public catalog to 56"
     # Read-only projects: the engine list is filtered to the allow-list and only
     # the read-only gateway tools are injected.
-    assert len((engine | gateway) & READONLY_TOOLS) == 26
+    assert len((engine | gateway) & READONLY_TOOLS) == 29
     # Every allow-listed read tool must actually be served by one of the layers,
     # or tools/list would advertise a tool that does not exist.
     assert READONLY_TOOLS <= (engine | gateway)

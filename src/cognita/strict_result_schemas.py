@@ -894,6 +894,7 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
         "audiobook_get_chapter", "audiobook_find_chunk",
         "audiobook_record_generation", "audiobook_import_audio",
         "audiobook_build", "audiobook_commit_build",
+        "audiobook_get_book",
         "audiobook_get_job", "audiobook_cancel_job", "audiobook_get_generations",
         "book_get_index_status",
     }

@@ -511,6 +511,22 @@ class ProjectState:
                         PRIMARY KEY(chapter_id,scope_key)
                     )"""
                 )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_edition_builds (
+                        build_id TEXT PRIMARY KEY,
+                        book_id TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )"""
+                )
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS book_edition_heads (
+                        book_id TEXT PRIMARY KEY,
+                        head_revision INTEGER NOT NULL,
+                        accepted_build_id TEXT NOT NULL,
+                        accepted_plan_matches_prepared INTEGER NOT NULL
+                    )"""
+                )
         except (sqlite3.DatabaseError, OSError) as exc:
             raise ProjectStateError("build state schema is unavailable") from exc
 
@@ -961,11 +977,18 @@ class ProjectState:
                 raise ProjectStateError("cancel_requested")
             if row["state"] not in {"queued", "running"}:
                 raise ProjectStateError("job_not_active")
-            connection.execute(
-                "INSERT INTO book_builds(build_id,chapter_id,scope_key,snapshot_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
-                (build["build_id"], build["chapter_id"], build["scope_key"], build["snapshot_id"],
-                 json.dumps(build, ensure_ascii=False, separators=(",", ":")), build["created_at"]),
-            )
+            if build["scope"] == "chapter":
+                connection.execute(
+                    "INSERT INTO book_builds(build_id,chapter_id,scope_key,snapshot_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (build["build_id"], build["chapter_id"], build["scope_key"], build["snapshot_id"],
+                     json.dumps(build, ensure_ascii=False, separators=(",", ":")), build["created_at"]),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO book_edition_builds(build_id,book_id,payload_json,created_at) VALUES(?,?,?,?)",
+                    (build["build_id"], build["book_id"],
+                     json.dumps(build, ensure_ascii=False, separators=(",", ":")), build["created_at"]),
+                )
             result = build["result"]
             connection.execute(
                 "UPDATE book_build_jobs SET state='succeeded',job_revision=job_revision+1,result_json=?,updated_at=CURRENT_TIMESTAMP WHERE job_id=?",
@@ -976,7 +999,21 @@ class ProjectState:
     def build(self, build_id: str) -> dict | None:
         with self._connect() as connection:
             row = connection.execute("SELECT payload_json FROM book_builds WHERE build_id=?", (build_id,)).fetchone()
+            if row is None:
+                row = connection.execute("SELECT payload_json FROM book_edition_builds WHERE build_id=?", (build_id,)).fetchone()
         return None if row is None else json.loads(row["payload_json"])
+
+    def book_builds(self, book_id: str) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM book_edition_builds WHERE book_id=? ORDER BY created_at,build_id", (book_id,)
+            ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
+
+    def book_head(self, book_id: str) -> dict | None:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM book_edition_heads WHERE book_id=?", (book_id,)).fetchone()
+        return None if row is None else dict(row)
 
     def builds(self, *, chapter_id: str, scope_key: str) -> list[dict]:
         with self._connect() as connection:
@@ -1038,6 +1075,41 @@ class ProjectState:
             committed["head_revision"] = next_revision
             committed["previous_build_id"] = previous
             committed["accepted_plan_matches_prepared"] = plan_matches_prepared
+            self._put_receipt_in(connection, owner_key=owner_key, project=project,
+                                 tool="audiobook_commit_build", operation_id=operation_id,
+                                 args_sha256=args_sha256, result=committed)
+            return "committed", committed
+
+    def commit_book_build(self, *, build_id: str, book_id: str, expected_head_revision: int | None,
+                          owner_key: str, project: str, operation_id: str, args_sha256: str,
+                          result: dict) -> tuple[str, dict]:
+        with self.transaction() as connection:
+            prior = self._receipt_in(connection, owner_key=owner_key, project=project,
+                                     tool="audiobook_commit_build", operation_id=operation_id,
+                                     args_sha256=args_sha256)
+            if prior is not None:
+                return "replay", prior
+            candidate = connection.execute(
+                "SELECT payload_json FROM book_edition_builds WHERE build_id=? AND book_id=?", (build_id, book_id)
+            ).fetchone()
+            if candidate is None:
+                raise ProjectStateError("build_not_found")
+            build = json.loads(candidate["payload_json"])
+            current = connection.execute("SELECT * FROM book_edition_heads WHERE book_id=?", (book_id,)).fetchone()
+            revision = None if current is None else int(current["head_revision"])
+            if revision != expected_head_revision:
+                raise ProjectStateError("stale_head")
+            next_revision = 1 if revision is None else revision + 1
+            previous = None if current is None else current["accepted_build_id"]
+            connection.execute(
+                "INSERT INTO book_edition_heads(book_id,head_revision,accepted_build_id,accepted_plan_matches_prepared) VALUES(?,?,?,1) "
+                "ON CONFLICT(book_id) DO UPDATE SET head_revision=excluded.head_revision,"
+                "accepted_build_id=excluded.accepted_build_id,accepted_plan_matches_prepared=excluded.accepted_plan_matches_prepared",
+                (book_id, next_revision, build_id),
+            )
+            connection.execute("UPDATE book_edition_builds SET payload_json=? WHERE build_id=?",
+                               (json.dumps({**build, "was_accepted": True}, ensure_ascii=False, separators=(",", ":")), build_id))
+            committed = {**result, "head_revision": next_revision, "previous_build_id": previous}
             self._put_receipt_in(connection, owner_key=owner_key, project=project,
                                  tool="audiobook_commit_build", operation_id=operation_id,
                                  args_sha256=args_sha256, result=committed)

@@ -28,7 +28,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_asset_info",
         "get_asset",
         "ocr_asset",
-        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk", "book_get_index_status",
+        "audiobook_inspect_chapter", "audiobook_get_chapter", "audiobook_find_chunk",
+        "audiobook_get_job", "audiobook_get_generations", "audiobook_get_book", "book_get_index_status",
         "list_project_files", "read_project_file",
     }
 )
@@ -64,7 +65,8 @@ MUTATING_TOOLS: frozenset[str] = frozenset(
         "update_asset_metadata",
         "reindex_assets",
         "remove_asset",
-        "audiobook_prepare_chapter", "set_folder_indexing",
+        "audiobook_prepare_chapter", "audiobook_record_generation", "audiobook_import_audio",
+        "audiobook_build", "audiobook_commit_build", "audiobook_cancel_job", "set_folder_indexing",
     }
 )
 

@@ -14,6 +14,7 @@ from cognita.books.models import (
     CommitBuildRequest,
     GetGenerationsRequest,
     GetChapterRequest,
+    GetBookRequest,
     GetJobRequest,
     ImportAudioRequest,
     IndexStatusRequest,
@@ -145,6 +146,15 @@ def test_bootstrap_inspect_is_read_only_and_prepare_receipt_survives_restart(tmp
     # A project-scoped service needs no Postgres connection to inspect, prepare,
     # and replay its immutable snapshot.
     assert not hasattr(reopened, "store")
+
+
+def test_get_book_reports_registered_order_and_unready_production_heads(tmp_path):
+    service, _prose, _tagged = _fixture(tmp_path, bound=True)
+    ProjectState.initialize(tmp_path)
+    value = service.get_book(GetBookRequest(project="fixture", book_id="fixture-book"))
+    assert value["head_revision"] is None
+    assert value["chapter_order"] == ["ch1"]
+    assert value["chapters_not_ready"] == [{"chapter_id": "ch1", "reason": "no_accepted_production_head"}]
 
 
 def test_invalid_binding_fails_closed_instead_of_reentering_bootstrap(tmp_path):
