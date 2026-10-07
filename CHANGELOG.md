@@ -1,5 +1,11 @@
 # Changelog
 
+## 16.1.2 — Quiet managed-state watcher reconciliation (2026-10-07)
+
+- Watchers ignore the root-owned `.cognita-storage` subtree at native and polling intake and discard stale queued markers before asset or text reconciliation. Similarly named user directories remain eligible.
+- Successful no-op watcher and asset reconciliation summaries move to DEBUG; real changes and failures remain visible at INFO or higher.
+- MCP arguments, results, and contract versions are unchanged.
+
 ## 16.1.1 — Retire invalid watcher paths and clear queued work (2026-10-07)
 
 - Invalid watcher paths, including drive-relative Windows directory markers, are terminal and no longer retry forever. Valid paths in the same batch still reconcile, and transient root, read, and embedding failures remain retryable.

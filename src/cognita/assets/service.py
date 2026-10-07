@@ -117,7 +117,17 @@ class AssetService:
     def _log(self, event: str, **fields: Any) -> None:
         if self.log is not None:
             try:
-                self.log.info(event, extra={"asset": fields})
+                quiet_reconcile = False
+                if event == "asset.reconcile" and fields.get("outcome") == "complete":
+                    changed = any(
+                        int(fields.get(key, 0) or 0) > 0
+                        for key in ("indexed", "metadata_refreshed", "removed")
+                    )
+                    quiet_reconcile = (
+                        not changed and not int(fields.get("error_count", 0) or 0)
+                    )
+                writer = self.log.debug if quiet_reconcile else self.log.info
+                writer(event, extra={"asset": fields})
             except (AttributeError, TypeError):
                 pass
 
@@ -1720,6 +1730,8 @@ class AssetService:
             "asset.reconcile", project=self.project_name, indexed=indexed,
             metadata_refreshed=metadata_refreshed, skipped=skipped,
             removed=removed, expanded_prefixes=len(collapsed_prefixes),
+            error_count=len(errors),
+            error_reasons=sorted({item["reason"] for item in errors}),
             outcome="complete",
         )
         return result
@@ -1865,7 +1877,12 @@ class AssetService:
                         break
                     await self._delete(relative)
                     removed += 1
-        self._log("asset.reconcile", indexed=indexed, removed=removed, outcome="complete")
+        self._log(
+            "asset.reconcile", indexed=indexed, removed=removed,
+            error_count=len(errors),
+            error_reasons=sorted({item["reason"] for item in errors}),
+            outcome="complete",
+        )
         return {"status": "success", "project": self.project_name, "indexed": indexed,
                 "removed": removed, "errors": errors[:20]}
 

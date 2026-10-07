@@ -1,8 +1,10 @@
 """Focused 11.4 watcher/configuration contracts without PostgreSQL."""
 
 import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from watchdog.events import DirCreatedEvent, FileCreatedEvent
@@ -85,6 +87,36 @@ def test_handler_preserves_directory_metadata_for_current_manager(tmp_path):
     assert manager.marked == [("P", "populated", "created", True, "poll")]
 
 
+def test_managed_storage_events_are_ignored_but_user_lookalikes_are_kept(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    core = Core()
+    manager = WatcherManager(core, debounce_s=1, poll_interval_s=0)
+    manager._states["P"] = _ProjectState()
+    manager._mark("P", ".cognita-storage", "modified", is_directory=True)
+    native = _ProjectEventHandler(manager, "P", docs, DEFAULT_POLICY, source="native")
+    polling = _ProjectEventHandler(manager, "P", docs, DEFAULT_POLICY, source="poll")
+
+    for handler in (native, polling):
+        handler.on_any_event(DirCreatedEvent(str(docs / ".cognita-storage")))
+        handler.on_any_event(FileCreatedEvent(
+            str(docs / ".cognita-storage" / "snapshots" / "state.md")
+        ))
+        handler.on_any_event(DirCreatedEvent(str(docs / ".cognita-storage-other")))
+        handler.on_any_event(FileCreatedEvent(
+            str(docs / ".cognita-storage-other" / "note.md")
+        ))
+        handler.on_any_event(DirCreatedEvent(str(docs / ".COGNITA-STORAGE")))
+
+    dirty = manager._states["P"].dirty
+    assert not any(path.startswith(".cognita-storage/") or path == ".cognita-storage"
+                   for path in dirty)
+    assert ".cognita-storage-other" in dirty
+    assert ".cognita-storage-other/note.md" in dirty
+    assert ".COGNITA-STORAGE" not in dirty
+    assert dirty[".cognita-storage-other"].sources == {"native", "poll"}
+
+
 def test_asset_staging_events_are_ignored_at_native_and_poll_intake(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -132,6 +164,135 @@ async def test_disappeared_staging_batch_is_dropped_and_later_change_processes(t
         while not core.calls and time.monotonic() < deadline:
             await asyncio.sleep(.02)
         assert core.calls == [("P", ["legitimate.md"])]
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_stale_managed_storage_marker_is_dropped_before_both_reconcilers(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / ".cognita-storage").mkdir()
+    (docs / ".cognita-storage-other").mkdir()
+    core = Core()
+
+    class Assets:
+        def __init__(self):
+            self.calls = []
+
+        async def reconcile_paths(self, paths, *, dirty_prefixes=None, **_kwargs):
+            self.calls.append((list(paths), list(dirty_prefixes or [])))
+            return {"indexed": 0, "metadata_refreshed": 0, "skipped": 0,
+                    "removed": 0, "failed": 0, "errors": [],
+                    "retryable_failures": []}
+
+    assets = Assets()
+    manager = WatcherManager(core, debounce_s=.03, poll_interval_s=0,
+                             asset_services={"P": assets})
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    await manager.start([project])
+    try:
+        now = time.monotonic()
+        hidden = _DirtyPath(".cognita-storage", True, now, now)
+        visible = _DirtyPath(".cognita-storage-other", True, now, now)
+        batch = {hidden.path: hidden, visible.path: visible}
+        await manager._run_batch("P", batch, manager._states["P"].queue_generation)
+
+        assert core.calls == [("P", [".cognita-storage-other"])]
+        assert assets.calls == [([], [".cognita-storage-other"])]
+        assert manager.health("P")["last_summary"]["ignored_managed_storage_paths"] == 1
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.parametrize("guarded", [False, True])
+@pytest.mark.asyncio
+async def test_noop_watcher_summaries_are_debug_and_changes_remain_info(
+    tmp_path, caplog, guarded,
+):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    class NoopCore(Core):
+        def __init__(self):
+            super().__init__()
+            self.summary = {"indexed": 0, "metadata_refreshed": 0,
+                            "skipped": 1, "removed": 0, "failed": 0}
+
+        async def reconcile_paths(self, name, _docs, paths):
+            self.calls.append((name, list(paths)))
+            return dict(self.summary)
+
+    class SourceGuard:
+        enabled = True
+
+        def check(self, _docs):
+            return SimpleNamespace(state="available", reason=None)
+
+    core = NoopCore()
+    manager = WatcherManager(
+        core, debounce_s=.03, poll_interval_s=0,
+        source_guard=SourceGuard() if guarded else None,
+    )
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    await manager.start([project])
+    try:
+        now = time.monotonic()
+        batch = {"note.md": _DirtyPath("note.md", False, now, now)}
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="cognita.watcher"):
+            for _ in range(4):
+                await manager._run_batch("P", batch, manager._states["P"].queue_generation)
+        summaries = [record for record in caplog.records
+                     if record.name == "cognita.watcher" and "dirty=1" in record.getMessage()]
+        assert len(summaries) == 4
+        assert all(record.levelno == logging.DEBUG for record in summaries)
+        assert not any(record.levelno >= logging.INFO for record in summaries)
+
+        core.summary = {"indexed": 1, "metadata_refreshed": 0,
+                        "skipped": 0, "removed": 0, "failed": 0}
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="cognita.watcher"):
+            await manager._run_batch("P", batch, manager._states["P"].queue_generation)
+        changed = [record for record in caplog.records
+                   if record.name == "cognita.watcher" and "dirty=1" in record.getMessage()]
+        assert len(changed) == 1 and changed[0].levelno == logging.INFO
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_nonretryable_asset_error_keeps_watcher_summary_visible(tmp_path, caplog):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    core = Core()
+
+    class Assets:
+        async def reconcile_paths(self, paths, *, dirty_prefixes=None, **_kwargs):
+            return {"indexed": 0, "metadata_refreshed": 0, "skipped": 1,
+                    "removed": 0, "failed": 0, "retryable_failures": [],
+                    "errors": [{"filepath": "rejected.png", "reason": "policy_rejected"}]}
+
+    manager = WatcherManager(
+        core, debounce_s=.03, poll_interval_s=0,
+        asset_services={"P": Assets()},
+    )
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    await manager.start([project])
+    try:
+        now = time.monotonic()
+        batch = {"rejected.png": _DirtyPath("rejected.png", False, now, now)}
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="cognita.watcher"):
+            await manager._run_batch("P", batch, manager._states["P"].queue_generation)
+        summary = manager.health("P")["last_summary"]
+        assert summary["failed"] == 0
+        assert summary["assets"]["errors"][0]["reason"] == "policy_rejected"
+        record = next(item for item in caplog.records
+                      if item.name == "cognita.watcher" and "dirty=1" in item.getMessage())
+        assert record.levelno == logging.INFO
+        assert "failed=1" in record.getMessage()
+        assert manager._states["P"].retry_at == 0.0
     finally:
         await manager.stop()
 
@@ -235,7 +396,7 @@ async def test_clear_queue_does_not_restore_cancelled_batch_and_later_events_run
 
 
 @pytest.mark.asyncio
-async def test_duplicate_events_coalesce_and_retry_recovers(tmp_path):
+async def test_duplicate_events_coalesce_and_retry_recovers(tmp_path, caplog):
     docs = tmp_path / "docs"
     docs.mkdir()
     core = Core()
@@ -244,6 +405,7 @@ async def test_duplicate_events_coalesce_and_retry_recovers(tmp_path):
     project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
     await manager.start([project])
     try:
+        caplog.set_level(logging.DEBUG, logger="cognita.watcher")
         core.fail_once = True
         manager._mark("P", "a.md", "created", source="native")
         manager._mark("P", "a.md", "modified", source="poll")
@@ -253,6 +415,10 @@ async def test_duplicate_events_coalesce_and_retry_recovers(tmp_path):
         assert len(core.calls) == 2
         assert core.calls[0][1] == ["a.md"]
         assert manager.health("P")["last_successful_reconciliation"] is not None
+        assert any(record.levelno == logging.WARNING and "retry scheduled" in record.getMessage()
+                   for record in caplog.records)
+        assert any(record.levelno == logging.INFO and "retry recovered" in record.getMessage()
+                   for record in caplog.records)
     finally:
         await manager.stop()
 

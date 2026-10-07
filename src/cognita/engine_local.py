@@ -117,7 +117,7 @@ from .books.schemas import (
     ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES,
 )
 from .books.service import BookService, BookServiceError
-from .books.state import ProjectState, ProjectStateError
+from .books.state import STATE_DIRECTORY, ProjectState, ProjectStateError
 from .books.storage import ProjectFileError
 from .source_mount_guard import SourceMountGuard
 from .registry import Project, Registry
@@ -752,7 +752,7 @@ class LocalEngineHost(
                         rules[path] = False
         return EffectiveIndexPolicy(
             [FolderRule(path=path, indexed=indexed) for path, indexed in rules.items()],
-            hard_exclusion_roots=(".cognita-storage",),
+            hard_exclusion_roots=(STATE_DIRECTORY,),
             deindexed_paths=legacy.sorted(), book_layout=layout,
         )
 

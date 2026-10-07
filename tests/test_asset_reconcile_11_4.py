@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import logging
 import shutil
 import struct
 import zlib
@@ -198,6 +199,77 @@ def test_full_reconcile_keeps_the_row_of_a_present_file_that_fails_to_read(tmp_p
         assert catalog.deleted == []
         assert result["removed"] == 0
         assert result["errors"] == [{"filepath": "busy.png", "reason": "read_failed"}]
+
+    asyncio.run(run())
+
+
+def test_noop_asset_reconciliation_is_debug_but_changes_and_errors_are_info(
+    tmp_path, monkeypatch, caplog,
+):
+    async def run():
+        root, data = _empty_root(tmp_path)
+        path = root / "same.png"
+        path.write_bytes(PNG)
+        logger = logging.getLogger("cognita.assets.reconcile_test")
+        service = AssetService(_OutsideDataProject(root, data), logger=logger)
+        await service.reconcile_paths(("same.png",))
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="cognita.assets"):
+            no_op = await service.reconcile_paths(("same.png",))
+        assert no_op["skipped"] == 1
+        target_log = next(record for record in caplog.records
+                           if record.name == logger.name
+                           and record.getMessage() == "asset.reconcile")
+        assert target_log.levelno == logging.DEBUG
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="cognita.assets"):
+            empty_base = tmp_path / "empty"
+            empty_base.mkdir()
+            empty_root, empty_data = _empty_root(empty_base)
+            empty_service = AssetService(
+                _OutsideDataProject(empty_root, empty_data), _Catalog([]), logger=logger,
+            )
+            full_no_op = await empty_service.reconcile_all()
+            assert full_no_op["indexed"] == full_no_op["removed"] == 0
+            full_log = next(record for record in caplog.records
+                            if record.name == logger.name
+                            and record.getMessage() == "asset.reconcile")
+            assert full_log.levelno == logging.DEBUG
+
+        payload = b"key\0value"
+        chunk = (struct.pack(">I", len(payload)) + b"tEXt" + payload
+                 + struct.pack(">I", zlib.crc32(b"tEXt" + payload) & 0xFFFFFFFF))
+        path.write_bytes(PNG[:-12] + chunk + PNG[-12:])
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="cognita.assets"):
+            changed = await service.reconcile_paths(("same.png",))
+        assert changed["indexed"] == 1
+        changed_log = next(record for record in caplog.records
+                           if record.name == logger.name
+                           and record.getMessage() == "asset.reconcile")
+        assert changed_log.levelno == logging.INFO
+
+        previous_digest = service._memory["same.png"].final_sha256
+        path.write_bytes(PNG)
+
+        def rejected_read(_target):
+            raise AssetError("policy_rejected", "source was refused by policy")
+
+        monkeypatch.setattr(service, "_read_png", rejected_read)
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="cognita.assets"):
+            rejected = await service.reconcile_paths(("same.png",))
+        assert rejected["removed"] == rejected["failed"] == 0
+        assert rejected["errors"] == [{"filepath": "same.png", "reason": "policy_rejected"}]
+        assert service._memory["same.png"].final_sha256 == previous_digest
+        error_log = next(record for record in caplog.records
+                         if record.name == logger.name
+                         and record.getMessage() == "asset.reconcile")
+        assert error_log.levelno == logging.INFO
+        assert error_log.asset["error_count"] == 1
+        assert error_log.asset["error_reasons"] == ["policy_rejected"]
 
     asyncio.run(run())
 

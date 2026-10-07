@@ -9,8 +9,8 @@ same write-locked, per-document-transactional path chat writes take. Bursts
 (an editor's save dance, an OneDrive sync batch) coalesce into a single pass,
 and the smart skip makes false wakeups nearly free (a stat per file).
 
-Provenance: every flush logs which paths triggered it and what the sync did,
-so "why did this reindex happen" is always answerable from cognita.log.
+Meaningful changes and failures log their reconciliation summary at INFO;
+successful no-op summaries retain their details at DEBUG.
 
 Gateway writes also land here (add_document writes the file → event fires),
 but the flush finds mtime+size already matching the freshly indexed row and
@@ -36,6 +36,7 @@ from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
 from .assets.publication import TEMP_PREFIX as ASSET_STAGING_PREFIX
+from .books.state import STATE_DIRECTORY as MANAGED_STORAGE_DIRECTORY
 from .parsing import DEFAULT_POLICY, ExtensionPolicy, _is_excluded, is_sync_conflict
 from .registry import Project
 from .retrieval import RetrievalCore
@@ -61,6 +62,12 @@ def _is_asset_staging_path(path: str) -> bool:
     be shared by native intake, polling intake, and stale queued batches.
     """
     return any(part.startswith(ASSET_STAGING_PREFIX) for part in Path(path).parts)
+
+
+def _is_managed_storage_path(path: str) -> bool:
+    """Return whether a relative watcher path is inside Cognita's state root."""
+    first = path.replace("\\", "/").split("/", 1)[0]
+    return first.casefold() == MANAGED_STORAGE_DIRECTORY.casefold()
 
 
 class _LegacyProjectEventHandler(FileSystemEventHandler):
@@ -350,6 +357,8 @@ class _ProjectEventHandler(FileSystemEventHandler):
                 if not source_guard or not source_guard.enabled:
                     log.debug("Ignoring asset publication staging path: %s", name)
                 continue
+            if _is_managed_storage_path(name):
+                continue
             if _is_excluded(rel, self._manager.exclude_patterns):
                 continue
             if not directory and is_sync_conflict(path.name, self._manager.sync_conflict_patterns):
@@ -622,6 +631,8 @@ class WatcherManager:
             if not self.source_guard or not self.source_guard.enabled:
                 log.debug("Ignoring asset publication staging path: %s", rel_path)
             return
+        if _is_managed_storage_path(rel_path):
+            return
         now = time.monotonic()
         with self._lock:
             state = self._states.get(project)
@@ -710,6 +721,10 @@ class WatcherManager:
             else:
                 valid_batch[path] = item
         batch = valid_batch
+        managed_storage = [path for path in batch if _is_managed_storage_path(path)]
+        if managed_storage:
+            batch = {path: item for path, item in batch.items()
+                     if not _is_managed_storage_path(path)}
         ignored = [path for path in batch if _is_asset_staging_path(path)]
         if ignored:
             with self._lock:
@@ -725,6 +740,7 @@ class WatcherManager:
             state.health.update({"active": False, "last_error": None,
                                  "last_summary": {
                                      "ignored_staging_paths": len(ignored),
+                                     "ignored_managed_storage_paths": len(managed_storage),
                                      "failed": len(terminal_failures),
                                      "failures": terminal_failures,
                                      "retryable_failures": [],
@@ -851,6 +867,9 @@ class WatcherManager:
             state.health["active"] = False
             return
         failures = self._failed_paths(summary, batch)
+        if managed_storage and isinstance(summary, dict):
+            summary = dict(summary)
+            summary["ignored_managed_storage_paths"] = len(managed_storage)
         if terminal_failures and isinstance(summary, dict):
             summary = dict(summary)
             summary["failed"] = int(summary.get("failed", 0) or 0) + len(terminal_failures)
@@ -867,19 +886,26 @@ class WatcherManager:
                 log.info("Watcher: project=%s retry recovered", name)
         state.health["active"] = False
         state.health["last_summary"] = summary if isinstance(summary, dict) else {"result": "ok"}
+        changed = any(
+            self._value(summary, key) > 0
+            for key in ("indexed", "metadata_refreshed", "removed")
+        )
+        reported_failure_count = max(len(failures), self._summary_failure_count(summary))
+        reported_failures = reported_failure_count > 0
+        summary_level = logging.INFO if changed or reported_failures else logging.DEBUG
         if self.source_guard and self.source_guard.enabled:
-            log.info("Watcher: project=%s dirty=%d expanded=%s indexed=%s metadata_refreshed=%s skipped=%s removed=%s failed=%d elapsed=%.3fs",
+            log.log(summary_level, "Watcher: project=%s dirty=%d expanded=%s indexed=%s metadata_refreshed=%s skipped=%s removed=%s failed=%d elapsed=%.3fs",
                      name, len(batch), bool(isinstance(summary, dict) and summary.get("expanded_paths")),
                      self._value(summary, "indexed"), self._value(summary, "metadata_refreshed"),
-                     self._value(summary, "skipped"), self._value(summary, "removed"), len(failures),
+                     self._value(summary, "skipped"), self._value(summary, "removed"), reported_failure_count,
                      time.monotonic() - started)
         else:
             paths = sorted(batch)
-            log.info("Watcher: project=%s sources=%s dirty=%d expanded=%s indexed=%s metadata_refreshed=%s skipped=%s removed=%s failed=%d elapsed=%.3fs paths=%s",
+            log.log(summary_level, "Watcher: project=%s sources=%s dirty=%d expanded=%s indexed=%s metadata_refreshed=%s skipped=%s removed=%s failed=%d elapsed=%.3fs paths=%s",
                      name, ",".join(sorted({x for i in batch.values() for x in i.sources})) or "unknown",
                      len(batch), bool(isinstance(summary, dict) and summary.get("expanded_paths")),
                      self._value(summary, "indexed"), self._value(summary, "metadata_refreshed"),
-                     self._value(summary, "skipped"), self._value(summary, "removed"), len(failures),
+                     self._value(summary, "skipped"), self._value(summary, "removed"), reported_failure_count,
                      time.monotonic() - started,
                      ",".join(paths[:10]) + (f", +{len(paths)-10} omitted" if len(paths) > 10 else ""))
 
@@ -1114,6 +1140,22 @@ class WatcherManager:
     @staticmethod
     def _value(summary: Any, key: str) -> object:
         return summary.get(key, 0) if isinstance(summary, dict) else 0
+
+    @classmethod
+    def _summary_failure_count(cls, summary: Any) -> int:
+        """Count failures, including nonretryable errors in component summaries."""
+        if not isinstance(summary, dict):
+            return 0
+        count = int(summary.get("failed", 0) or 0)
+        for key in ("failures", "errors"):
+            entries = summary.get(key)
+            if isinstance(entries, (list, tuple, dict)):
+                count = max(count, len(entries))
+        nested = max(
+            (cls._summary_failure_count(summary.get(key)) for key in ("text", "assets")),
+            default=0,
+        )
+        return max(count, nested)
 
     def health(self, project: str | None = None) -> dict[str, Any] | dict[str, dict[str, Any]]:
         with self._lock:
