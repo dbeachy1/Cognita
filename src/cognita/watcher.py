@@ -608,6 +608,9 @@ class WatcherManager:
         if active and task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            # Cancellation can skip a reconciler's final cache invalidation
+            # after earlier document writes have already committed.
+            self.core.query_cache(name).invalidate()
         return {"project": name, "cleared_paths": cleared_paths,
                 "active_cancelled": active}
 

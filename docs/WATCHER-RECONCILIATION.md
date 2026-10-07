@@ -27,3 +27,18 @@ script prompts for the Admin password unless `COGNITA_ADMIN_PASSWORD` is set.
 ```powershell
 python scripts/clear_watcher_queue.py KEI --url http://127.0.0.1:8676 --username admin
 ```
+
+For HTTPS Admin installations, use a hostname covered by the server certificate.
+If its issuing CA is not in Python's default trust store, set `SSL_CERT_FILE`
+to that CA's public PEM certificate before running the script. Certificate
+chain and hostname verification remain enabled. Replace `cognita-host` and
+the certificate path in these examples with your installation's values.
+
+```sh
+SSL_CERT_FILE=/path/to/rootCA.pem python3 scripts/clear_watcher_queue.py KEI --url https://cognita-host:8676 --username admin
+```
+
+```powershell
+$env:SSL_CERT_FILE = "C:\path\to\rootCA.pem"
+python scripts/clear_watcher_queue.py KEI --url https://cognita-host:8676 --username admin
+```

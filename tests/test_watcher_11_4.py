@@ -10,6 +10,7 @@ from watchdog.events import DirCreatedEvent, FileCreatedEvent
 from cognita.config import CognitaConfig
 from cognita.parsing import DEFAULT_POLICY
 from cognita.registry import Project
+from cognita.retrieval import QueryCache
 from cognita.watcher import WatcherManager, _DirtyPath, _ProjectEventHandler, _ProjectState
 
 
@@ -20,6 +21,10 @@ class Core:
     def __init__(self):
         self.calls = []
         self.fail_once = False
+        self.caches = {}
+
+    def query_cache(self, name):
+        return self.caches.setdefault(name, QueryCache())
 
     def policy_for(self, _name):
         return DEFAULT_POLICY
@@ -205,6 +210,8 @@ async def test_clear_queue_does_not_restore_cancelled_batch_and_later_events_run
             manager._run_batch("P", old_batch, state.queue_generation)
         )
         await asyncio.wait_for(started.wait(), timeout=2)
+        cache = core.query_cache("P")
+        cache.put(("previous query",), [{"source": "old.md"}])
 
         result = await manager.clear_queue("P")
 
@@ -214,6 +221,7 @@ async def test_clear_queue_does_not_restore_cancelled_batch_and_later_events_run
         assert state.retry_at == 0.0
         assert state.queue_generation == 1
         assert state.task.done()
+        assert cache.stats()["size"] == 0
 
         manager._mark("P", "new.md", "created")
         deadline = time.monotonic() + 2

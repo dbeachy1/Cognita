@@ -275,6 +275,28 @@ async def test_invalid_windows_directory_marker_does_not_block_valid_paths(tmp_p
     assert "note.md" in store.sources
 
 
+@pytest.mark.parametrize("failure", ["source_unavailable", "root_unavailable"])
+async def test_mixed_invalid_paths_and_safety_failures_retain_complete_count(tmp_path, failure):
+    store = ReconcileStore()
+    core = core_for(store)
+    documents = tmp_path / "documents"
+    documents.mkdir()
+    kwargs = {}
+    if failure == "source_unavailable":
+        kwargs["source_is_safe"] = lambda: False
+    else:
+        documents.rmdir()
+
+    result = await core.reconcile_paths(
+        "P", documents, ["C:outside.md", "note.md"], **kwargs,
+    )
+
+    assert result["failed"] == len(result["failures"]) == 2
+    assert [entry["retryable"] for entry in result["failures"]] == [False, True]
+    assert result["retryable_failures"] == ["note.md"]
+    assert store.replacements == store.deleted == store.touched == []
+
+
 async def test_unreadable_dirty_subtree_preserves_existing_rows(tmp_path, monkeypatch):
     store = ReconcileStore()
     core = core_for(store)

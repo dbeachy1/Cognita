@@ -667,7 +667,7 @@ class RetrievalCore:
                     if not source_is_current():
                         for source in normalized:
                             self._record_reconcile_failure(summary, source, "source_unavailable")
-                        summary["failed"] = len(normalized)
+                        summary["failed"] += len(normalized)
                         return summary
                     try:
                         self._root_is_safe(project, documents_dir, root_identity)
@@ -675,7 +675,7 @@ class RetrievalCore:
                         error = self._bounded_error(exc)
                         for source in normalized:
                             self._record_reconcile_failure(summary, source, error)
-                        summary["failed"] = len(normalized)
+                        summary["failed"] += len(normalized)
                         if diagnostic_redacted:
                             log.error(
                                 "Targeted reconciliation root safety failure project=%s reason=%s",

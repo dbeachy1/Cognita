@@ -64,4 +64,3 @@ async def test_clear_watcher_queue_requires_project_and_available_watcher(tmp_pa
         unavailable = await client.post("/api/projects/KEI/watcher/clear-queue")
     assert missing_project.status_code == 404
     assert unavailable.status_code == 503
-
