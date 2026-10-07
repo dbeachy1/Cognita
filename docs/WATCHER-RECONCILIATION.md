@@ -18,9 +18,10 @@ full reconciliation.
 
 The exact root-owned `.cognita-storage` subtree is ignored
 at native and polling event intake and removed from stale queued batches before
-either asset or text reconciliation. The comparison follows the host's path
-case rules and matches only the first path component, so a user directory such
-as `.cognita-storage-other` or a nested `.cognita-storage` remains eligible.
+either asset or text reconciliation. The comparison is case-insensitive on all
+hosts, consistent with effective index policy, and matches only the first path
+component, so a user directory such as `.cognita-storage-other` or a nested
+`.cognita-storage` remains eligible.
 
 Successful no-op watcher summaries, including skip-only passes, are logged at
 DEBUG. Summaries with indexed, metadata-refreshed, or removed rows stay at INFO;

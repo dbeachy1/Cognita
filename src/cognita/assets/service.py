@@ -1616,8 +1616,12 @@ class AssetService:
                     if not self._source_is_safe(source_is_safe):
                         errors.append({"filepath": relative, "reason": "source_unavailable"})
                         break
+                    # Native and polling observers can report the same deletion
+                    # in separate batches. Count only a catalog row retirement;
+                    # deleting an already-absent row is a successful no-op.
+                    existing = await self._get_record(relative)
                     await self._delete(relative)
-                    removed += 1
+                    removed += int(existing is not None)
                     continue
                 existing = await self._get_record(relative)
                 if self._asset_stat_matches(existing, file_stat):

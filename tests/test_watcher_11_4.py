@@ -1,14 +1,16 @@
 """Focused 11.4 watcher/configuration contracts without PostgreSQL."""
 
 import asyncio
+import base64
 import logging
 import time
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from watchdog.events import DirCreatedEvent, FileCreatedEvent
+from watchdog.events import DirCreatedEvent, FileCreatedEvent, FileDeletedEvent
 
+from cognita.assets.service import AssetService
 from cognita.config import CognitaConfig
 from cognita.parsing import DEFAULT_POLICY
 from cognita.registry import Project
@@ -295,6 +297,57 @@ async def test_nonretryable_asset_error_keeps_watcher_summary_visible(tmp_path, 
         assert manager._states["P"].retry_at == 0.0
     finally:
         await manager.stop()
+
+
+@pytest.mark.parametrize("repository_backed", [False, True])
+@pytest.mark.asyncio
+async def test_duplicate_asset_deletion_hints_log_only_actual_retirement(
+    tmp_path, caplog, repository_backed,
+):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    path = docs / "gone.png"
+    path.write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    ))
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    asset_logger = logging.getLogger("cognita.assets.deletion_test")
+    assets = AssetService(project, logger=asset_logger)
+    await assets.reconcile_paths(("gone.png",))
+
+    class Catalog:
+        def __init__(self, record):
+            self.records = {"gone.png": record}
+
+        async def get(self, relative):
+            return self.records.get(relative)
+
+        async def delete_source(self, relative):
+            self.records.pop(relative, None)
+
+    if repository_backed:
+        assets.repository = Catalog(assets._memory.pop("gone.png"))
+    path.unlink()
+    manager = WatcherManager(Core(), asset_services={"P": assets})
+    manager._states["P"] = _ProjectState(attached_root=docs)
+    manager._docs_dirs["P"] = docs
+
+    for source, expected_removed in (("native", 1), ("poll", 0), ("native", 0)):
+        handler = _ProjectEventHandler(manager, "P", docs, DEFAULT_POLICY, source)
+        handler.on_any_event(FileDeletedEvent(str(path)))
+        state = manager._states["P"]
+        batch, state.dirty = state.dirty, {}
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="cognita"):
+            await manager._run_batch("P", batch, state.queue_generation)
+        assert state.health["last_summary"]["removed"] == expected_removed
+        records = [record for record in caplog.records
+                   if record.name == asset_logger.name
+                   or (record.name == "cognita.watcher" and "dirty=1" in record.getMessage())]
+        assert len(records) == 2
+        expected_level = logging.INFO if expected_removed else logging.DEBUG
+        assert all(record.levelno == expected_level for record in records)
+        assert not state.dirty
 
 
 @pytest.mark.asyncio
