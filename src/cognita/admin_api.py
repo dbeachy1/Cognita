@@ -2474,6 +2474,18 @@ def create_admin_app(
 
     # --------------------------------------------------------------- reindex
 
+    @app.post("/api/projects/{name}/watcher/clear-queue")
+    async def clear_watcher_queue(name: str, request: Request) -> dict:
+        if failure := _csrf_error(config, request):
+            return failure
+        _require(name)
+        watcher = getattr(engine, "watcher", None) if engine is not None else None
+        clear_queue = getattr(watcher, "clear_queue", None)
+        if not callable(clear_queue):
+            raise HTTPException(status_code=503, detail="Watcher is unavailable")
+        result = await clear_queue(name)
+        return result
+
     @app.post("/api/projects/{name}/reindex")
     async def reindex(name: str) -> dict:
         _require(name)

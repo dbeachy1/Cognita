@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 
 import pytest
 from watchdog.events import DirCreatedEvent, FileCreatedEvent
@@ -22,6 +23,10 @@ class Core:
 
     def policy_for(self, _name):
         return DEFAULT_POLICY
+
+    @asynccontextmanager
+    async def write_lock(self, _name):
+        yield
 
     async def reconcile_paths(self, name, _docs, paths):
         self.calls.append((name, list(paths)))
@@ -122,6 +127,101 @@ async def test_disappeared_staging_batch_is_dropped_and_later_change_processes(t
         while not core.calls and time.monotonic() < deadline:
             await asyncio.sleep(.02)
         assert core.calls == [("P", ["legitimate.md"])]
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_invalid_directory_marker_is_retired_before_asset_and_text_passes(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    core = Core()
+
+    class Assets:
+        def __init__(self):
+            self.calls = []
+
+        async def reconcile_paths(self, paths, *, dirty_prefixes=None, **_kwargs):
+            self.calls.append((list(paths), list(dirty_prefixes or [])))
+            return {"indexed": len(paths), "skipped": 0, "removed": 0}
+
+    assets = Assets()
+    manager = WatcherManager(core, debounce_s=.03, poll_interval_s=0,
+                             asset_services={"P": assets})
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    await manager.start([project])
+    try:
+        now = time.monotonic()
+        invalid = ".::TMPNAME:D:3387398%9918639760575770279:New folder"
+        batch = {
+            invalid: _DirtyPath(invalid, True, now, now),
+            "note.md": _DirtyPath("note.md", False, now, now),
+            "image.png": _DirtyPath("image.png", False, now, now),
+        }
+
+        await manager._run_batch("P", batch, manager._states["P"].queue_generation)
+
+        assert core.calls == [("P", ["note.md"])]
+        assert assets.calls == [(["image.png"], [])]
+        summary = manager.health("P")["last_summary"]
+        assert summary["failed"] == 1
+        assert summary["failures"][0]["path"] == invalid
+        assert summary["failures"][0]["retryable"] is False
+        assert manager._states["P"].retry_at == 0.0
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_clear_queue_does_not_restore_cancelled_batch_and_later_events_run(tmp_path, monkeypatch):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    core = Core()
+    manager = WatcherManager(core, debounce_s=.03, poll_interval_s=0,
+                             retry_initial_s=.03, retry_max_s=.1)
+    project = Project(name="P", documents_dir=docs, data_dir=tmp_path / "data")
+    await manager.start([project])
+    started = asyncio.Event()
+    calls = []
+
+    async def reconcile(_name, _docs, paths):
+        calls.append(sorted(paths))
+        if "old.md" in paths:
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                # Model an adapter that reports a late failure as it unwinds.
+                raise RuntimeError("active batch failed after clear")
+        return {"indexed": len(paths), "skipped": 0, "removed": 0,
+                "failed": 0, "retryable_failures": [], "failures": []}
+
+    monkeypatch.setattr(manager, "_reconcile", reconcile)
+    try:
+        now = time.monotonic()
+        state = manager._states["P"]
+        old_batch = {"old.md": _DirtyPath("old.md", False, now, now)}
+        state.task = asyncio.create_task(
+            manager._run_batch("P", old_batch, state.queue_generation)
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        result = await manager.clear_queue("P")
+
+        assert result == {"project": "P", "cleared_paths": 0,
+                          "active_cancelled": True}
+        assert state.dirty == {}
+        assert state.retry_at == 0.0
+        assert state.queue_generation == 1
+        assert state.task.done()
+
+        manager._mark("P", "new.md", "created")
+        deadline = time.monotonic() + 2
+        while len(calls) < 2 and time.monotonic() < deadline:
+            await asyncio.sleep(.02)
+        assert calls == [["old.md"], ["new.md"]]
+        assert state.dirty == {}
+        assert state.retry_at == 0.0
     finally:
         await manager.stop()
 

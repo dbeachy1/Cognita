@@ -238,19 +238,41 @@ async def test_post_embedding_root_and_source_guards_preserve_previous_rows(tmp_
     assert store.deleted == [] and store.touched == []
 
 
-async def test_path_escape_is_retryable_and_does_not_touch_store(tmp_path):
+async def test_path_escape_is_terminal_and_does_not_touch_store(tmp_path):
     store = ReconcileStore()
     result = await core_for(store).reconcile_paths("P", tmp_path, ["../outside.md"])
     assert result["failed"] == 1
-    assert result["failures"][0]["retryable"] is True
+    assert result["failures"][0]["retryable"] is False
+    assert result["retryable_failures"] == []
     assert store.replacements == []
 
 
-async def test_drive_relative_path_is_retryable_and_does_not_touch_store(tmp_path):
+async def test_drive_relative_path_is_terminal_and_does_not_touch_store(tmp_path):
     store = ReconcileStore()
     result = await core_for(store).reconcile_paths("P", tmp_path, ["C:outside.md"])
     assert result["failed"] == 1
+    assert result["failures"][0]["retryable"] is False
+    assert result["retryable_failures"] == []
     assert store.replacements == []
+
+
+async def test_invalid_windows_directory_marker_does_not_block_valid_paths(tmp_path):
+    store = ReconcileStore()
+    valid = tmp_path / "note.md"
+    valid.write_text("valid same-batch document", encoding="utf-8")
+    invalid = ".::TMPNAME:D:3387398%9918639760575770279:New folder"
+
+    result = await core_for(store).reconcile_paths("P", tmp_path, [invalid, "note.md"])
+
+    assert result["indexed"] == 1
+    assert result["failed"] == 1
+    assert result["failures"] == [{
+        "path": invalid,
+        "error": f"dirty path has a drive-relative anchor: {invalid!r}",
+        "retryable": False,
+    }]
+    assert result["retryable_failures"] == []
+    assert "note.md" in store.sources
 
 
 async def test_unreadable_dirty_subtree_preserves_existing_rows(tmp_path, monkeypatch):

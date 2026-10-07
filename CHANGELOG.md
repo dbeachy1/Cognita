@@ -1,5 +1,11 @@
 # Changelog
 
+## 16.1.1 — Retire invalid watcher paths and clear queued work (2026-10-07)
+
+- Invalid watcher paths, including drive-relative Windows directory markers, are terminal and no longer retry forever. Valid paths in the same batch still reconcile, and transient root, read, and embedding failures remain retryable.
+- Admin provides a “Clear watcher queue” action, and `scripts/clear_watcher_queue.py` provides the same operation from a terminal. They clear pending paths and retry timers, cancel an active batch safely, and leave later filesystem events eligible for reconciliation.
+- MCP arguments, results, and contract versions are unchanged.
+
 ## 16.1.0 — Audiobook workflow and connector error parity (2026-10-06)
 
 - Publishes the audiobook production workflow developed for 16.0.0: registered source import,

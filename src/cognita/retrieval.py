@@ -519,12 +519,14 @@ class RetrievalCore:
 
     @classmethod
     def _record_reconcile_failure(
-        cls, summary: dict[str, Any], path: str, exc: BaseException | str
+        cls, summary: dict[str, Any], path: str, exc: BaseException | str,
+        *, retryable: bool = True,
     ) -> None:
-        """Record watcher-compatible path retry plus bounded diagnostics."""
+        """Record a path failure with bounded diagnostics and retry classification."""
         error = cls._bounded_error(exc) if isinstance(exc, BaseException) else str(exc)[:500]
-        summary["retryable_failures"].append(path)
-        summary["failures"].append({"path": path, "error": error, "retryable": True})
+        if retryable:
+            summary["retryable_failures"].append(path)
+        summary["failures"].append({"path": path, "error": error, "retryable": retryable})
 
     @staticmethod
     def _relative_dirty_path(path: str | Path, documents_dir: Path) -> str:
@@ -601,12 +603,14 @@ class RetrievalCore:
         accepted for defensive compatibility).  The result has integer keys
         ``indexed``, ``metadata_refreshed``, ``skipped``, ``removed``,
         ``failed``, and ``expanded_paths`` plus ``failures`` — a list of
-        ``{"path": str, "error": str, "retryable": True}`` records.
+        ``{"path": str, "error": str, "retryable": bool}`` records. Invalid
+        paths are terminal; filesystem and indexing failures remain retryable.
 
         All planning and writes occur under one project write lock.  A failed
         parse/read/embedding/store operation leaves the previous row intact
-        and is returned as a retryable path.  Root failures fail closed: no
-        deletion is attempted.
+        and is returned as a retryable path. Invalid paths are reported as
+        terminal failures so they cannot keep a watcher batch retrying. Root
+        failures fail closed: no deletion is attempted.
         """
         summary: dict[str, Any] = {
             "indexed": 0,
@@ -621,17 +625,16 @@ class RetrievalCore:
             "retryable_failures": [],
         }
         raw_dirty_paths = list(dirty_paths)
-        try:
-            normalized = sorted({
-                self._relative_dirty_path(path, documents_dir)
-                for path in raw_dirty_paths
-            })
-        except Exception as exc:
-            summary["failed"] = 1
-            self._record_reconcile_failure(
-                summary, str(raw_dirty_paths[0] if raw_dirty_paths else "."), exc
-            )
-            return summary
+        normalized_paths: set[str] = set()
+        for path in raw_dirty_paths:
+            try:
+                normalized_paths.add(self._relative_dirty_path(path, documents_dir))
+            except ValueError as exc:
+                summary["failed"] += 1
+                self._record_reconcile_failure(
+                    summary, str(path), exc, retryable=False,
+                )
+        normalized = sorted(normalized_paths)
         if not normalized:
             return summary
 

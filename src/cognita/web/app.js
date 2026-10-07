@@ -522,6 +522,10 @@ function pill(status) {
   return `<span class="pill ${esc(s)}">${esc(messageId ? window.CognitaAdminLocale.t(messageId) : s)}</span>`;
 }
 
+function watcherQueueEnabled(watcherStatus) {
+  return Boolean(watcherStatus);
+}
+
 function esc(s) {
   return String(s ?? "").replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -553,14 +557,15 @@ async function loadProjects() {
           <button class="secondary outline" data-act="copy" data-url="${esc(p.connector_url || p.connector_path)}">Copy connector URL</button>
           <button class="secondary outline" data-act="connections">Manage connections</button>
           <button class="secondary outline" data-act="reindex">Reindex</button>
+          <button class="secondary outline" data-act="clear-watcher-queue" disabled>${esc(t("admin.projects.clear_watcher_queue"))}</button>
           <button class="contrast outline" data-act="remove">Remove</button>
         </td>
       </tr>`
     )
     .join("");
-  // Lazily fill doc counts (each hits the engine; keep the list snappy).
+  // Load project status for watcher availability; only running projects have index counts.
   for (const p of data.projects) {
-    if (p.worker_status === "running") fillDocCount(p.name);
+    fillDocCount(p.name);
   }
 }
 
@@ -570,6 +575,8 @@ async function fillDocCount(name) {
   try {
     const s = await api(`/api/projects/${encodeURIComponent(name)}/status`);
     cell.textContent = s.doc_count == null ? "—" : window.CognitaAdminLocale.number(s.doc_count);
+    const queueButton = cell.closest("tr")?.querySelector('[data-act="clear-watcher-queue"]');
+    if (queueButton) queueButton.disabled = !watcherQueueEnabled(s.watcher);
     if (s.chunk_count != null) cell.title = window.CognitaAdminLocale.t("admin.projects.chunk_count", {
       count: window.CognitaAdminLocale.number(s.chunk_count),
     });
@@ -2141,6 +2148,27 @@ async function loadOAuth() {
   return loadOAuthV9();
 }
 
+async function clearWatcherQueueAction(name, button) {
+  button.setAttribute("aria-busy", "true");
+  button.disabled = true;
+  try {
+    const result = await api(`/api/projects/${encodeURIComponent(name)}/watcher/clear-queue`, { method: "POST" });
+    await fillDocCount(name);
+    await uiNotice({
+      title: t("admin.projects.clear_watcher_queue"),
+      body: t("admin.projects.clear_watcher_queue_result", {
+        cleared_paths: result.cleared_paths,
+        active_cancelled: result.active_cancelled ? t("admin.projects.clear_watcher_queue_active_cancelled") : t("admin.projects.clear_watcher_queue_no_active"),
+      }),
+    });
+  } catch (err) {
+    await uiNotice({ title: t("admin.projects.clear_watcher_queue_failed"), body: err.message, technicalDetail: err.technicalDetail });
+    await fillDocCount(name);
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
+}
+
 // ---- event wiring ----
 
 $("#add-form").addEventListener("submit", async (e) => {
@@ -2202,6 +2230,8 @@ $("#projects-body").addEventListener("click", async (e) => {
     } finally {
       btn.removeAttribute("aria-busy");
     }
+  } else if (act === "clear-watcher-queue") {
+    await clearWatcherQueueAction(name, btn);
   } else if (act === "remove") {
     const { ok, checked } = await uiConfirm({
       title: t("admin.projects.remove.title"),

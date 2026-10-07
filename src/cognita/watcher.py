@@ -302,6 +302,7 @@ class _ProjectState:
     dirty: dict[str, _DirtyPath] = field(default_factory=dict)
     task: asyncio.Task | None = None
     retry_at: float = 0.0
+    queue_generation: int = 0
     attached_root: Path | None = None
     root_identity: tuple[int, int] | None = None
     retrieval_root_identity: Any | None = None
@@ -584,6 +585,32 @@ class WatcherManager:
             return state.task
         return None
 
+    async def clear_queue(self, name: str) -> dict[str, object]:
+        """Discard pending watcher work and cancel its active batch, if any."""
+        with self._lock:
+            state = self._states.get(name)
+            if state is None:
+                return {"project": name, "cleared_paths": 0, "active_cancelled": False}
+            cleared_paths = len(state.dirty)
+            state.dirty.clear()
+            state.retry_at = 0.0
+            # A cancelled batch may finish by raising through the adapter. Its
+            # captured generation prevents it from restoring pre-clear paths.
+            state.queue_generation += 1
+            task = state.task
+            active = task is not None and not task.done()
+            state.health.update({
+                "active": False,
+                "last_error": None,
+                "last_summary": {"cleared_paths": cleared_paths,
+                                 "active_cancelled": active},
+            })
+        if active and task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return {"project": name, "cleared_paths": cleared_paths,
+                "active_cancelled": active}
+
     def _mark(self, project: str, rel_path: str, event_type: str, *, is_directory: bool = False,
               source: str = "native") -> None:
         if self._stopping:
@@ -652,13 +679,34 @@ class WatcherManager:
                         continue
                     batch, state.dirty = state.dirty, {}
                     state.retry_at = 0.0
-                    state.task = asyncio.create_task(self._run_batch(name, batch), name=f"cognita-watcher:{name}")
+                    state.task = asyncio.create_task(
+                        self._run_batch(name, batch, state.queue_generation),
+                        name=f"cognita-watcher:{name}",
+                    )
 
-    async def _run_batch(self, name: str, batch: dict[str, _DirtyPath]) -> None:
+    async def _run_batch(
+        self, name: str, batch: dict[str, _DirtyPath], queue_generation: int | None = None,
+    ) -> None:
         started = time.monotonic()
         state, docs = self._states.get(name), self._docs_dirs.get(name)
         if state is None or docs is None:
             return
+        # Use RetrievalCore's path validator as the shared authority before
+        # sending directory markers to either the asset or text reconciler.
+        validator = getattr(self.core, "_relative_dirty_path", RetrievalCore._relative_dirty_path)
+        terminal_failures: list[dict[str, object]] = []
+        valid_batch: dict[str, _DirtyPath] = {}
+        for path, item in batch.items():
+            try:
+                validator(path, docs)
+            except ValueError as exc:
+                terminal_failures.append({
+                    "path": path, "error": RetrievalCore._bounded_error(exc),
+                    "retryable": False,
+                })
+            else:
+                valid_batch[path] = item
+        batch = valid_batch
         ignored = [path for path in batch if _is_asset_staging_path(path)]
         if ignored:
             with self._lock:
@@ -672,7 +720,12 @@ class WatcherManager:
             )
         if not batch:
             state.health.update({"active": False, "last_error": None,
-                                 "last_summary": {"ignored_staging_paths": len(ignored)}})
+                                 "last_summary": {
+                                     "ignored_staging_paths": len(ignored),
+                                     "failed": len(terminal_failures),
+                                     "failures": terminal_failures,
+                                     "retryable_failures": [],
+                                 }})
             return
         state.health["active"] = True
         source_state = self.source_guard.check(docs) if self.source_guard else None
@@ -770,9 +823,13 @@ class WatcherManager:
         try:
             summary = await self._reconcile(name, docs, batch)
         except asyncio.CancelledError:
-            self._merge_batch(name, batch)
+            if queue_generation is None or queue_generation == state.queue_generation:
+                self._merge_batch(name, batch)
             raise
         except Exception as exc:  # noqa: BLE001 - reconciliation adapter boundary
+            if queue_generation is not None and queue_generation != state.queue_generation:
+                state.health["active"] = False
+                return
             self._retry(
                 name, batch,
                 type(exc).__name__ if self.source_guard and self.source_guard.enabled
@@ -787,7 +844,14 @@ class WatcherManager:
                 log.warning("Watcher: project=%s source unavailable reason=%s",
                             name, source_state.reason or source_state.state)
                 return
+        if queue_generation is not None and queue_generation != state.queue_generation:
+            state.health["active"] = False
+            return
         failures = self._failed_paths(summary, batch)
+        if terminal_failures and isinstance(summary, dict):
+            summary = dict(summary)
+            summary["failed"] = int(summary.get("failed", 0) or 0) + len(terminal_failures)
+            summary["failures"] = [*(summary.get("failures") or []), *terminal_failures]
         if failures:
             self._retry(name, {p: batch[p] for p in failures}, "per-path reconciliation failure")
         else:

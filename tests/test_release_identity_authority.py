@@ -87,7 +87,7 @@ def test_importing_the_authority_pulls_in_nothing_else():
 
 def test_the_identity_names_are_the_ones_the_design_declares():
     assert IDENTITY_SCHEMA == 1
-    assert APPLICATION_VERSION == "16.1.0"
+    assert APPLICATION_VERSION == "16.1.1"
     assert COMBINED_CONTRACT_VERSION == 6
     assert WORKSPACE_CONTRACT_VERSION == 3
     assert DATABASE_SCHEMA_VERSION == 1
