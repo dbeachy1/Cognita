@@ -17,7 +17,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError
 
 from .strict_result_schemas import build_adapter_schemas, build_schemas
-from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES
+from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES, error_envelope
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +150,65 @@ def _encoded_payload(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def is_known_tool(tool_name: object) -> bool:
+    """Whether ``tool_name`` has an advertised output schema (16.1.3).
+
+    A name that is not (a client-supplied batch child that does not exist, for
+    one) keeps the unvalidated result path, because ``build_tool_result``
+    raises ``KeyError`` for it.
+    """
+    return isinstance(tool_name, str) and tool_name in _ALL_OUTPUT_SCHEMAS_BY_TOOL
+
+
+def refusal_payload(tool_name: str | None, reason: str, message: str, **fields: Any) -> dict[str, Any]:
+    """The one place that builds a refusal payload for a named tool (16.1.3).
+
+    The 16 strict-envelope tools (``ALL_ADDITIVE_TOOL_NAMES``) advertise an
+    error branch with ``additionalProperties: false`` that requires
+    ``operation_outcome`` and ``correlation_id``. Until 16.1.3 every refusal
+    the gateway and proxy built themselves (wrong project, no projects,
+    read-only, policy unavailable, a bad operation_id, an invalid argument)
+    used the legacy ``{status, reason, message}`` shape, which that schema
+    rejects: a client that validates (the TypeScript SDK does, even for
+    ``isError`` results) threw instead of showing the model the real reason,
+    and the server's own check replaced the refusal with
+    ``output_contract_violation``. Every refusal built here happens before any
+    write, so the outcome is always ``not_applied``.
+
+    Every other tool keeps exactly the legacy shape, extra ``fields`` included;
+    ``build_tool_result`` adds its ``error_code``. For a strict tool the extra
+    ``fields`` go into the envelope's ``details`` member.
+    """
+    if tool_name in ALL_ADDITIVE_TOOL_NAMES:
+        correlation_id = uuid.uuid4().hex
+        log.info("refusal built tool=%s reason=%s operation_outcome=not_applied correlation_id=%s",
+                 tool_name, reason, correlation_id)
+        return error_envelope(
+            tool_name, reason=reason, message=message,
+            operation_outcome="not_applied", correlation_id=correlation_id,
+            details=dict(fields) if fields else None,
+        )
+    return {"status": "error", "reason": reason, "message": message, **fields}
+
+
 def _fallback(tool_name: str, *, mutating: bool, correlation_id: str) -> dict[str, Any]:
+    if tool_name in ALL_ADDITIVE_TOOL_NAMES:
+        # 16.1.3: the strict-envelope tools' error branch is closed and requires
+        # operation_outcome (not_applied | committed | outcome_unknown) and
+        # correlation_id. The legacy forms below said operation_outcome
+        # "unknown" (not an allowed value) or omitted it, so the containment
+        # error itself violated the schema it was reporting a violation of.
+        if mutating:
+            return error_envelope(
+                tool_name, reason="output_contract_violation",
+                message="The operation completed far enough that its outcome must be verified before retrying.",
+                operation_outcome="outcome_unknown", correlation_id=correlation_id,
+            )
+        return error_envelope(
+            tool_name, reason="internal_error",
+            message="The operation returned an invalid result.",
+            operation_outcome="not_applied", correlation_id=correlation_id,
+        )
     if mutating:
         return {
             "status": "error", "reason": "output_contract_violation",

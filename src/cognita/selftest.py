@@ -25,6 +25,8 @@ from typing import NamedTuple
 
 from . import __version__
 from .release_identity import COMBINED_CONTRACT_VERSION
+from .result_contracts import PUBLIC_TOOL_NAMES
+from .workspace_selftest import KNOWLEDGE_BRIDGE_PREFIXES, WORKSPACE_TOOL_NAMES
 
 log = logging.getLogger("cognita.selftest")
 
@@ -1102,8 +1104,11 @@ R1. PLAIN POST: POST {{"jsonrpc":"2.0","id":1,"method":"initialize","params":
 R2. TOOLS OVER THE SAME POST: tools/call list_categories over a second plain
     POST with no session header — expect a parseable result with
     structuredContent deeply equal to the parsed first text block. Then
-    tools/list — expect exactly 40 tool definitions, each with a valid object
-    outputSchema. Record the normalized catalog digest. (R1+R2 catch a protocol change that would break
+    tools/list — expect exactly the connector's own catalog, each tool with a valid object
+    outputSchema: {core_tools} tool definitions, plus {workspace_tools} Workspace tools when this
+    connector has its Workspace on ({core_plus_workspace_tools} in all), plus {bridge_tools} Knowledge-Workspace
+    bridge tools when the bridge is available too ({all_tools} in all). Record the
+    normalized catalog digest. (R1+R2 catch a protocol change that would break
     every curl-based client and force a fallback to context-expensive
     connector-only paths.)
 R3. BATCH: POST a JSON ARRAY of three requests with distinct ids — a valid
@@ -1761,6 +1766,15 @@ R-A5. get_asset with the filepath and R-A2 expected_sha256. Require exactly one
         # generation in it comes from the authority rather than being spelled
         # in prose that a contract bump would silently leave stale.
         version=version, combined_version=COMBINED_CONTRACT_VERSION,
+        # 16.1.3: step R2 said "exactly 40 tool definitions" long after the
+        # catalog grew past it (56 Knowledge tools, 73 with Workspace and the
+        # bridge). The counts now come from the same registries the connector
+        # advertises from, so they cannot go stale again.
+        core_tools=len(PUBLIC_TOOL_NAMES),
+        workspace_tools=len(WORKSPACE_TOOL_NAMES),
+        core_plus_workspace_tools=len(PUBLIC_TOOL_NAMES) + len(WORKSPACE_TOOL_NAMES),
+        bridge_tools=len(KNOWLEDGE_BRIDGE_PREFIXES),
+        all_tools=len(PUBLIC_TOOL_NAMES) + len(WORKSPACE_TOOL_NAMES) + len(KNOWLEDGE_BRIDGE_PREFIXES),
         test_file=TEST_FILE, test_file_moved=TEST_FILE_MOVED,
         deindex_file=DEINDEX_FILE,
         content=indent(_TEST_CONTENT),

@@ -75,7 +75,9 @@ from .proxy import (
 from .public_url import PublicBaseURLStore
 from .readonly import is_tool_allowed_remote
 from .registry import Registry
-from .result_contracts import build_tool_result, normalize_legacy_error_payload
+from .result_contracts import (
+    build_tool_result, is_known_tool, normalize_legacy_error_payload, refusal_payload,
+)
 from .selftest import SELFTEST_TOOL_NAME, select_self_test_plan
 from .workspace import workspace_tool_result
 from .workspace_selftest import WORKSPACE_SELFTEST_TOOL_NAME, workspace_selftest_plan
@@ -876,13 +878,25 @@ def create_gateway_app(
     def _tool_result(msg_id, payload: dict, tool_name: str | None = None) -> JSONResponse:
         if tool_name is None:
             tool_name = "batch" if "results" in payload and "result_key" in payload else None
+        if tool_name is not None and not is_known_tool(tool_name):
+            # 16.1.3: a name with no advertised output schema (a client-supplied
+            # batch child that does not exist) has nothing to validate against
+            # and build_tool_result would raise KeyError for it.
+            log.info("tool result for a name with no output schema; not validated status=%s",
+                     payload.get("status"))
+            tool_name = None
         if tool_name is not None:
             result = build_tool_result(
                 tool_name, payload,
                 is_error=payload.get("status") in {"error", "partial_failure"},
                 # Earlier mutating children may have committed before the outer
                 # batch receipt is built, so contract failure is unknown-outcome.
-                mutating=tool_name == "batch",
+                # 16.1.3: for every other tool the contract module decides from
+                # its own mutating sets. This used to pass mutating=False for
+                # them, so a contract violation on a Workspace or bridge WRITE
+                # was reported as internal_error, and a client could retry a
+                # write that had committed.
+                mutating=True if tool_name == "batch" else None,
             )
         else:
             # Policy/project errors are shared by all output schemas.  Keep the
@@ -892,6 +906,17 @@ def create_gateway_app(
                       "structuredContent": normalized,
                       "isError": payload.get("status") in {"error", "partial_failure"}}
         return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
+    def _refusal(msg_id, tool_name: str | None, reason: str, message: str,
+                 **fields: Any) -> JSONResponse:
+        """A tool-error result for a named tool, in that tool's own advertised shape.
+
+        16.1.3: the single gateway-side way to refuse a call. The payload comes
+        from result_contracts.refusal_payload (strict envelope for the 16
+        strict-envelope tools, the legacy shape for the rest) and the result is
+        validated against the tool's outputSchema by _tool_result.
+        """
+        return _tool_result(msg_id, refusal_payload(tool_name, reason, message, **fields), tool_name)
 
     def _combined_capabilities(connector: ConnectorDefinition, contract_version: int) -> frozenset[str]:
         names = set(_public_tool_names(contract_version))
@@ -961,31 +986,32 @@ def create_gateway_app(
             "connector compatibility rejected connector_id=%s tool=%s reason=upgrade_required",
             connector_id, tool,
         )
-        return _tool_result(msg_id, {
-            "status": "error",
-            "reason": "upgrade_required",
-            "message": (
-                f"Tool '{tool}' is not available under this connector generation; "
-                f"upgrade the connector to {current_url}."
-            ),
-        })
+        return _refusal(
+            msg_id, tool, "upgrade_required",
+            f"Tool '{tool}' is not available under this connector generation; "
+            f"upgrade the connector to {current_url}.",
+        )
 
-    def _project_unavailable(msg_id) -> JSONResponse:
-        return _tool_result(msg_id, {
-            "status": "error", "reason": "project_unavailable",
-            "message": "The requested project is unavailable through this connector.",
-        })
+    # 16.1.3: the next two take the tool name so the refusal matches THAT tool's
+    # advertised outputSchema (see _refusal).
+    def _project_unavailable(msg_id, tool_name: str | None) -> JSONResponse:
+        return _refusal(
+            msg_id, tool_name, "project_unavailable",
+            "The requested project is unavailable through this connector.",
+        )
 
-    def _no_projects_configured(msg_id, principal: AuthPrincipal | None) -> JSONResponse:
+    def _no_projects_configured(
+        msg_id, principal: AuthPrincipal | None, tool_name: str | None
+    ) -> JSONResponse:
         subject = (
             "key"
             if principal is not None and principal.kind.startswith("static_")
             else "credential"
         )
-        return _tool_result(msg_id, {
-            "status": "error", "reason": "project_unavailable",
-            "message": f"No projects are configured for this {subject}.",
-        })
+        return _refusal(
+            msg_id, tool_name, "project_unavailable",
+            f"No projects are configured for this {subject}.",
+        )
 
     def _write_admission(
         connector_id: str, project_name: str, principal: AuthPrincipal | None = None
@@ -1570,16 +1596,29 @@ def create_gateway_app(
         params = message.get("params")
         if not isinstance(params, dict) or not isinstance(params.get("name"), str):
             return None, None, _jsonrpc_error(message.get("id"), "tools/call params must name a tool")
-        args = params.get("arguments")
+        # 16.1.3: `arguments` is optional in the tools/call schema, so an
+        # omitted one is {}. One that is present and not an object stays a
+        # JSON-RPC -32602 (a malformed request, not a mistake the model can fix).
+        args = params.get("arguments", {})
         if not isinstance(args, dict):
             return None, None, _jsonrpc_error(message.get("id"), "tools/call arguments must be an object")
+        # 16.1.3 (MCP 2025-11-25, Tools, Error Handling): input validation errors
+        # SHOULD be tool execution errors, not protocol errors, so the model can
+        # read the message and correct the call. Same text and the engine's
+        # invalid-argument reason; built for THE NAMED TOOL so it validates.
         project_name = args.get("project")
         if "project" not in args and inferred_project is not None:
             project_name = inferred_project
         if not isinstance(project_name, str) or not project_name or project_name != project_name.strip():
-            return None, None, _jsonrpc_error(message.get("id"), "project must be a nonempty exact string")
+            log.info("tools/call refused: project missing or malformed tool=%s reason=invalid",
+                     params["name"])
+            return None, None, _refusal(
+                message.get("id"), params["name"], "invalid", "project must be a nonempty exact string")
         if _nested_project({key: value for key, value in args.items() if key != "project"}):
-            return None, None, _jsonrpc_error(message.get("id"), "nested project routing is not allowed")
+            log.info("tools/call refused: nested project routing tool=%s reason=invalid",
+                     params["name"])
+            return None, None, _refusal(
+                message.get("id"), params["name"], "invalid", "nested project routing is not allowed")
         return params["name"], project_name, None
 
     _BATCH_REQUEST_MAX = 8 * 1024 * 1024
@@ -1732,8 +1771,11 @@ def create_gateway_app(
         )
         msg_id = message.get("id")
         if invalid is not None:
-            return _tool_result(msg_id, {"status": "error", "reason": invalid.get("reason", "invalid_batch"),
-                                         **invalid, "executed": 0})
+            # 16.1.3: built for the named tool, so it is validated against
+            # batch's own outputSchema like every other batch result.
+            return _refusal(msg_id, CONNECTOR_BATCH_TOOL_NAME,
+                            invalid.get("reason", "invalid_batch"), invalid["message"],
+                            executed=0)
 
         results: list[dict] = []
         succeeded = failed = skipped = omitted = 0
@@ -1749,10 +1791,12 @@ def create_gateway_app(
             try:
                 current = _policy_snapshot()
                 if current is None:
-                    child_response = _tool_result(
-                        index,
-                        {"status": "error", "reason": "policy_unavailable",
-                         "message": "Connector policy is unavailable; try again later."},
+                    # 16.1.3: in the CHILD's own shape (a strict-envelope child
+                    # needs operation_outcome and correlation_id). A name that
+                    # does not exist keeps the unvalidated path.
+                    child_response = _refusal(
+                        index, tool, "policy_unavailable",
+                        "Connector policy is unavailable; try again later.",
                     )
                 else:
                     child_message = {
@@ -1961,6 +2005,15 @@ def create_gateway_app(
                              connector_id: str, message: dict,
                              contract_version: int) -> Response:
         params = message.get("params")
+        if isinstance(params, dict) and "arguments" not in params:
+            # 16.1.3: `arguments` is optional in the tools/call schema, so an
+            # omitted one means {} for every tool (a tool that takes none, such
+            # as list_projects, was answered -32602). Worked on as a copy; the
+            # client's message is not changed. An `arguments` that is present
+            # and not an object stays a -32602 in each path below.
+            log.info("tools/call without arguments; treated as {} connector_id=%s", connector_id)
+            params = {**params, "arguments": {}}
+            message = {**message, "params": params}
         if isinstance(params, dict):
             tool = params.get("name")
             connector = _connector(snapshot, connector_id)
@@ -1980,7 +2033,9 @@ def create_gateway_app(
                 _combined_capabilities(connector, contract_version)
                 if connector is not None else frozenset()
             )
-            if tool not in available or tool not in PUBLIC_TOOL_NAMES:
+            # 16.1.3: a name that is not a string (a list or object is unhashable)
+            # is an unknown tool, not a TypeError out of the set lookup.
+            if not isinstance(tool, str) or tool not in available or tool not in PUBLIC_TOOL_NAMES:
                 if (
                     isinstance(tool, str)
                     and contract_version != PUBLIC_CONTRACT_VERSION
@@ -2005,7 +2060,7 @@ def create_gateway_app(
                 project_name = arguments.get("project")
                 resolved = _resolve_project(snapshot, connector_id, project_name, getattr(request.state, "cognita_principal", None))
                 if resolved is None:
-                    return _tool_result(message.get("id"), {"status": "error", "reason": "project_unavailable", "message": "Project is unavailable."})
+                    return _refusal(message.get("id"), tool, "project_unavailable", "Project is unavailable.")
                 project, _access = resolved
                 # copy_from_workspace publishes files into the Knowledge
                 # source tree, outside LocalEngineHost's tool dispatcher.
@@ -2038,8 +2093,14 @@ def create_gateway_app(
             )
         if isinstance(params, dict) and params.get("name") == LIST_PROJECTS_TOOL_NAME:
             args = params.get("arguments", {})
-            if not isinstance(args, dict) or args:
-                return _jsonrpc_error(message.get("id"), "list_projects accepts no arguments")
+            if not isinstance(args, dict):
+                return _jsonrpc_error(message.get("id"), "arguments must be an object")
+            if args:
+                # 16.1.3: a mistake the model can read and fix, so a tool
+                # result (isError) rather than a JSON-RPC -32602.
+                log.info("list_projects refused: arguments supplied count=%d reason=invalid", len(args))
+                return _refusal(message.get("id"), LIST_PROJECTS_TOOL_NAME, "invalid",
+                                "list_projects accepts no arguments")
             connector = _connector(snapshot, connector_id)
             principal = getattr(request.state, "cognita_principal", None)
             auth_snapshot = _authentication_snapshot()
@@ -2075,7 +2136,11 @@ def create_gateway_app(
             else None
         )
         if not accessible_projects:
-            return _no_projects_configured(message.get("id"), principal)
+            if not isinstance(params, dict):
+                # 16.1.3: the refusal below is built for a named tool; params
+                # that name none is the one malformed shape that stays -32602.
+                return _call_parts(message)[2]
+            return _no_projects_configured(message.get("id"), principal, params.get("name"))
         tool, project_name, failure = _call_parts(message, inferred_project)
         if failure is not None:
             return failure
@@ -2096,14 +2161,14 @@ def create_gateway_app(
                 "project authorization denied connector_id=%s project=%s outcome=%s",
                 connector_id, project_name, outcome,
             )
-            return _project_unavailable(message.get("id"))
+            return _project_unavailable(message.get("id"), tool)
         project, access = resolved
         if principal is not None and not _principal_allows(
             auth_snapshot, principal, project.name
         ):
             log.info("project authorization denied connector_id=%s project=%s outcome=principal_scope",
                      connector_id, project.name)
-            return _project_unavailable(message.get("id"))
+            return _project_unavailable(message.get("id"), tool)
         readonly = config.remote_readonly or access == "read"
         if tool == SELFTEST_TOOL_NAME:
             call_arguments = params.get("arguments", {})
@@ -2111,10 +2176,8 @@ def create_gateway_app(
                 "section" in call_arguments
                 and not isinstance(call_arguments["section"], str)
             ):
-                return _tool_result(message.get("id"), {
-                    "status": "error", "reason": "invalid",
-                    "message": "section must be a string when supplied",
-                })
+                return _refusal(message.get("id"), SELFTEST_TOOL_NAME, "invalid",
+                                "section must be a string when supplied")
             section = call_arguments.get("section")
             workspace_enabled = bool(connector and connector.workspace_enabled)
             bridge_enabled = bool(
@@ -2123,22 +2186,30 @@ def create_gateway_app(
                 and set(BRIDGE_TOOL_NAMES).issubset(available)
             )
             if isinstance(section, str) and section.startswith("W"):
+                # 16.1.3: all four Workspace answers are validated against
+                # get_self_test_plan's own outputSchema, which now describes
+                # them as sent (the blocks stay isError:false: the self-test
+                # text treats BLOCKED as distinct from FAIL).
                 if not workspace_enabled:
+                    log.info("self-test Workspace section blocked reason=workspace_unavailable "
+                             "connector_id=%s", connector_id)
                     return _tool_result(message.get("id"), {
                         "status": "blocked", "reason": "workspace_unavailable",
                         "section": section,
-                    })
+                    }, SELFTEST_TOOL_NAME)
                 if section == "W11" and not bridge_enabled:
+                    log.info("self-test Workspace section blocked section=W11 "
+                             "reason=bridge_unavailable connector_id=%s", connector_id)
                     return _tool_result(message.get("id"), {
                         "status": "blocked", "reason": "bridge_unavailable",
                         "section": section,
-                    })
+                    }, SELFTEST_TOOL_NAME)
                 return _tool_result(message.get("id"), workspace_selftest_plan(
                     server_version=__version__, section=section,
                     bridge=bridge_enabled, catalog=available,
                     plan_tool_name=SELFTEST_TOOL_NAME, project=project.name,
                     workspace_only=False,
-                ))
+                ), SELFTEST_TOOL_NAME)
             knowledge = select_self_test_plan(__version__, readonly, section)
             if workspace_enabled and knowledge.get("status") == "success":
                 workspace = workspace_selftest_plan(
@@ -2163,16 +2234,16 @@ def create_gateway_app(
         if readonly and not is_tool_allowed_remote(tool):
             log.info("project authorization denied connector_id=%s project=%s access=%s tool=%s outcome=read_only",
                      connector_id, project.name, access, tool)
-            return _tool_result(message.get("id"), {
-                "status": "error", "reason": "read_only",
-                "message": f"Tool '{tool}' is not available: this knowledge base is read-only.",
-            })
+            return _refusal(
+                message.get("id"), tool, "read_only",
+                f"Tool '{tool}' is not available: this knowledge base is read-only.",
+            )
         forwarded = copy.deepcopy(message)
         forwarded["params"]["arguments"].pop("project", None)
         if engine is None:
             log.info("project operation unavailable connector_id=%s project=%s outcome=no_engine",
                      connector_id, project.name)
-            return _project_unavailable(message.get("id"))
+            return _project_unavailable(message.get("id"), tool)
         worker_url = engine.url_for(project.name)
         log.info("project operation accepted connector_id=%s project=%s access=%s tool=%s revision=%d",
                  connector_id, project.name, access, tool, snapshot.revision)
@@ -2560,14 +2631,13 @@ def create_gateway_app(
             if set(arguments) - {"section"} or (
                 "section" in arguments and not isinstance(arguments["section"], str)
             ):
-                return _tool_result(msg_id, {
-                    "status": "error", "reason": "invalid",
-                    "message": "section must be a string when supplied",
-                })
+                return _refusal(msg_id, tool, "invalid", "section must be a string when supplied")
+            # 16.1.3: this result was never validated (no tool name was passed),
+            # although workspace_generate_self_test advertises an outputSchema.
             return _tool_result(msg_id, workspace_selftest_plan(
                 server_version=__version__, section=arguments.get("section"), bridge=False,
                 catalog=(*workspace_tool_names(),),
-            ))
+            ), tool)
         principal = getattr(request.state, "cognita_principal", None)
         if is_self_test_principal(principal):
             # 13.0 §7.3: the Workspace path goes through the same scope check

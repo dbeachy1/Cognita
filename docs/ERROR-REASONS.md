@@ -45,3 +45,40 @@ errors while reading, writing, copying, deleting, or retrieving data.
 
 `output_contract_violation` means a tool result did not match the result shape
 advertised to the client.
+
+Since 16.1.3 every refusal matches the `outputSchema` of the tool it answers,
+so a client that validates results (the official TypeScript SDK does, even for
+`isError` results) shows the model the real reason instead of failing:
+
+- The `audiobook_*` tools, `book_get_index_status`, `set_folder_indexing`,
+  `list_project_files` and `read_project_file` use a strict error envelope:
+  `status`, `reason`, `message`, `operation_outcome` and `correlation_id`.
+  Refusals made before any write (`project_unavailable`, `read_only`,
+  `policy_unavailable`, `invalid`, a bad `operation_id`, `upgrade_required`)
+  carry `operation_outcome: "not_applied"`.
+- If one of those tools returns a result that does not match its schema, the
+  replacement error is `output_contract_violation` with `operation_outcome:
+  "outcome_unknown"` for a tool that writes (verify before retrying), and
+  `internal_error` with `operation_outcome: "not_applied"` for one that only
+  reads. Other tools keep their existing error shape.
+
+## Argument mistakes
+
+A mistake in a call's arguments comes back as a tool result with `isError`
+true and `reason: "invalid"` so the model can read it and correct the call:
+a missing, empty or whitespace-padded `project`, `project` routing nested
+inside other arguments, and arguments sent to a tool that takes none
+(`list_projects`). Omitting `arguments` entirely is the same as sending `{}`.
+
+A JSON-RPC `-32602` is kept for a request that is itself malformed:
+`params` that is not an object or names no tool, `arguments` that is present
+and not an object, and an unknown tool name.
+
+## Self-test plan blocks
+
+`get_self_test_plan` answers a Workspace section (`W`, `W1` to `W14`) it cannot
+serve with `status: "blocked"` and `isError` false, because a self-test run
+reports BLOCKED separately from FAIL. The block is either
+`reason: "workspace_unavailable"` or `"bridge_unavailable"` (the connector has no
+Workspace or no bridge), or `reason: "catalog_missing"` with `missing_tools`
+(the host's Workspace tools are not all present).

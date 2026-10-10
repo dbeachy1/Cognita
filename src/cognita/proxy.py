@@ -99,7 +99,7 @@ from .readonly import MUTATING_TOOLS, READONLY_TOOLS, is_tool_allowed_remote
 from .books.schemas import ALL_ADDITIVE_MUTATING_TOOLS
 from .result_contracts import (
     OUTPUT_SCHEMAS_BY_TOOL, attach_output_schema, build_tool_result,
-    normalize_legacy_error_payload,
+    is_known_tool, normalize_legacy_error_payload, refusal_payload,
 )
 from .selftest import SELFTEST_TOOL_DEF, SELFTEST_TOOL_NAME, select_self_test_plan
 from .toolargs import reject_unknown_arguments, reject_wrong_types, wire_error
@@ -411,6 +411,13 @@ def _tool_result(msg_id, payload: dict, tool_name: str | None = None) -> JSONRes
         elif "context_diff" in payload:
             tool_name = (BATCH_TOOL_NAME if "edits_applied" in payload else
                          INSERT_TOOL_NAME if "inserted_at_line" in payload else EDIT_TOOL_NAME)
+    if tool_name is not None and not is_known_tool(tool_name):
+        # 16.1.3: a name with no advertised output schema (a direct proxy
+        # caller can send any string) has nothing to validate against, and
+        # build_tool_result would raise KeyError for it.
+        log.info("tool result for a name with no output schema; not validated status=%s",
+                 payload.get("status"))
+        tool_name = None
     if tool_name is not None:
         result = build_tool_result(tool_name, payload,
                                    is_error=payload.get("status") == "error",
@@ -791,8 +798,17 @@ def public_tools_response(
                          "result": {"tools": tools}})
 
 
-def _tool_error(msg_id, reason: str, message: str, **fields) -> JSONResponse:
-    """Shorthand for the status:error tool-result shape used everywhere."""
+def _tool_error(msg_id, reason: str, message: str, *, tool_name: str | None = None,
+                **fields) -> JSONResponse:
+    """Shorthand for the status:error tool-result shape used everywhere.
+
+    16.1.3: with ``tool_name`` the refusal is built for THAT tool
+    (result_contracts.refusal_payload: the strict envelope for the 16
+    strict-envelope tools, the legacy shape for the rest) and validated against
+    its outputSchema. Without it the shape is the legacy one, as before.
+    """
+    if tool_name is not None:
+        return _tool_result(msg_id, refusal_payload(tool_name, reason, message, **fields), tool_name)
     return _tool_result(msg_id, {"status": "error", "reason": reason,
                                  "message": message, **fields})
 
@@ -2091,6 +2107,7 @@ async def _intercept(
         return _tool_error(
             msg_id, "read_only",
             f"Tool '{tool}' is not available: this knowledge base is read-only.",
+            tool_name=tool,
         )
 
     # 14.0.0: the 5.2 guard that refused arguments (and asset tools) the pinned
@@ -2145,7 +2162,10 @@ async def _intercept(
             _arguments_of(message).get(OPERATION_ID_ARG)
         )
         if bad_id is not None:
-            return _tool_result(msg_id, bad_id)
+            # 16.1.3: in THE TOOL'S shape (a strict-envelope tool needs
+            # operation_outcome and correlation_id); nothing has been written.
+            log.info("Refused %s: bad operation_id reason=%s", tool, bad_id["reason"])
+            return _tool_error(msg_id, bad_id["reason"], bad_id["message"], tool_name=tool)
         request_digest = operation_request_digest(message)
         # A directory move carries its receipt in source-side ProjectState.  The
         # source may already be gone on a retry, so classification is based on
@@ -2168,7 +2188,7 @@ async def _intercept(
                     "Refused queued write connector_id=%s project=%s tool=%s reason=%s",
                     connector_id, project_name, tool, reason,
                 )
-                return _tool_error(msg_id, reason, message)
+                return _tool_error(msg_id, reason, message, tool_name=tool)
 
             if (operation_id is not None and not directory_move and tool not in ASSET_MUTATING_TOOLS
                     and tool not in ALL_ADDITIVE_MUTATING_TOOLS):

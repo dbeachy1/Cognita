@@ -440,6 +440,39 @@ def _with_adapter_replay(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+# 16.1.3: the Workspace self-test plan has two non-error shapes of its own
+# (workspace_selftest.workspace_selftest_plan): the plan itself, and the
+# catalog_missing block. The Workspace-only tool workspace_generate_self_test
+# always advertised them; on the combined connector get_self_test_plan serves
+# the same plans for sections W..W14 and advertised neither, so a validating
+# client discarded the result. Hoisted here so build_schemas() (which runs
+# before build_adapter_schemas()) can reuse the exact same branches.
+WORKSPACE_PLAN_SUCCESS_BRANCH = branch(
+    "success",
+    {"server_version": S, "plan_version": S, "section": S,
+     "catalog_assertions": {}, "plan": S, "sections": arr({}),
+     "workspace_plan_version": S},
+    ("server_version", "plan_version", "section", "catalog_assertions"),
+)
+WORKSPACE_PLAN_BLOCKED_BRANCH = branch(
+    "blocked",
+    {"server_version": S, "plan_version": S, "section": S,
+     "catalog_assertions": {}, "reason": S, "missing_tools": STRINGS},
+    ("server_version", "plan_version", "section", "catalog_assertions",
+     "reason", "missing_tools"),
+)
+# 16.1.3: the gateway's own block for a Workspace section it cannot serve,
+# sent as {status: blocked, reason, section} and nothing else. Closed, with
+# reason limited to the two values the gateway emits, so it can never overlap
+# the catalog_missing branch above (which requires more members).
+GATEWAY_WORKSPACE_BLOCKED_BRANCH = branch(
+    "blocked",
+    {"reason": {"type": "string", "enum": ["workspace_unavailable", "bridge_unavailable"]},
+     "section": S},
+    ("reason", "section"),
+)
+
+
 def build_adapter_schemas() -> dict[str, dict[str, Any]]:
     """Build result contracts for gateway-served Workspace and bridge tools."""
     # Adapter tools are separate from the Knowledge registry, but their MCP
@@ -531,20 +564,7 @@ def build_adapter_schemas() -> dict[str, dict[str, Any]]:
         "copy_to_workspace": _with_adapter_replay(copy.deepcopy(bridge_success)),
         "copy_from_workspace": _with_adapter_replay(copy.deepcopy(bridge_success)),
         "workspace_generate_self_test": contract(
-            branch(
-                "success",
-                {"server_version": S, "plan_version": S, "section": S,
-                 "catalog_assertions": {}, "plan": S, "sections": arr({}),
-                 "workspace_plan_version": S},
-                ("server_version", "plan_version", "section", "catalog_assertions"),
-            ),
-            branch(
-                "blocked",
-                {"server_version": S, "plan_version": S, "section": S,
-                 "catalog_assertions": {}, "reason": S, "missing_tools": STRINGS},
-                ("server_version", "plan_version", "section", "catalog_assertions",
-                 "reason", "missing_tools"),
-            ),
+            WORKSPACE_PLAN_SUCCESS_BRANCH, WORKSPACE_PLAN_BLOCKED_BRANCH,
         ),
     })
     return schemas
@@ -820,7 +840,14 @@ def build_schemas(mutating_tools: Iterable[str]) -> dict[str, dict[str, Any]]:
                    "scope": {"type": "string", "enum": ["writable", "both", "readonly", "connector", "server"]},
                    "instructions": S, "plan": S, "workspace_plan_version": S},
                    ("server_version", "plan_version", "section", "section_id", "title",
-                    "prerequisite_ids", "cleanup_ids", "scope", "instructions", "plan"))),
+                    "prerequisite_ids", "cleanup_ids", "scope", "instructions", "plan")),
+            # 16.1.3 (the 13.2.7 precedent: described as-is, not reshaped). On
+            # the combined connector a Workspace section (W, W1 .. W14) is
+            # answered with the Workspace plan or one of two blocks, none of
+            # which any branch above described. A block is isError:false on
+            # purpose: the self-test text treats BLOCKED as distinct from FAIL.
+            WORKSPACE_PLAN_SUCCESS_BRANCH, WORKSPACE_PLAN_BLOCKED_BRANCH,
+            GATEWAY_WORKSPACE_BLOCKED_BRANCH),
     })
 
     edit_applied_common = {"filepath": S, "new_content_sha256": HASH,
