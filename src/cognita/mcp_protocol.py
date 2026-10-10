@@ -191,17 +191,45 @@ def error_body(msg_id: Any, code: int, message: str) -> dict:
 
 
 # 16.1.3: what a request is answered with when a reply cannot be encoded as
-# UTF-8 because the request carried text that is not valid Unicode (a JSON
-# "\ud800" escape yields a lone surrogate, which json.loads accepts and the
-# response encoder refuses). It used to be an HTTP 500. No `id` member: the id
-# may be the very text that cannot be written back.
-UNENCODABLE_TEXT_MESSAGE = "Invalid request: the request contains text that is not valid Unicode"
+# UTF-8 because text in the request, or in the data the server returned, is not
+# valid Unicode (a JSON "\ud800" escape yields a lone surrogate, which
+# json.loads accepts and the response encoder refuses). It used to be an HTTP
+# 500. SUPERSEDED within 16.1.3 (acceptance review): the first form was
+# -32600 "Invalid request: the request contains text that is not valid
+# Unicode" with no `id`. That blamed the request when the server's own data
+# could be at fault, said nothing of a write that had already run, and the
+# TypeScript SDK could not match an id-less error to its pending call, so the
+# call hung until its timeout (16.1.2 failed at once, as an HTTP 500). It is
+# now an internal error (-32603) that echoes the request's id and tells the
+# caller to verify the outcome of a write before retrying.
+UNENCODABLE_TEXT_MESSAGE = (
+    "The reply could not be encoded as UTF-8: the request, or the data it "
+    "returned, contains text that is not valid Unicode. If this call writes, "
+    "verify the outcome before retrying."
+)
 
 
-def unencodable_text_reply() -> dict:
+def unencodable_text_reply(raw_body: bytes | None = None) -> dict:
     """The JSON-RPC error a request is answered with when its reply cannot be
-    encoded (see UNENCODABLE_TEXT_MESSAGE): -32600, no `id` member."""
-    return error_body(NO_ID, -32600, UNENCODABLE_TEXT_MESSAGE)
+    encoded (see UNENCODABLE_TEXT_MESSAGE): -32603.
+
+    `raw_body` is the request body already read. For a single JSON-object
+    message the reply echoes that message's own `id` exactly as a normal reply
+    would (a missing id as null), so a client can match it to its pending
+    call; classify_message has already refused every id that cannot be
+    encoded, and one that still cannot be (or a body that does not parse, or
+    a batch, which gets one reply for the whole array) falls back to no `id`
+    member.
+    """
+    reply_id: Any = NO_ID
+    if raw_body:
+        try:
+            message = parse_body(raw_body)
+        except BodyParseError:
+            message = None
+        if isinstance(message, dict) and id_encodes_as_json(message.get("id")):
+            reply_id = message.get("id")
+    return error_body(reply_id, -32603, UNENCODABLE_TEXT_MESSAGE)
 
 
 def log_safe(value: Any, limit: int = 60) -> str:

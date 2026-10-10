@@ -176,6 +176,33 @@ async def test_capture_prunes_to_the_configured_keep(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_slug", ["x%5C..%5C..%5Cescaped", "..%2F..%2Fescaped", "a%5Cb", "..%5C"])
+async def test_capture_file_name_never_leaves_the_capture_folder(tmp_path, raw_slug):
+    # 16.1.3 (acceptance review): the capture file name used the raw, percent-
+    # decoded URL slug, and capture runs for unauthenticated requests too, so on
+    # a Windows host a slug holding backslashes wrote outside mcp-wire. The file
+    # name is sanitized; the record's own `connector` field keeps the real value.
+    app, _slug, token = _app(tmp_path, capture=True)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for headers in ({}, {"Authorization": f"Bearer {token}"}):
+            r = await client.post(f"/mcp/connectors/{raw_slug}/mcp/v{PUBLIC_CONTRACT_VERSION}",
+                                  content=b"{}", headers=headers)
+            assert r.status_code in (401, 404)
+    capture = (tmp_path / "logs" / "mcp-wire").resolve()
+    everything = [p for p in tmp_path.rglob("*.json")
+                  if p.name.startswith("20") and "authentication" not in p.name]
+    # Nothing was written anywhere but directly inside mcp-wire.
+    assert all(p.parent.resolve() == capture for p in everything), [str(p) for p in everything]
+    written = list(capture.glob("*.json")) if capture.exists() else []
+    if "%5C" in raw_slug:  # a backslash survives routing, so the capture really ran
+        assert written
+        assert all(set(p.name) <= set("0123456789TabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_.-")
+                   for p in written)
+        record = json.loads(written[0].read_text(encoding="utf-8"))
+        assert record["connector"] == raw_slug.replace("%5C", "\\")  # the real value is kept
+
+
+@pytest.mark.asyncio
 async def test_capture_is_off_by_default(tmp_path):
     app, slug, token = _app(tmp_path, capture=False)
     assert (await _call_plan(app, slug, token, "index")).status_code == 200

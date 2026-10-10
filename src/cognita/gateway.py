@@ -2539,10 +2539,18 @@ def create_gateway_app(
             # be encoded as UTF-8 (the request carried a lone surrogate in an
             # id, method, tool name or section) used to be an HTTP 500. It is
             # a JSON-RPC error instead; for a batch the whole batch gets this
-            # one reply. Only the kind and the route are logged, never the
-            # offending text.
-            log.info("mcp request refused kind=unicode_encode_error route=%s", route_for_log)
-            response = JSONResponse(unencodable_text_reply())
+            # one reply. Acceptance review: the reply is an internal error
+            # (-32603) that echoes a single request's own id (the SDK cannot
+            # match an id-less error to its pending call and hung for its
+            # whole timeout) and says to verify a write's outcome; the
+            # failure may be in the server's own data, or after a write ran.
+            # Logged at WARNING with the traceback, which carries the code
+            # point and position, never the offending text; no request text
+            # or argument is added.
+            log.warning("mcp reply not encodable kind=unicode_encode_error connector=%s route=%s",
+                        slug_for_log, route_for_log, exc_info=True)
+            response = JSONResponse(unencodable_text_reply(
+                getattr(request.state, "cognita_mcp_body", None)))
         except Exception:
             log.exception("mcp exchange raised connector=%s route=%s elapsed_ms=%d",
                           slug_for_log, route_for_log,
@@ -2608,7 +2616,13 @@ def create_gateway_app(
             capture_dir.mkdir(parents=True, exist_ok=True)
             stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime()) + f"{time.time() % 1:.3f}"[1:]
             safe_ids = re.sub(r"[^A-Za-z0-9_.-]+", "_", ids)[:40]
-            path = capture_dir / f"{stamp}-{connector_slug}-{safe_ids}.json"
+            # 16.1.3 (acceptance review): the slug is the percent-decoded URL
+            # segment and this runs for unauthenticated requests too, so on a
+            # Windows host a slug holding backslashes wrote the file outside
+            # mcp-wire. Sanitized for the FILE NAME only, as the ids are; the
+            # record's own `connector` field below keeps the real value.
+            safe_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", connector_slug)[:80]
+            path = capture_dir / f"{stamp}-{safe_slug}-{safe_ids}.json"
             record = {
                 "captured_at_utc": stamp, "connector": connector_slug, "route": version_segment,
                 "elapsed_ms": elapsed_ms,

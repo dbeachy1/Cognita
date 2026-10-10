@@ -2379,35 +2379,45 @@ async def _forward_one(
                     media_type=upstream.headers.get("content-type"))
 
 
-def _answer_unencodable_text(handler):
+def _answer_unencodable_text(*, single_message: bool):
     """16.1.3: a reply that cannot be encoded as UTF-8 is a JSON-RPC error.
 
     A request can carry text that is not valid Unicode (a JSON "\\ud800" escape
     yields a lone surrogate, which json.loads accepts); the reply built from it
     (an unknown tool or method name, a rejected argument name) raised
     UnicodeEncodeError out of this module as an HTTP 500. Same error, same
-    shape, as the gateway's shared handler (mcp_protocol.unencodable_text_reply);
-    a batch gets this one reply as a whole. Only UnicodeEncodeError is caught,
-    and only the kind is logged, never the offending text.
+    shape, as the gateway's shared handler (mcp_protocol.unencodable_text_reply):
+    -32603, and for a single message (`single_message`, the second argument is
+    the Request whose body is read) that message's own id is echoed; a batch
+    gets this one reply as a whole, with no id. Only UnicodeEncodeError is
+    caught. It is logged at WARNING with its traceback (code point and
+    position, never the offending text).
 
     When the gateway drives one element of its own batch (`body_override` is
     set) the error is NOT answered here: it propagates to the gateway's shared
     handler, which answers the whole exchange, so a gateway batch gets one
     error for the whole batch on every path rather than one for this member.
     """
-    @functools.wraps(handler)
-    async def guarded(*args, **kwargs):
-        try:
-            return await handler(*args, **kwargs)
-        except UnicodeEncodeError:
-            if kwargs.get("body_override") is not None:
-                raise
-            log.info("proxy request refused kind=unicode_encode_error handler=%s", handler.__name__)
-            return JSONResponse(unencodable_text_reply())
-    return guarded
+    def decorate(handler):
+        @functools.wraps(handler)
+        async def guarded(*args, **kwargs):
+            try:
+                return await handler(*args, **kwargs)
+            except UnicodeEncodeError:
+                if kwargs.get("body_override") is not None:
+                    raise
+                log.warning("proxy reply not encodable kind=unicode_encode_error handler=%s",
+                            handler.__name__, exc_info=True)
+                raw = None
+                if single_message:
+                    request = kwargs.get("request", args[1] if len(args) > 1 else None)
+                    raw = await request.body() if request is not None else None
+                return JSONResponse(unencodable_text_reply(raw))
+        return guarded
+    return decorate
 
 
-@_answer_unencodable_text
+@_answer_unencodable_text(single_message=False)
 async def _handle_batch(
     client: httpx.AsyncClient,
     request: Request,
@@ -2475,7 +2485,7 @@ async def _handle_batch(
     return JSONResponse(replies)
 
 
-@_answer_unencodable_text
+@_answer_unencodable_text(single_message=True)
 async def proxy_mcp(
     client: httpx.AsyncClient,
     request: Request,

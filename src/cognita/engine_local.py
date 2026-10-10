@@ -659,11 +659,13 @@ class LocalEngineHost(
                 # 16.1.3: a reply that cannot be encoded as UTF-8 (the request
                 # carried a lone surrogate, e.g. a JSON "\ud800" escape in an
                 # id, method or tool name) was an HTTP 500. Same JSON-RPC
-                # error, same shape, as the gateway's shared handler. Only the
-                # kind is logged, never the offending text.
-                log.info("engine request refused kind=unicode_encode_error project=%s",
-                         log_safe(name, 80))
-                return JSONResponse(unencodable_text_reply())
+                # error, same shape, as the gateway's shared handler: -32603,
+                # the single request's own id echoed, a WARNING with the
+                # traceback (code point and position, never the offending
+                # text).
+                log.warning("engine reply not encodable kind=unicode_encode_error project=%s",
+                            log_safe(name, 80), exc_info=True)
+                return JSONResponse(unencodable_text_reply(await request.body()))
 
         @app.api_route("/engine/{name}/mcp", methods=["GET", "DELETE"])
         async def mcp_no_session(name: str) -> Response:

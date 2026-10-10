@@ -32,10 +32,13 @@ MCP client connected to Cognita 16.1.2, showed "connected", and offered the mode
   (`2025-11-25`, `2025-06-18`, `2025-03-26`); a request for an unknown revision is answered with `2025-11-25`.
   It used to echo any value. Requests for the two oldest revisions (`2024-11-05`, `2024-10-07`) are still
   answered as asked, so a client that connected that way keeps working.
-- **Malformed requests no longer cause HTTP 500.** Invalid UTF-8, a body nested beyond 128 levels, a request
-  id that cannot be written as JSON (a non-finite number) and text that is not valid Unicode get a JSON-RPC
-  error. Error replies for a request whose id cannot be known omit the `id` member instead of sending
-  `"id": null`. A JSON-RPC response posted by a client is accepted with HTTP 202.
+- **Malformed requests no longer cause HTTP 500.** Invalid UTF-8, a body nested beyond 128 levels and a
+  request id that cannot be written as JSON (a non-finite number, for example) get a JSON-RPC error. When a
+  reply cannot be encoded because the request, or the data it returned, contains text that is not valid
+  Unicode (half of an emoji, for example), the caller gets a JSON-RPC internal error (`-32603`) carrying its
+  request id and a reminder to verify the outcome if the call writes. Error replies for a message whose id
+  cannot be known omit the `id` member instead of sending `"id": null`. A JSON-RPC response posted by a client
+  is accepted with HTTP 202.
 - **Log lines.** Values a client controls (the connector name in the URL, method names, the client's name and
   version) are stripped of line breaks and bounded before they are logged; a request could previously write a
   forged line into the log.
@@ -61,8 +64,11 @@ every connector URL. Client-visible differences:
   `error: {reason: "invalid", message}`) instead of `reason: "child_error"` with a JSON-RPC error object;
 - the advertised `outputSchema` of `get_self_test_plan` gained branches, and `batch` embeds every tool's
   result shapes, so the tool-list digest in the log moves;
-- `initialize` asking for a revision other than the three above, or `2024-11-05` / `2024-10-07` (still
-  answered as asked), gets `2025-11-25`; so does an empty or null `protocolVersion`;
+- `initialize` asking for a revision Cognita does not know gets `2025-11-25` (it was echoed); so does an empty
+  or null `protocolVersion`. The three supported revisions, and `2024-11-05` and `2024-10-07`, are answered as
+  asked, as before;
+- an unknown argument to `get_self_test_plan` or `workspace_generate_self_test` is refused with reason
+  `unknown_argument` and a message naming it (the reason was `invalid`);
 - on the Workspace-only route, an empty batch is answered with `-32600` (it was HTTP 202) and a batch member
   with a non-string method with `-32600` (it was `-32601`), as on the connector route;
 - replies to a message whose id cannot be known omit `id` (they carried `"id": null`);

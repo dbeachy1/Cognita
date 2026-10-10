@@ -1129,13 +1129,19 @@ async def test_text_that_cannot_be_encoded_is_a_json_rpc_error_not_a_500(surface
     raw = _unencodable_text_bodies(surface)[label]
     r = await surface.post(raw)
     assert r.status_code == 200, (label, r.text[:200])
-    expected = {"jsonrpc": "2.0", "error": {"code": -32600, "message": UNENCODABLE_TEXT_MESSAGE}}
+    # Acceptance review: an internal error (-32603) that echoes the request's
+    # own id (the SDK cannot match an id-less error to its pending call); a
+    # batch (array body) gets ONE error object with no id.
+    error = {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}
+    expected = ({"jsonrpc": "2.0", "error": error} if label == "batch of requests"
+                else {"jsonrpc": "2.0", "id": 1, "error": error})
     assert r.content == json.dumps(expected, separators=(",", ":")).encode("utf-8")
-    assert "id" not in r.json()  # also for a batch: ONE error object, not an array
     messages = _gateway_records(caplog)
-    refused = [m for m in messages if m.startswith("mcp request refused ")]
-    assert refused == ["mcp request refused kind=unicode_encode_error route=v%d" % (
-        PUBLIC_CONTRACT_VERSION if surface.name == "connector" else 3)], messages
+    refused = [rec for rec in caplog.records if rec.getMessage().startswith("mcp reply not encodable ")]
+    assert len(refused) == 1 and refused[0].levelno == logging.WARNING
+    assert refused[0].exc_info and refused[0].exc_info[0] is UnicodeEncodeError  # the traceback is kept
+    assert refused[0].getMessage().endswith("route=v%d" % (
+        PUBLIC_CONTRACT_VERSION if surface.name == "connector" else 3)), refused[0].getMessage()
     # The exchange is still logged once, as 200, and never with the offending text.
     [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
     assert "-> http=200" in exchange
@@ -1154,8 +1160,10 @@ async def test_the_engine_answers_unencodable_text_with_the_same_json_rpc_error(
     }[label]
     r = await _engine_post(engine_host, raw)
     assert r.status_code == 200
-    assert r.json() == {"jsonrpc": "2.0", "error": {"code": -32600, "message": UNENCODABLE_TEXT_MESSAGE}}
-    assert any(m.startswith("engine request refused kind=unicode_encode_error") for m in _gateway_records(caplog))
+    assert r.json() == {"jsonrpc": "2.0", "id": 1,
+                        "error": {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}}
+    [warned] = [rec for rec in caplog.records if rec.getMessage().startswith("engine reply not encodable ")]
+    assert warned.levelno == logging.WARNING and warned.exc_info[0] is UnicodeEncodeError
     assert not any("ud800" in m or "\ud800" in m for m in caplog.messages)
     # An id that cannot be encoded is an invalid request on the engine too.
     r = await _engine_post(engine_host, _raw('{"jsonrpc":"2.0","id":"@S","method":"ping"}'))
@@ -1193,22 +1201,25 @@ _PROXY_UNENCODABLE_CALLS = {
 async def test_the_proxy_answers_unencodable_text_with_the_json_rpc_error(label, caplog):
     caplog.set_level(logging.INFO, logger="cognita")
     message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": _PROXY_UNENCODABLE_CALLS[label]}
-    expected = error_body(NO_ID, -32600, UNENCODABLE_TEXT_MESSAGE)
-    # A batch (the whole batch gets the one error, not an array) ...
+    # A batch (the whole batch gets the one error, no id, not an array) ...
     batch = await _handle_batch(
         None, None, "http://worker.invalid/mcp", [message], readonly=True,
         documents_dir=None, backup_keep=0, project_name="P",
     )
-    assert (batch.status_code, json.loads(batch.body)) == (200, expected)
-    # ... and a single message through the public entry point.
+    assert (batch.status_code, json.loads(batch.body)) == (
+        200, error_body(NO_ID, -32603, UNENCODABLE_TEXT_MESSAGE))
+    # ... and a single message through the public entry point echoes its id.
     single = await proxy_mcp(
         None, _FakeRequest(json.dumps(message).encode("utf-8")), "http://worker.invalid/mcp",
         readonly=True, documents_dir=None, backup_keep=0, project_name="P",
     )
-    assert (single.status_code, json.loads(single.body)) == (200, expected)
-    lines = [m for m in caplog.messages if m.startswith("proxy request refused ")]
-    assert lines == ["proxy request refused kind=unicode_encode_error handler=_handle_batch",
-                     "proxy request refused kind=unicode_encode_error handler=proxy_mcp"]
+    assert (single.status_code, json.loads(single.body)) == (
+        200, error_body(1, -32603, UNENCODABLE_TEXT_MESSAGE))
+    warned = [rec for rec in caplog.records if rec.getMessage().startswith("proxy reply not encodable ")]
+    assert [rec.getMessage() for rec in warned] == [
+        "proxy reply not encodable kind=unicode_encode_error handler=_handle_batch",
+        "proxy reply not encodable kind=unicode_encode_error handler=proxy_mcp"]
+    assert all(rec.levelno == logging.WARNING and rec.exc_info[0] is UnicodeEncodeError for rec in warned)
 
 
 async def test_the_proxy_leaves_the_error_to_the_gateway_for_an_element_it_was_handed():
@@ -1221,3 +1232,125 @@ async def test_the_proxy_leaves_the_error_to_the_gateway_for_an_element_it_was_h
             None, _FakeRequest(b""), "http://worker.invalid/mcp", readonly=True, documents_dir=None,
             backup_keep=0, project_name="P", body_override=json.dumps(message).encode("utf-8"),
         )
+
+
+# ----------------------- acceptance review (A1): the unencodable-text reply's id and wording
+
+
+def test_unencodable_text_reply_echoes_a_single_requests_id_and_nothing_else():
+    error = {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}
+    assert UNENCODABLE_TEXT_MESSAGE == (
+        "The reply could not be encoded as UTF-8: the request, or the data it returned, contains "
+        "text that is not valid Unicode. If this call writes, verify the outcome before retrying.")
+    from cognita.mcp_protocol import unencodable_text_reply
+
+    for msg_id in (1, 0, "req-1", "", 1.5, None, [1, "a"], {"k": [2]}, "é😀"):
+        body = json.dumps({"jsonrpc": "2.0", "id": msg_id, "method": "x"}).encode()
+        assert unencodable_text_reply(body) == {"jsonrpc": "2.0", "id": msg_id, "error": error}
+    # A request with no id has always been answered "id": null.
+    assert unencodable_text_reply(b'{"jsonrpc":"2.0","method":"x"}') == {
+        "jsonrpc": "2.0", "id": None, "error": error}
+    # No id member: a batch, an unparseable or missing body, an id that cannot be encoded.
+    no_id = {"jsonrpc": "2.0", "error": error}
+    for raw in (b'[{"jsonrpc":"2.0","id":1,"method":"x"}]', b"not json", b"\xff\xfe", b"", None, b"5",
+                _raw('{"jsonrpc":"2.0","id":"@S","method":"x"}'), b'{"id":[NaN],"method":"x"}'):
+        assert unencodable_text_reply(raw) == no_id, raw
+
+
+@pytest.mark.parametrize("msg_id", [5, "req-1"])
+@pytest.mark.parametrize("label", ["method", "tool name"])
+async def test_the_unencodable_text_reply_echoes_the_requests_id_on_both_routes(surface, msg_id, label):
+    template = {
+        "method": '{"jsonrpc":"2.0","id":%s,"method":"x@S"}',
+        "tool name": ('{"jsonrpc":"2.0","id":%s,"method":"tools/call",'
+                      '"params":{"name":"x@S","arguments":{}}}'),
+    }[label]
+    r = await surface.post(_raw(template % json.dumps(msg_id)))
+    assert r.status_code == 200
+    assert r.json() == {"jsonrpc": "2.0", "id": msg_id,
+                        "error": {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}}
+
+
+class _CommitThenFailWorkspace:
+    """A fake Workspace that records the writes that ran and can return server data
+    holding a lone surrogate (a file name that is not valid Unicode, say)."""
+
+    def __init__(self) -> None:
+        self.committed: list[str] = []
+
+    def execute(self, principal, tool, arguments, *, connector_id=None):
+        if tool == "workspace_write_file":
+            self.committed.append(arguments.get("path"))
+            return {"status": "success", "workspace": {}, "data": {}}
+        if tool == "workspace_info":
+            return {"status": "error", "reason": "listing_failed",
+                    "message": "cannot stat 'report-\udcff.txt'"}
+        return {"status": "error", "reason": "runtime_unavailable", "message": "fake"}
+
+
+def _connector_with_workspace(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    registry = Registry(tmp_path / "registry.yaml")
+    registry.add(Project(name="RW", documents_dir=docs, data_dir=tmp_path / "data"))
+    auth = AuthenticationPolicyStore(tmp_path / "authentication.yaml", project_names=["RW"])
+    token = auth.mutate_global(
+        expected_revision=0, oauth_enabled=False, static_key_action="generate")["generated_key"]
+    store = ConnectorStore(tmp_path / "connectors.yaml")
+    created = store.create(expected_revision=0, name="Committing", project_names=["RW"],
+                           workspace_enabled=True)
+    workspace = _CommitThenFailWorkspace()
+    app = create_gateway_app(
+        CognitaConfig(registry_path=registry.path, connectors_path=store.path, data_root=tmp_path),
+        registry, engine=FakeEngineHost(FastAPI()), connector_store=store,
+        authentication_store=auth, workspace_service=workspace,
+    )
+    url = f"/mcp/connectors/{created.connectors[0].slug}/mcp/v{PUBLIC_CONTRACT_VERSION}"
+    return app, url, token, workspace
+
+
+async def _post_to(app, url, token, raw: bytes):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.post(url, content=raw, headers={
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+
+
+async def test_a_reply_that_fails_to_encode_after_a_write_ran_says_to_verify_the_outcome(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    app, url, token, workspace = _connector_with_workspace(tmp_path)
+    raw = _raw(
+        '{"jsonrpc":"2.0","id":"batch-7","method":"tools/call","params":{"name":"batch","arguments":'
+        '{"on_error":"continue","calls":['
+        '{"tool":"workspace_write_file","arguments":{"path":"/workspace/one.txt","text":"x"}},'
+        '{"tool":"REQUEST-MARKER-x@S","arguments":{}}]}}}')
+    r = await _post_to(app, url, token, raw)
+    assert r.status_code == 200
+    # The write DID run (the first child committed) before the reply failed to encode...
+    assert workspace.committed == ["/workspace/one.txt"]
+    # ... so the reply is an internal error carrying the id and the instruction to verify.
+    assert r.json() == {"jsonrpc": "2.0", "id": "batch-7",
+                        "error": {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}}
+    assert "verify the outcome before retrying" in r.json()["error"]["message"]
+    [warned] = [rec for rec in caplog.records if rec.getMessage().startswith("mcp reply not encodable ")]
+    assert warned.levelno == logging.WARNING and warned.exc_info[0] is UnicodeEncodeError
+    # The record (message and formatted traceback) holds no request text.
+    shown = logging.Formatter().format(warned)
+    assert "REQUEST-MARKER" not in shown and "one.txt" not in shown
+    assert "UnicodeEncodeError" in shown  # the traceback is there (code point and position only)
+
+
+async def test_a_result_whose_own_data_holds_a_lone_surrogate_gets_the_same_reply_with_the_id(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    app, url, token, workspace = _connector_with_workspace(tmp_path)
+    # The request is well formed; the server's own data (the fake's message) is at fault.
+    r = await _post_to(app, url, token, json.dumps(
+        {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+         "params": {"name": "workspace_info", "arguments": {}}}).encode())
+    assert r.status_code == 200
+    assert r.json() == {"jsonrpc": "2.0", "id": 9,
+                        "error": {"code": -32603, "message": UNENCODABLE_TEXT_MESSAGE}}
+    [warned] = [rec for rec in caplog.records if rec.getMessage().startswith("mcp reply not encodable ")]
+    assert warned.exc_info[0] is UnicodeEncodeError and "report-" not in logging.Formatter().format(warned)
+    # The next call is unaffected.
+    ok = await _post_to(app, url, token, json.dumps(PING).encode())
+    assert ok.json() == {"jsonrpc": "2.0", "id": 7, "result": {}}
