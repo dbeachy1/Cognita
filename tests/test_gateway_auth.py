@@ -93,11 +93,16 @@ async def test_production_static_rejections_are_indistinguishable(tmp_path):
             path, json={}, headers={"Authorization": "Bearer cog_sk_v1_bad"}
         )
 
-    assert (missing.status_code, missing.text, missing.headers["www-authenticate"]) == (
-        invalid.status_code, invalid.text, invalid.headers["www-authenticate"]
-    )
-    assert (malformed.status_code, malformed.text, malformed.headers["www-authenticate"]) == (
-        invalid.status_code, invalid.text, invalid.headers["www-authenticate"]
+    # Status and body stay indistinguishable. 16.1.3 (RFC 6750): the challenge
+    # for a bearer token that WAS presented and rejected additionally carries
+    # error="invalid_token"; a missing credential, or an Authorization header
+    # that is not a Bearer token, keeps today's challenge unchanged.
+    assert (missing.status_code, missing.text) == (invalid.status_code, invalid.text)
+    assert (malformed.status_code, malformed.text) == (invalid.status_code, invalid.text)
+    assert malformed.headers["www-authenticate"] == missing.headers["www-authenticate"]
+    assert 'error="invalid_token"' not in missing.headers["www-authenticate"]
+    assert invalid.headers["www-authenticate"] == (
+        missing.headers["www-authenticate"] + ', error="invalid_token"'
     )
 
 

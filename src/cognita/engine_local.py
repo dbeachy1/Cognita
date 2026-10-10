@@ -55,6 +55,16 @@ from .assets.ocr_service import OCRService, SchedulerOCRCapacityGate
 from .assets.repository import AssetRepository
 from .assets.service import AssetService
 from .assets.wire import ASSET_MUTATING_TOOLS, ASSET_TOOL_DEFS as ASSET_TOOL_DEFS, ASSET_TOOL_NAMES
+from .mcp_protocol import (
+    INVALID,
+    NO_ID,
+    REQUEST,
+    BodyParseError,
+    classify_message,
+    error_body,
+    negotiate_protocol_version,
+    parse_body,
+)
 from .result_contracts import attach_output_schema as attach_output_schema, build_tool_result
 from .backups import (
     BACKUPS_DIRNAME as BACKUPS_DIRNAME,
@@ -551,26 +561,37 @@ class LocalEngineHost(
             project = self.registry.get(name)
             if project is None or not project.enabled:
                 return Response(status_code=404, content=f"Unknown project {name!r}")
+            raw_body = await request.body()
             try:
-                message = json.loads(await request.body())
-            except json.JSONDecodeError:
-                return JSONResponse(
-                    {"jsonrpc": "2.0", "id": None,
-                     "error": {"code": -32700, "message": "Parse error"}}
-                )
-            if not isinstance(message, dict):
-                return JSONResponse(
-                    {"jsonrpc": "2.0", "id": None,
-                     "error": {"code": -32600, "message": "Invalid request"}}
-                )
-            method = message.get("method")
+                message = parse_body(raw_body)
+            except BodyParseError as exc:
+                # 16.1.3: invalid UTF-8 and over-deep nesting are parse errors
+                # too (HTTP 500 before); like every other parse error the
+                # reply carries no id member (the MCP schema never allows null).
+                log.info("engine parse error project=%s cause=%s bytes=%d",
+                         name, exc.cause, len(raw_body))
+                return JSONResponse(error_body(NO_ID, -32700, "Parse error"))
+            # 16.1.3: the same shape-based classification as the gateway routes
+            # (mcp_protocol.classify_message): notifications/* get 202 whatever
+            # their id, a client response is accepted, a non-finite id or a
+            # message that is not a request is -32600 without an id.
+            kind = classify_message(message)
+            if kind.kind != REQUEST:
+                log.info("engine message not executed project=%s kind=%s reason=%s",
+                         name, kind.kind, kind.reason or "-")
+                if kind.kind == INVALID:
+                    return JSONResponse(error_body(kind.reply_id, -32600, "Invalid request"))
+                return Response(status_code=202)
+            method = kind.method
             msg_id = message.get("id")
-            if isinstance(method, str) and method.startswith("notifications/"):
+            if method.startswith("notifications/"):
                 return Response(status_code=202)
             if method == "initialize":
                 params = message.get("params") or {}
                 return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": {
-                    "protocolVersion": params.get("protocolVersion") or "2025-03-26",
+                    # 16.1.3: the requested version only if this server speaks
+                    # it, else the newest it does (spec, Version Negotiation).
+                    "protocolVersion": negotiate_protocol_version(params),
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "cognita-engine", "version": __version__},
                 }})

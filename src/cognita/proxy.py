@@ -32,6 +32,15 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .assets.wire import ASSET_MUTATING_TOOLS
+from .mcp_protocol import (
+    INVALID,
+    NO_ID,
+    REQUEST,
+    BodyParseError,
+    classify_message,
+    error_body,
+    parse_body,
+)
 from .workspace_selftest import WORKSPACE_SELFTEST_TOOL_NAME, workspace_selftest_tool_definition
 from .backups import (
     DIFF_BACKUP_TOOL_DEF,
@@ -2375,16 +2384,24 @@ async def _handle_batch(
     copy_document calls.
     """
     if not messages:
-        return _jsonrpc_error(None, "Invalid request: empty batch", code=-32600)
+        # 16.1.3: no id member (the id cannot be known), via the shared builder.
+        return JSONResponse(error_body(NO_ID, -32600, "Invalid request: empty batch"))
     replies: list[dict] = []
     for message in messages:
-        if not isinstance(message, dict):
-            replies.append({"jsonrpc": "2.0", "id": None,
-                            "error": {"code": -32600, "message": "Invalid request"}})
+        # 16.1.3: members are classified by shape (mcp_protocol), the same
+        # routine the gateway routes use. A notifications/* message or a client
+        # response gets no reply; an invalid member is answered -32600 with no
+        # id member unless it carries a valid id to echo.
+        kind = classify_message(message)
+        if kind.kind != REQUEST:
+            log.info("batch member not executed project=%s kind=%s reason=%s",
+                     project_name, kind.kind, kind.reason or "-")
+            if kind.kind == INVALID:
+                replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
             continue
         _log_request(project_name, message)
-        method = message.get("method")
-        if isinstance(method, str) and method.startswith("notifications/"):
+        method = kind.method
+        if method.startswith("notifications/"):
             continue  # a notification gets no reply, in a batch or out of one
         response = await _intercept(
             client, request, worker_url, message, readonly=readonly,
@@ -2441,8 +2458,13 @@ async def proxy_mcp(
     tool_call_name: str | None = None
     if request.method == "POST" and body:
         try:
-            message = json.loads(body)
-        except json.JSONDecodeError:
+            message = parse_body(body)
+        except BodyParseError as exc:
+            # 16.1.3: invalid UTF-8 and over-deep nesting used to escape here
+            # as HTTP 500. The body is then forwarded as-is and the worker's
+            # own parse error is the answer, exactly like any unparseable body.
+            log.info("proxy body not parsed project=%s cause=%s bytes=%d",
+                     project_name, exc.cause, len(body))
             message = None
         if isinstance(message, list):
             return await _handle_batch(

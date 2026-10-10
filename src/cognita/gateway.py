@@ -50,6 +50,18 @@ from .connectors import (
     parse_route_path,
     resolve_project_access,
 )
+from .mcp_protocol import (
+    INVALID,
+    NO_ID,
+    NOTIFICATION,
+    REQUEST,
+    BodyParseError,
+    MessageKind,
+    classify_message,
+    error_body,
+    negotiate_protocol_version,
+    parse_body,
+)
 from .oauth import (
     RejectionLogCoalescer,
     _client_ip,
@@ -113,6 +125,14 @@ except ImportError:  # pragma: no cover - replaced when policy store is present
         oauth_resource: str | None = None
 
 
+def _with_invalid_token(challenge: str) -> str:
+    """16.1.3 (RFC 6750 section 3.1): a 401 for a credential that WAS presented
+    and is invalid or expired names the error. Appended after the existing
+    parameters, so `resource_metadata` and `scope` (and the realm) stay exactly
+    as they were; a request with no credential keeps the plain challenge."""
+    return f'{challenge}, error="invalid_token"'
+
+
 def _valid_mcp_resource_path(path: str) -> bool:
     """Return whether *path* is a canonical connector resource path."""
     return parse_connector_path(path) is not None
@@ -124,7 +144,9 @@ def _suppress_wire_bodies(raw: bytes | None) -> bool:
         return True
     try:
         value = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        # 16.1.3: a body nested past the parser's recursion limit is a parse
+        # error like any other unparseable body (bodies suppressed).
         return True
     from .books.schemas import ALL_ADDITIVE_TOOL_NAMES
 
@@ -870,8 +892,10 @@ def create_gateway_app(
         }
 
     def _jsonrpc_error(msg_id, message: str, code: int = -32602) -> JSONResponse:
-        return JSONResponse({"jsonrpc": "2.0", "id": msg_id,
-                             "error": {"code": code, "message": message}})
+        # 16.1.3: NO_ID (parse error, an invalid request with no usable id)
+        # omits the `id` member; the MCP schema never allows "id": null. A
+        # request's own id, null included, is echoed exactly as before.
+        return JSONResponse(error_body(msg_id, code, message))
 
     def _tool_result(msg_id, payload: dict, tool_name: str | None = None) -> JSONResponse:
         if tool_name is None:
@@ -1265,11 +1289,19 @@ def create_gateway_app(
             oauth_possible = False
             generic_challenge = 'Bearer realm="Cognita-Workspace"'
 
-        def generic_rejection() -> Response:
+        def generic_rejection(token_presented: bool = True) -> Response:
+            # 16.1.3 (B4, RFC 6750): a bearer token that was presented and is
+            # invalid or expired gets error="invalid_token" on the challenge.
+            # A request with no usable credential (missing, or an Authorization
+            # header that is not a single well-formed Bearer token) keeps
+            # today's challenge unchanged. Status and body never change.
             return Response(
                 status_code=401,
                 content="Invalid or expired credential",
-                headers={"WWW-Authenticate": generic_challenge},
+                headers={"WWW-Authenticate": (
+                    _with_invalid_token(generic_challenge) if token_presented
+                    else generic_challenge
+                )},
             )
 
         if category:
@@ -1282,7 +1314,7 @@ def create_gateway_app(
             ):
                 return Response(status_code=503, content="OAuth service unavailable")
             if auth_policy is not None:
-                return generic_rejection()
+                return generic_rejection(token_presented=False)
             return Response(status_code=401, content="Authorization required",
                             headers={"WWW-Authenticate": generic_challenge})
         assert header_token is not None
@@ -1423,6 +1455,8 @@ def create_gateway_app(
                 if (not introspection.active or OAUTH_SCOPE not in introspection.scopes
                         or introspection.audiences != (resource,)):
                     log_mcp_rejection(connector_slug, "invalid_token", request)
+                    # 16.1.3: this pre-policy branch already named the error
+                    # (first); the other 401s now do too, via _with_invalid_token.
                     return Response(status_code=401, content="Invalid or expired token",
                                     headers={"WWW-Authenticate": challenge.replace(
                                         "Bearer ", 'Bearer error="invalid_token", ', 1)})
@@ -1931,24 +1965,45 @@ def create_gateway_app(
 
     def _describe_mcp_body(raw: bytes) -> tuple[str, str, str]:
         """(methods, ids, batch) of a JSON-RPC request body. Never the params."""
+        # 16.1.3: this runs AFTER the reply is built, so an exception here is a
+        # 500 for a request the handler already answered. An invalid-UTF-8 body
+        # and a deeply nested one are parse errors (-32700), described as
+        # "unparsed" like any other unparseable body; rendering a deeply nested
+        # method or id with str() can also exhaust the recursion limit.
         try:
-            body = json.loads(raw) if raw else None
-        except ValueError:
+            body = parse_body(raw) if raw else None
+            if body is None:
+                return "-", "-", "-"
+            messages = body if isinstance(body, list) else [body]
+            methods: list[str] = []
+            ids: list[str] = []
+            for item in messages:
+                if not isinstance(item, dict):
+                    methods.append("invalid")
+                    ids.append("-")
+                    continue
+                methods.append(str(item.get("method")))
+                ids.append(_describe_id(item.get("id")))
+        except (BodyParseError, RecursionError) as exc:
+            log.debug("mcp body not described cause=%s bytes=%d",
+                      getattr(exc, "cause", type(exc).__name__), len(raw))
             return "unparsed", "-", "-"
-        if body is None:
-            return "-", "-", "-"
-        messages = body if isinstance(body, list) else [body]
-        methods: list[str] = []
-        ids: list[str] = []
-        for item in messages:
-            if not isinstance(item, dict):
-                methods.append("invalid")
-                ids.append("-")
-                continue
-            methods.append(str(item.get("method")))
-            ids.append(_describe_id(item.get("id")))
         batch = str(len(messages)) if isinstance(body, list) else "no"
         return ",".join(methods) or "-", ",".join(ids) or "-", batch
+
+    def _note_unexecuted(connector_slug: str, kind: MessageKind, member: int | None = None) -> None:
+        """16.1.3: say why a message was not executed. Never params or content.
+
+        A `notifications/*` message is the routine case and is not logged (the
+        exchange line already shows it). An invalid request (including a
+        non-finite id) and a client response are not executed either; those
+        are the decisions worth a line (kind, method, reason, member).
+        """
+        if kind.kind == NOTIFICATION and (kind.method or "").startswith("notifications/"):
+            return
+        log.info("mcp message not executed connector=%s kind=%s method=%s reason=%s member=%s",
+                 connector_slug, kind.kind, " ".join((kind.method or "-").split())[:60],
+                 kind.reason or "-", "-" if member is None else member)
 
     def _header(request: Request, name: str, limit: int = 120) -> str:
         value = request.headers.get(name)
@@ -2257,19 +2312,23 @@ def create_gateway_app(
                               connector_id: str, messages: list,
                               contract_version: int) -> Response:
         if not messages:
-            return _jsonrpc_error(None, "Invalid request: empty batch", code=-32600)
+            return _jsonrpc_error(NO_ID, "Invalid request: empty batch", code=-32600)
         replies = []
-        for message in messages:
-            if not isinstance(message, dict):
-                replies.append({"jsonrpc": "2.0", "id": None,
-                                "error": {"code": -32600, "message": "Invalid request"}})
+        for index, message in enumerate(messages):
+            # 16.1.3: each member is classified by shape (mcp_protocol), the
+            # same routine the single-message path and the Workspace route use.
+            # notifications/* and client responses add no reply; an invalid
+            # request is answered -32600 with no id member unless it has a
+            # valid id to echo. Every other string-method member is a request,
+            # whatever its id (see classify_message).
+            kind = classify_message(message)
+            if kind.kind != REQUEST:
+                _note_unexecuted(connector_id, kind, index)
+                if kind.kind == INVALID:
+                    replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
                 continue
-            method = message.get("method")
-            if not isinstance(method, str):
-                replies.append({"jsonrpc": "2.0", "id": message.get("id"),
-                                "error": {"code": -32600, "message": "Invalid request"}})
-                continue
-            if isinstance(method, str) and method.startswith("notifications/"):
+            method = kind.method
+            if method.startswith("notifications/"):
                 continue
             if method == "tools/call":
                 response = await _logged_call(
@@ -2306,14 +2365,22 @@ def create_gateway_app(
                  str(params.get("protocolVersion", "-"))[:40],
                  ",".join(sorted(str(k) for k in capabilities)) or "-"
                  if isinstance(capabilities, dict) else "-")
+        # 16.1.3: answer with the requested version only if this server speaks
+        # it, else the newest it does (spec, Version Negotiation); before, any
+        # string was echoed back. An absent version still gets 2025-03-26.
+        granted = negotiate_protocol_version(params)
+        if "protocolVersion" in params and params["protocolVersion"] != granted:
+            log.info("mcp version negotiated requested=%s granted=%s",
+                     " ".join(str(params["protocolVersion"]).split())[:40], granted)
         return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": {
-            "protocolVersion": params.get("protocolVersion") or "2025-03-26",
+            "protocolVersion": granted,
             "capabilities": {"tools": {}},
             "serverInfo": _connector_server_info(),
         }})
 
     async def _handle_connector_mcp(
-        request: Request, connector_slug: str, version_segment: str
+        request: Request, connector_slug: str, version_segment: str,
+        workspace_path: str | None = None,
     ) -> Response:
         """One log line per HTTP exchange on the connector MCP route (13.2.4).
 
@@ -2325,10 +2392,20 @@ def create_gateway_app(
         the user agent) and what went out (HTTP status, media type, bytes,
         time). Never the token, the arguments or the content. The tools/call
         line from `_logged_call` sits between the two halves of this one.
+
+        16.1.3 (B5): the Workspace-only route is served through this same
+        function (`workspace_path` set; `connector=` then carries the Workspace
+        slug), so both routes log the same fields with the same redaction. It
+        had no exchange line before. The wire capture below stays
+        connector-only: its body suppression only knows the combined tools, and
+        a Workspace body carries file content.
         """
         started = time.monotonic()
         try:
-            response = await _serve_connector_mcp(request, connector_slug, version_segment)
+            if workspace_path is not None:
+                response = await _serve_workspace_mcp(request, connector_slug, workspace_path)
+            else:
+                response = await _serve_connector_mcp(request, connector_slug, version_segment)
         except Exception:
             log.exception("mcp exchange raised connector=%s route=%s elapsed_ms=%d",
                           connector_slug, version_segment,
@@ -2349,11 +2426,17 @@ def create_gateway_app(
                  connector_slug, version_segment, request.method, methods, ids, batch,
                  len(raw) if raw is not None else "unknown",
                  _header(request, "accept"), _header(request, "content-type"),
+                 # 16.1.3: read for this log line ONLY. The MCP-Protocol-Version
+                 # header is never validated or rejected: clients that probe
+                 # with `server/discover` and `MCP-Protocol-Version: 2026-07-28`,
+                 # take the -32601 answer and then `initialize`, work today and
+                 # must keep working (Streamable HTTP says a server MUST answer
+                 # an unsupported version 400; that is deliberately not done).
                  _header(request, "mcp-protocol-version"),
                  "present" if request.headers.get("mcp-session-id") else "absent",
                  _header(request, "user-agent", 80), response.status_code,
                  response.headers.get("content-type", "-"), size, elapsed_ms)
-        if config.mcp_wire_capture:
+        if config.mcp_wire_capture and workspace_path is None:
             _capture_wire(request, connector_slug, version_segment, raw, ids, response, body, elapsed_ms)
         return response
 
@@ -2467,7 +2550,9 @@ def create_gateway_app(
                 return Response(
                     status_code=401,
                     content="Invalid or expired credential",
-                    headers={"WWW-Authenticate": 'Bearer realm="Cognita"'},
+                    # 16.1.3 (B4): a credential was presented and the answer
+                    # says it is invalid or expired, so the challenge names it.
+                    headers={"WWW-Authenticate": _with_invalid_token('Bearer realm="Cognita"')},
                 )
             return PlainTextResponse("Connector unavailable", status_code=404)
         # Trusted connector identity for downstream asset/replay seams. This
@@ -2504,23 +2589,36 @@ def create_gateway_app(
                     )
         if request.method != "POST":
             return Response(status_code=405, headers={"Allow": "POST"})
+        raw_body = await request.body()
+        request.state.cognita_mcp_body = raw_body
+        request.state.cognita_body_bytes = len(raw_body)
         try:
-            raw_body = await request.body()
-            request.state.cognita_mcp_body = raw_body
-            request.state.cognita_body_bytes = len(raw_body)
-            body = json.loads(raw_body)
-        except json.JSONDecodeError:
-            return _jsonrpc_error(None, "Parse error", code=-32700)
+            body = parse_body(raw_body)
+        except BodyParseError as exc:
+            # 16.1.3: invalid UTF-8 and over-deep nesting are parse errors too
+            # (they used to escape as HTTP 500). The reply carries no id member.
+            log.info("mcp parse error connector=%s cause=%s bytes=%d",
+                     connector_slug, exc.cause, len(raw_body))
+            return _jsonrpc_error(NO_ID, "Parse error", code=-32700)
         if isinstance(body, list):
             return await _dispatch_batch(
                 request, snapshot, canonical, body, contract_version
             )
-        if not isinstance(body, dict):
-            return _jsonrpc_error(None, "Invalid request", code=-32600)
-        method = body.get("method")
-        if not isinstance(method, str):
-            return _jsonrpc_error(body.get("id"), "Invalid request", code=-32600)
-        if isinstance(method, str) and method.startswith("notifications/"):
+        # 16.1.3: the kind is decided by shape (mcp_protocol.classify_message),
+        # the same routine as batch members and the Workspace route. A
+        # notifications/* message is answered 202 with no body whatever its id;
+        # a client's own response (result / error, no method) is accepted the
+        # same way. Any other string method is a request, as before.
+        kind = classify_message(body)
+        if kind.kind != REQUEST:
+            _note_unexecuted(connector_slug, kind)
+            if kind.kind == INVALID:
+                return _jsonrpc_error(kind.reply_id, "Invalid request", code=-32600)
+            return Response(status_code=202)
+        method = kind.method
+        if method.startswith("notifications/"):
+            # classify_message already made every notifications/* message a
+            # notification (202, whatever its id); kept as a backstop.
             return Response(status_code=202)
         if method == "initialize":
             return _initialize_response(body.get("id"), body.get("params"))
@@ -2619,6 +2717,16 @@ def create_gateway_app(
         return _tool_result(msg_id, payload, tool)
 
     async def _handle_workspace_mcp(request: Request, workspace_slug: str, path: str) -> Response:
+        # 16.1.3 (B5): the Workspace-only route logs one line per exchange, the
+        # same line the connector route logs, through the same function.
+        # `route=` is the version segment of the path, or "stable".
+        segment = path.rsplit("/", 1)[-1]
+        return await _handle_connector_mcp(
+            request, workspace_slug, segment if segment != "mcp" else "stable",
+            workspace_path=path,
+        )
+
+    async def _serve_workspace_mcp(request: Request, workspace_slug: str, path: str) -> Response:
         if request.url.query:
             return PlainTextResponse("Not Found", status_code=404)
         route = parse_route_path(path)
@@ -2648,19 +2756,37 @@ def create_gateway_app(
         request.state.cognita_workspace_connector_slug = route.slug
         if request.method != "POST":
             return Response(status_code=405, headers={"Allow": "POST"})
+        raw_body = await request.body()
+        # 16.1.3 (B5): recorded for the per-exchange log line, as on the
+        # connector route.
+        request.state.cognita_mcp_body = raw_body
         try:
-            body = json.loads(await request.body())
-        except json.JSONDecodeError:
-            return _jsonrpc_error(None, "Parse error", code=-32700)
+            body = parse_body(raw_body)
+        except BodyParseError as exc:
+            # 16.1.3: invalid UTF-8 and over-deep nesting are parse errors too
+            # (they used to escape as HTTP 500). The reply carries no id member.
+            log.info("mcp parse error connector=%s cause=%s bytes=%d",
+                     workspace_slug, exc.cause, len(raw_body))
+            return _jsonrpc_error(NO_ID, "Parse error", code=-32700)
         if isinstance(body, list):
+            if not body:
+                # 16.1.3: an empty batch is an invalid request here as on the
+                # connector route (JSON-RPC 2.0); it used to fall through to 202.
+                return _jsonrpc_error(NO_ID, "Invalid request: empty batch", code=-32600)
             replies = []
-            for message in body:
-                if not isinstance(message, dict):
-                    replies.append({"jsonrpc": "2.0", "id": None,
-                                    "error": {"code": -32600, "message": "Invalid request"}})
+            for index, message in enumerate(body):
+                # 16.1.3: same shape-based classification as the connector
+                # route (mcp_protocol.classify_message). A request member
+                # without a usable id is still executed and its reply dropped,
+                # as before.
+                kind = classify_message(message)
+                if kind.kind != REQUEST:
+                    _note_unexecuted(workspace_slug, kind, index)
+                    if kind.kind == INVALID:
+                        replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
                     continue
-                method = message.get("method")
-                if isinstance(method, str) and method.startswith("notifications/"):
+                method = kind.method
+                if method.startswith("notifications/"):
                     continue
                 if method == "initialize":
                     response = _initialize_response(message.get("id"), message.get("params"))
@@ -2684,11 +2810,15 @@ def create_gateway_app(
                 if payload is not None and message.get("id") is not None:
                     replies.append(payload)
             return Response(status_code=202) if not replies else JSONResponse(replies)
-        if not isinstance(body, dict):
-            return _jsonrpc_error(None, "Invalid request", code=-32600)
-        method = body.get("method")
-        if not isinstance(method, str):
-            return _jsonrpc_error(body.get("id"), "Invalid request", code=-32600)
+        # 16.1.3: single messages are classified by the same routine as batch
+        # members and as the connector route (see _serve_connector_mcp).
+        kind = classify_message(body)
+        if kind.kind != REQUEST:
+            _note_unexecuted(workspace_slug, kind)
+            if kind.kind == INVALID:
+                return _jsonrpc_error(kind.reply_id, "Invalid request", code=-32600)
+            return Response(status_code=202)
+        method = kind.method
         if method.startswith("notifications/"):
             return Response(status_code=202)
         if method == "initialize":
