@@ -545,6 +545,58 @@ async def test_self_test_argument_error_is_built_for_the_tool(tmp_path):
                     message="section must be a string when supplied")
 
 
+async def _post_raw(env, raw: bytes):
+    """A request body sent verbatim (httpx's json= refuses a lone surrogate)."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=env.app), base_url="http://fixture",
+    ) as client:
+        response = await client.post(
+            env.path, content=raw,
+            headers={"Authorization": f"Bearer {env.token}", "Content-Type": "application/json"},
+        )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+@pytest.mark.asyncio
+async def test_self_test_unknown_argument_is_named_as_an_unknown_argument(tmp_path):
+    env = _build(tmp_path)
+    schemas = await _schemas(env)
+    for arguments in ({"project": "RW", "bogus": 1}, {"project": "RW", "section": "index", "bogus": 1},
+                      {"project": "RW", "section": 5, "bogus": 1}):
+        reply = await _call(env, "get_self_test_plan", arguments)
+        structured = _assert_refusal(reply, schemas["get_self_test_plan"], "get_self_test_plan",
+                                     reason="unknown_argument")
+        assert "'bogus'" in structured["message"]
+        assert "section must be a string" not in structured["message"]
+        assert "NOTHING was executed" in structured["message"]
+        assert "Accepted arguments: project, section." in structured["message"]
+    # The "section must be a string" message is still what a non-string section gets.
+    reply = await _call(env, "get_self_test_plan", {"project": "RW", "section": ["index"]})
+    _assert_refusal(reply, schemas["get_self_test_plan"], "get_self_test_plan", reason="invalid",
+                    message="section must be a string when supplied")
+    # A valid call is unchanged.
+    ok = await _call(env, "get_self_test_plan", {"project": "RW", "section": "index"})
+    assert ok["result"]["isError"] is False and ok["result"]["structuredContent"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_self_test_unknown_argument_names_are_sanitized_and_bounded(tmp_path):
+    env = _build(tmp_path)
+    schemas = await _schemas(env)
+    evil = "a\\nINFO forged \\u001b[31m" + "Z" * 200
+    raw = ('{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_self_test_plan",'
+           '"arguments":{"project":"RW","%s":1,"b-lone\\ud800":2,"k1":1,"k2":1,"k3":1,"k4":1,"k5":1}}}' % evil)
+    reply = await _post_raw(env, raw.encode("ascii"))
+    structured = _assert_refusal(reply, schemas["get_self_test_plan"], "get_self_test_plan",
+                                 reason="unknown_argument")
+    message = structured["message"]
+    assert "\n" not in message and "\x1b" not in message and "\ud800" not in message
+    assert "'a INFO forged ?[31m" in message and "Z" * 41 not in message  # one line, 40 characters
+    assert "'b-lone?'" in message and "(and 2 more)" in message  # at most five names
+    assert len(message) < 400
+
+
 @pytest.mark.asyncio
 async def test_the_batch_contract_still_builds_and_stays_within_its_size_limit():
     from cognita.result_contracts import OUTPUT_SCHEMAS_BY_TOOL
@@ -606,6 +658,21 @@ async def test_workspace_only_self_test_results_are_validated(tmp_path):
             assert result["content"][0]["text"] == json.dumps(
                 result["structuredContent"], ensure_ascii=False, separators=(",", ":"))
         assert reply["result"]["structuredContent"]["reason"] == "invalid"
+        # 16.1.3: an argument the tool does not take is named as such, not
+        # answered with the section message; still a valid, isError result.
+        for request_id, arguments in ((8, {"bogus": 1}), (9, {"section": "W2", "extra\nline": 1}),
+                                      (10, {"section": 5, "bogus": 1})):
+            reply = (await client.post(path, json=_tools_call(
+                "workspace_generate_self_test", arguments, request_id), headers=headers)).json()
+            result = reply["result"]
+            Draft202012Validator(schema).validate(result["structuredContent"])
+            assert result["isError"] is True
+            assert result["structuredContent"]["reason"] == "unknown_argument", result
+            message = result["structuredContent"]["message"]
+            assert "section must be a string" not in message and "\n" not in message
+            assert "workspace_generate_self_test does not accept " in message
+            assert "Accepted arguments: section." in message
+            assert {8: "'bogus'", 9: "'extra line'", 10: "'bogus'"}[request_id] in message
 
 
 # ---------------------------------------------------------------- step R2 of the plan (A5)

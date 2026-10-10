@@ -24,6 +24,7 @@ import re
 from typing import NamedTuple
 
 from . import __version__
+from .mcp_protocol import log_safe
 from .release_identity import COMBINED_CONTRACT_VERSION
 from .result_contracts import PUBLIC_TOOL_NAMES
 from .workspace_selftest import KNOWLEDGE_BRIDGE_PREFIXES, WORKSPACE_TOOL_NAMES
@@ -1700,7 +1701,8 @@ def select_self_test_plan(version: str, readonly: bool, section: str | None = No
         return {**common, "section": "index", "sections": catalog}
     item = metadata.get(section)
     if item is None:
-        log.info("selftest.section unknown section=%s mode=%s", section,
+        # 16.1.3: the section is client text (log_safe: one line, printable, bounded).
+        log.info("selftest.section unknown section=%s mode=%s", log_safe(section),
                  "readonly" if readonly else "writable")
         return {"status": "error", "reason": "unknown_section", "section": section,
                 "message": f"Unknown self-test section: {section}",

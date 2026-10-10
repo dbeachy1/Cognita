@@ -62,8 +62,10 @@ from .mcp_protocol import (
     BodyParseError,
     classify_message,
     error_body,
+    log_safe,
     negotiate_protocol_version,
     parse_body,
+    unencodable_text_reply,
 )
 from .result_contracts import attach_output_schema as attach_output_schema, build_tool_result
 from .backups import (
@@ -556,8 +558,7 @@ class LocalEngineHost(
     def _build_app(self) -> FastAPI:
         app = FastAPI(docs_url=None, redoc_url=None)
 
-        @app.post("/engine/{name}/mcp")
-        async def mcp(name: str, request: Request) -> Response:
+        async def serve_mcp(name: str, request: Request) -> Response:
             project = self.registry.get(name)
             if project is None or not project.enabled:
                 return Response(status_code=404, content=f"Unknown project {name!r}")
@@ -584,8 +585,6 @@ class LocalEngineHost(
                 return Response(status_code=202)
             method = kind.method
             msg_id = message.get("id")
-            if method.startswith("notifications/"):
-                return Response(status_code=202)
             if method == "initialize":
                 params = message.get("params") or {}
                 return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": {
@@ -651,6 +650,20 @@ class LocalEngineHost(
                 return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": result})
             return JSONResponse({"jsonrpc": "2.0", "id": msg_id,
                                  "error": {"code": -32601, "message": f"Method not found: {method}"}})
+
+        @app.post("/engine/{name}/mcp")
+        async def mcp(name: str, request: Request) -> Response:
+            try:
+                return await serve_mcp(name, request)
+            except UnicodeEncodeError:
+                # 16.1.3: a reply that cannot be encoded as UTF-8 (the request
+                # carried a lone surrogate, e.g. a JSON "\ud800" escape in an
+                # id, method or tool name) was an HTTP 500. Same JSON-RPC
+                # error, same shape, as the gateway's shared handler. Only the
+                # kind is logged, never the offending text.
+                log.info("engine request refused kind=unicode_encode_error project=%s",
+                         log_safe(name, 80))
+                return JSONResponse(unencodable_text_reply())
 
         @app.api_route("/engine/{name}/mcp", methods=["GET", "DELETE"])
         async def mcp_no_session(name: str) -> Response:

@@ -31,17 +31,21 @@ from cognita.gateway import create_gateway_app
 from cognita.mcp_protocol import (
     INVALID,
     LATEST_PROTOCOL_VERSION,
+    LEGACY_ECHOED_PROTOCOL_VERSIONS,
     NO_ID,
     NOTIFICATION,
     REQUEST,
     RESPONSE,
     SUPPORTED_PROTOCOL_VERSIONS,
+    UNENCODABLE_TEXT_MESSAGE,
     classify_message,
     error_body,
+    id_encodes_as_json,
+    log_safe,
     negotiate_protocol_version,
 )
 from cognita.oauth_service_client import IntrospectionResult
-from cognita.proxy import _handle_batch
+from cognita.proxy import _handle_batch, proxy_mcp
 from cognita.registry import Project, Registry
 from cognita.retrieval import RetrievalCore
 from cognita.store import Store
@@ -787,3 +791,433 @@ def test_modules_agree_on_the_supported_versions_literal():
         and "protocolVersion" in path.read_text(encoding="utf-8")
     ]
     assert offenders == [], offenders
+
+
+# =============================================================================
+# Review fixes (16.1.3): the two oldest revisions, log lines that cannot be
+# forged, and no HTTP 500 for text that cannot be encoded.
+# =============================================================================
+
+# A JSON escape for a lone surrogate, as the text of a request body. json.loads
+# accepts it; the response encoder refuses it.
+SURROGATE = "\\ud800"
+
+
+def _raw(template: str) -> bytes:
+    """A request body from a template in which `@S` is the surrogate escape."""
+    return template.replace("@S", SURROGATE).encode("utf-8")
+
+
+def _gateway_records(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name.startswith("cognita")]
+
+
+# ------------------------------------------------ Fix 1: the two oldest revisions
+
+
+def test_the_two_oldest_revisions_are_a_separate_tuple_and_not_supported_ones():
+    assert LEGACY_ECHOED_PROTOCOL_VERSIONS == ("2024-11-05", "2024-10-07")
+    assert set(LEGACY_ECHOED_PROTOCOL_VERSIONS).isdisjoint(SUPPORTED_PROTOCOL_VERSIONS)
+    assert SUPPORTED_PROTOCOL_VERSIONS == ("2025-11-25", "2025-06-18", "2025-03-26")
+    assert LATEST_PROTOCOL_VERSION == "2025-11-25"
+    for version in LEGACY_ECHOED_PROTOCOL_VERSIONS:
+        assert negotiate_protocol_version({"protocolVersion": version}) == version
+    # Anything else that is not supported is still answered with the newest.
+    for other in ("2024-11-06", "2024-10-08", "2023-01-01", " 2024-11-05", "2024-11-05 ", 20241105):
+        assert negotiate_protocol_version({"protocolVersion": other}) == "2025-11-25"
+
+
+@pytest.mark.parametrize("version", LEGACY_ECHOED_PROTOCOL_VERSIONS)
+async def test_the_two_oldest_revisions_are_answered_as_requested(surface, version, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    r = await surface.post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                            "params": {"protocolVersion": version}})
+    assert r.status_code == 200
+    assert r.json()["result"]["protocolVersion"] == version
+    batch = await surface.post([
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": version}},
+        {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "2026-07-28"}},
+    ])
+    assert [item["result"]["protocolVersion"] for item in batch.json()] == [version, "2025-11-25"]
+    # Echoed, so there is nothing to log as a downgrade for the legacy ones.
+    assert not any(m.startswith("mcp version negotiated requested=" + version)
+                   for m in _gateway_records(caplog))
+
+
+@pytest.mark.parametrize("version", LEGACY_ECHOED_PROTOCOL_VERSIONS)
+async def test_engine_echoes_the_two_oldest_revisions(engine_host, version):
+    r = await _engine_post(engine_host, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                         "params": {"protocolVersion": version}})
+    assert r.json()["result"]["protocolVersion"] == version
+    r = await _engine_post(engine_host, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                         "params": {"protocolVersion": "2024-11-06"}})
+    assert r.json()["result"]["protocolVersion"] == "2025-11-25"
+
+
+# ------------------------------------------- Fix 2: log lines cannot be forged
+
+
+def test_log_safe_table():
+    assert log_safe("ping") == "ping"
+    assert log_safe("a\nb\r\nc\td") == "a b c d"
+    assert log_safe("  lead and   trail  ") == "lead and trail"
+    # Other control characters, not only newlines, are neutralized.
+    assert log_safe("a\x00b\x1b[31mc\x7fd") == "a?b?[31mc?d"
+    assert log_safe("a b\u0085c") == "a b c"  # unicode line separators are whitespace
+    assert log_safe("x\ud800y") == "x?y"              # a lone surrogate
+    assert log_safe("a​b") == "a?b"              # a format (zero width) character
+    assert log_safe("café \U0001F600") == "café \U0001F600"  # printable text is kept
+    # Bounded.
+    assert log_safe("A" * 500) == "A" * 60
+    assert log_safe("A" * 500, 7) == "A" * 7
+    assert len(log_safe("x\n" * 10_000, 60)) <= 60
+    # Scalars by value; containers by type, never by content.
+    assert (log_safe(None), log_safe(True), log_safe(5), log_safe(1.5)) == ("None", "True", "5", "1.5")
+    assert log_safe({"content": "SECRET"}) == "<dict>"
+    assert log_safe(["SECRET"]) == "<list>"
+    assert log_safe("") == ""
+
+
+@pytest.mark.parametrize("where", ["slug", "version", "slug_without_credential"])
+async def test_a_newline_in_the_url_cannot_forge_a_log_line(surface, caplog, where):
+    caplog.set_level(logging.INFO, logger="cognita")
+    forged = "x%0A2026-10-10%20INFO%20forged"
+    if where == "version":
+        surface.url = surface.url + "%0A2026-10-10%20INFO%20forged"
+    elif surface.name == "connector":
+        surface.url = f"/mcp/connectors/{forged}/mcp/v{PUBLIC_CONTRACT_VERSION}"
+    else:
+        surface.url = f"/mcp/workspace/{forged}/mcp/v3"
+    r = await surface.post(PING, token=None if where == "slug_without_credential" else "")
+    assert r.status_code in (401, 404)
+    messages = _gateway_records(caplog)
+    # One record for the exchange, and no record of any kind holds a newline.
+    assert len([m for m in messages if m.startswith("mcp exchange ")]) == 1, messages
+    assert len(messages) == 1, messages
+    assert all("\n" not in m and "\r" not in m for m in messages), messages
+    assert not any(m.startswith(("2026", "INFO")) for m in messages)
+    assert " 2026-10-10 INFO forged" in messages[0]  # still says what was asked, on one line
+
+
+async def test_a_long_url_segment_is_bounded_in_the_exchange_line(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    surface.url = surface.url + "A" * 5000
+    await surface.post(PING)
+    [exchange] = [m for m in _gateway_records(caplog) if m.startswith("mcp exchange ")]
+    assert len(exchange) < 1500 and "A" * 100 not in exchange
+
+
+def _field(line: str, name: str, following: str) -> str:
+    start = line.index(f" {name}=") + len(name) + 2
+    return line[start:line.index(f" {following}=", start)]
+
+
+async def test_a_method_name_is_one_bounded_printable_line_in_every_log_line(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    evil = "evil\nINFO forged line \x1b[31m" + "A" * 300
+    r = await surface.post({"jsonrpc": "2.0", "id": 1, "method": evil})
+    assert r.status_code == 200 and r.json()["error"]["code"] == -32601
+    messages = _gateway_records(caplog)
+    assert all("\n" not in m and "\x1b" not in m for m in messages), messages
+    [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
+    method = _field(exchange, "methods", "ids")
+    assert method.startswith("evil INFO forged line ?[31mAAAA") and len(method) == 60, method
+    # The same holds in a batch, one bounded name per member.
+    caplog.clear()
+    await surface.post([{"jsonrpc": "2.0", "id": 1, "method": evil},
+                        {"jsonrpc": "2.0", "id": 2, "method": evil + "2"}])
+    [exchange] = [m for m in _gateway_records(caplog) if m.startswith("mcp exchange ")]
+    names = _field(exchange, "methods", "ids").split(",")
+    assert len(names) == 2 and all(len(name) == 60 for name in names), names
+
+
+@pytest.mark.parametrize("method", [
+    {"content": "SECRET-DOCUMENT-TEXT"}, ["SECRET-DOCUMENT-TEXT"], 12345, True, None, 1.5,
+])
+async def test_a_non_string_method_is_logged_as_invalid_and_never_by_content(surface, caplog, method):
+    caplog.set_level(logging.INFO, logger="cognita")
+    r = await surface.post({"jsonrpc": "2.0", "id": 1, "method": method})
+    assert r.status_code == 200 and r.json()["error"]["code"] == -32600
+    messages = _gateway_records(caplog)
+    [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
+    assert _field(exchange, "methods", "ids") == "invalid"
+    assert "SECRET-DOCUMENT-TEXT" not in caplog.text and "12345" not in " ".join(messages)
+    # The same in a batch, next to a good member.
+    caplog.clear()
+    await surface.post([PING, {"jsonrpc": "2.0", "id": 2, "method": method}])
+    [exchange] = [m for m in _gateway_records(caplog) if m.startswith("mcp exchange ")]
+    assert _field(exchange, "methods", "ids") == "ping,invalid"
+    assert "SECRET-DOCUMENT-TEXT" not in caplog.text
+
+
+async def test_a_message_without_a_method_member_keeps_its_old_methods_text(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    await surface.post({"jsonrpc": "2.0", "id": 1, "result": {}})
+    [exchange] = [m for m in _gateway_records(caplog) if m.startswith("mcp exchange ")]
+    assert _field(exchange, "methods", "ids") == "None"
+
+
+async def test_ids_are_one_line_and_a_container_id_shows_its_type_only(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    for msg_id in ("a\nINFO forged", ["SECRET-DOCUMENT-TEXT"], {"k": "SECRET-DOCUMENT-TEXT"}):
+        caplog.clear()
+        r = await surface.post({"jsonrpc": "2.0", "id": msg_id, "method": "ping"})
+        assert r.status_code == 200 and r.json()["id"] == msg_id  # still echoed exactly
+        messages = _gateway_records(caplog)
+        assert all("\n" not in m for m in messages) and "SECRET-DOCUMENT-TEXT" not in caplog.text
+    [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
+    assert _field(exchange, "ids", "batch") == "dict:<dict>"
+
+
+async def test_the_message_not_executed_line_logs_a_bounded_one_line_method(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    evil = "evil\nINFO forged " + "B" * 300
+    raw = ('{"jsonrpc":"2.0","id":NaN,"method":%s}' % json.dumps(evil)).encode()
+    r = await surface.post(raw)
+    assert r.status_code == 200 and r.json()["error"]["code"] == -32600
+    messages = _gateway_records(caplog)
+    [line] = [m for m in messages if m.startswith("mcp message not executed ")]
+    assert "\n" not in line and "kind=invalid method=evil INFO forged BBBB" in line
+    assert "B" * 61 not in line and "reason=non_finite_id" in line
+    assert all("\n" not in m for m in messages)
+
+
+async def test_initialize_log_lines_collapse_and_bound_client_text(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    r = await surface.post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "bogus\nINFO forged " + "V" * 200,
+        "clientInfo": {"name": "Evil\nINFO forged\x1b[0m " + "N" * 200, "version": "1.0\r\nINFO forged2"},
+        "capabilities": {"roots\nINFO forged3": {}, "sampling": {}},
+    }})
+    assert r.status_code == 200
+    messages = _gateway_records(caplog)
+    assert all("\n" not in m and "\r" not in m and "\x1b" not in m for m in messages), messages
+    [init] = [m for m in messages if m.startswith("mcp initialize ")]
+    assert "client=Evil INFO forged?[0m NNN" in init and "client_version=1.0 INFO forged2" in init
+    assert "protocol=bogus INFO forged VVV" in init and "capabilities=roots INFO forged3,sampling" in init
+    [negotiated] = [m for m in messages if m.startswith("mcp version negotiated ")]
+    assert negotiated.startswith("mcp version negotiated requested=bogus INFO forged VVV")
+    assert negotiated.endswith(" granted=2025-11-25") and len(negotiated) < 120
+
+
+async def test_initialize_log_never_prints_the_content_of_a_non_string_client_field(surface, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    await surface.post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": {"content": "SECRET-DOCUMENT-TEXT"},
+        "clientInfo": {"name": ["SECRET-DOCUMENT-TEXT"], "version": {"v": "SECRET-DOCUMENT-TEXT"}},
+    }})
+    assert "SECRET-DOCUMENT-TEXT" not in caplog.text
+    [init] = [m for m in _gateway_records(caplog) if m.startswith("mcp initialize ")]
+    assert "client=<list> client_version=<dict> protocol=<dict>" in init
+
+
+async def test_tool_name_and_argument_names_cannot_forge_the_tool_call_line(tmp_path, caplog):
+    made = _connector_surface(tmp_path)
+    try:
+        caplog.set_level(logging.INFO, logger="cognita")
+        await made.post({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "no_such\nINFO forged", "arguments": {"a\nINFO forged2": 1, "project": "RW\nINFO forged3"}}})
+        await made.post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "get_self_test_plan\nINFO forged4",
+            "arguments": {"project": "RW", "section": "x\nINFO forged5"}}})
+        await made.post({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+            "name": "get_document", "arguments": {"project": "Nope\nINFO forged6", "filepath": "a.md"}}})
+        messages = _gateway_records(caplog)
+        assert messages and all("\n" not in m for m in messages), [m for m in messages if "\n" in m]
+        assert any(m.startswith("tool call ") and "tool=no_such INFO forged " in m for m in messages)
+    finally:
+        logging.getLogger("cognita.gateway").removeHandler(made.counter)
+
+
+# ------------------------------------- Fix 3: no HTTP 500 for what cannot be encoded
+
+
+@pytest.mark.parametrize("value,encodes", [
+    (None, True), (True, True), (0, True), (10**30, True), ("", True), ("é😀", True), (1.5, True),
+    ([1, "a", None, {"k": [2.5]}], True), ({"é": 1}, True), ([], True), ({}, True),
+    (float("nan"), False), (float("inf"), False), ([float("nan")], False),
+    ({"a": [{"b": float("-inf")}]}, False), ("\ud800", False), (["\ud800"], False), ({"\ud800": 1}, False),
+])
+def test_id_encodes_as_json_table(value, encodes):
+    assert id_encodes_as_json(value) is encodes
+
+
+def test_classify_message_refuses_exactly_the_ids_that_cannot_be_encoded():
+    for bad in ([float("nan")], [float("inf")], {"a": float("-inf")}, [[1, [float("nan")]]],
+                "\ud800", ["\ud800"], {"\ud800": 1}):
+        verdict = classify_message({"jsonrpc": "2.0", "id": bad, "method": "ping"})
+        assert verdict.kind == INVALID and verdict.reply_id is NO_ID
+        assert verdict.reason == "id_not_encodable" and verdict.method == "ping"
+        # An invalid message without a method never echoes such an id either.
+        assert classify_message({"id": bad}).reply_id is NO_ID
+        assert classify_message({"id": bad, "method": 5}).reply_id is NO_ID
+    # The top-level non-finite float keeps its own reason.
+    assert classify_message({"id": float("nan"), "method": "ping"}).reason == "non_finite_id"
+    # Every id that encodes is still a request echoing the id as sent.
+    for good in (None, True, 0, "é😀", 1.5, [], {}, [1, "a"], {"a": [None, 2.5]}, "x" * 10_000):
+        verdict = classify_message({"jsonrpc": "2.0", "id": good, "method": "ping"})
+        assert verdict.kind == REQUEST and verdict.reply_id == good
+    # A notification never echoes an id, so an unencodable one changes nothing.
+    assert classify_message({"id": [float("nan")], "method": "notifications/x"}).kind == NOTIFICATION
+
+
+UNENCODABLE_IDS = ["[NaN]", "[Infinity]", '{"a":NaN}', '{"a":[1,{"b":-Infinity}]}', '"@S"', '["@S"]', '{"@S":1}']
+INVALID_REQUEST = {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid request"}}
+
+
+@pytest.mark.parametrize("method", ["ping", "initialize", "tools/list", "no/such/method", "tools/call"])
+@pytest.mark.parametrize("id_json", UNENCODABLE_IDS)
+async def test_an_id_that_cannot_be_encoded_is_an_invalid_request_not_a_500(surface, method, id_json):
+    params = (',"params":' + json.dumps(surface.call_params)) if method == "tools/call" else ""
+    single = _raw('{"jsonrpc":"2.0","id":%s,"method":"%s"%s}' % (id_json, method, params))
+    r = await surface.post(single)
+    assert r.status_code == 200 and r.json() == INVALID_REQUEST
+    # As a batch member: only that member is refused, the rest is answered.
+    member = single.decode()
+    batch = await surface.post(("[" + member + ',{"jsonrpc":"2.0","id":3,"method":"ping"}]').encode())
+    assert batch.status_code == 200
+    assert batch.json() == [INVALID_REQUEST, {"jsonrpc": "2.0", "id": 3, "result": {}}]
+    assert surface.executed == 0
+
+
+@pytest.mark.parametrize("id_json", UNENCODABLE_IDS)
+async def test_an_unencodable_id_on_a_notification_or_a_client_response_stays_accepted(surface, id_json):
+    note = await surface.post(_raw('{"jsonrpc":"2.0","id":%s,"method":"notifications/initialized"}' % id_json))
+    assert note.status_code == 202 and note.content == b""
+    reply = await surface.post(_raw('{"jsonrpc":"2.0","id":%s,"result":{}}' % id_json))
+    assert reply.status_code == 202 and reply.content == b""
+
+
+@pytest.mark.parametrize("id_json", ['[1,"a"]', '{"é":[null,2.5]}', '"é😀"', "[]", "{}"])
+async def test_ids_that_encode_are_still_echoed_exactly(surface, id_json):
+    r = await surface.post(('{"jsonrpc":"2.0","id":%s,"method":"ping"}' % id_json).encode("utf-8"))
+    assert r.status_code == 200
+    assert r.content == ('{"jsonrpc":"2.0","id":%s,"result":{}}' % json.dumps(
+        json.loads(id_json), ensure_ascii=False, separators=(",", ":"))).encode("utf-8")
+
+
+def _unencodable_text_bodies(surface: Surface) -> dict[str, bytes]:
+    """Requests that parse, are classified a request with an encodable id, and
+    whose reply would carry a lone surrogate. Every one was an HTTP 500."""
+    section_args = ({"project": "RW", "section": "z@S"} if surface.name == "connector"
+                    else {"section": "z@S"})
+    cases = {
+        "method": '{"jsonrpc":"2.0","id":1,"method":"x@S"}',
+        "tool name": '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x@S","arguments":{}}}',
+        "self-test section": ('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s",'
+                              '"arguments":%s}}' % (
+                                  "get_self_test_plan" if surface.name == "connector"
+                                  else "workspace_generate_self_test", json.dumps(section_args))),
+        "batch child tool name": ('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch",'
+                                  '"arguments":{"calls":[{"tool":"x@S","arguments":{}}]}}}'),
+        "batch of requests": ('[{"jsonrpc":"2.0","id":1,"method":"ping"},'
+                              '{"jsonrpc":"2.0","id":2,"method":"x@S"},'
+                              '{"jsonrpc":"2.0","id":3,"method":"ping"}]'),
+    }
+    return {label: _raw(template) for label, template in cases.items()}
+
+
+UNENCODABLE_LABELS = ["method", "tool name", "self-test section",
+                      "batch child tool name", "batch of requests"]
+
+
+@pytest.mark.parametrize("label", UNENCODABLE_LABELS)
+async def test_text_that_cannot_be_encoded_is_a_json_rpc_error_not_a_500(surface, label, caplog):
+    if label == "batch child tool name" and surface.name != "connector":
+        pytest.skip("only the connector route has the `batch` tool")
+    caplog.set_level(logging.INFO, logger="cognita")
+    raw = _unencodable_text_bodies(surface)[label]
+    r = await surface.post(raw)
+    assert r.status_code == 200, (label, r.text[:200])
+    expected = {"jsonrpc": "2.0", "error": {"code": -32600, "message": UNENCODABLE_TEXT_MESSAGE}}
+    assert r.content == json.dumps(expected, separators=(",", ":")).encode("utf-8")
+    assert "id" not in r.json()  # also for a batch: ONE error object, not an array
+    messages = _gateway_records(caplog)
+    refused = [m for m in messages if m.startswith("mcp request refused ")]
+    assert refused == ["mcp request refused kind=unicode_encode_error route=v%d" % (
+        PUBLIC_CONTRACT_VERSION if surface.name == "connector" else 3)], messages
+    # The exchange is still logged once, as 200, and never with the offending text.
+    [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
+    assert "-> http=200" in exchange
+    assert not any("ud800" in m or "\ud800" in m for m in messages), messages
+    # Nothing else changed: the very next well-formed request is answered normally.
+    again = await surface.post(PING)
+    assert again.status_code == 200 and again.json() == {"jsonrpc": "2.0", "id": 7, "result": {}}
+
+
+@pytest.mark.parametrize("label", ["method", "tool name"])
+async def test_the_engine_answers_unencodable_text_with_the_same_json_rpc_error(engine_host, label, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    raw = {
+        "method": _raw('{"jsonrpc":"2.0","id":1,"method":"x@S"}'),
+        "tool name": _raw('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x@S","arguments":{}}}'),
+    }[label]
+    r = await _engine_post(engine_host, raw)
+    assert r.status_code == 200
+    assert r.json() == {"jsonrpc": "2.0", "error": {"code": -32600, "message": UNENCODABLE_TEXT_MESSAGE}}
+    assert any(m.startswith("engine request refused kind=unicode_encode_error") for m in _gateway_records(caplog))
+    assert not any("ud800" in m or "\ud800" in m for m in caplog.messages)
+    # An id that cannot be encoded is an invalid request on the engine too.
+    r = await _engine_post(engine_host, _raw('{"jsonrpc":"2.0","id":"@S","method":"ping"}'))
+    assert (r.status_code, r.json()) == (200, INVALID_REQUEST)
+    r = await _engine_post(engine_host, _raw('{"jsonrpc":"2.0","id":[NaN],"method":"ping"}'))
+    assert (r.status_code, r.json()) == (200, INVALID_REQUEST)
+    ok = await _engine_post(engine_host, {"jsonrpc": "2.0", "id": "e1", "method": "ping"})
+    assert ok.json() == {"jsonrpc": "2.0", "id": "e1", "result": {}}
+
+
+class _FakeRequest:
+    """Just enough of a Request for proxy_mcp on a path that never reaches a worker."""
+
+    method = "POST"
+    headers: dict = {}
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def body(self) -> bytes:
+        return self._body
+
+
+# Each of these raised UnicodeEncodeError out of the proxy (measured 2026-10-10)
+# without needing a worker: the refusal or error it builds echoes the text.
+_PROXY_UNENCODABLE_CALLS = {
+    "unknown tool": {"name": "x\ud800", "arguments": {}},
+    "read-only write": {"name": "add_document\ud800", "arguments": {}},
+    "self-test section": {"name": "get_self_test_plan", "arguments": {"section": "z\ud800"}},
+    "self-test argument name": {"name": "get_self_test_plan", "arguments": {"z\ud800": 1}},
+}
+
+
+@pytest.mark.parametrize("label", sorted(_PROXY_UNENCODABLE_CALLS))
+async def test_the_proxy_answers_unencodable_text_with_the_json_rpc_error(label, caplog):
+    caplog.set_level(logging.INFO, logger="cognita")
+    message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": _PROXY_UNENCODABLE_CALLS[label]}
+    expected = error_body(NO_ID, -32600, UNENCODABLE_TEXT_MESSAGE)
+    # A batch (the whole batch gets the one error, not an array) ...
+    batch = await _handle_batch(
+        None, None, "http://worker.invalid/mcp", [message], readonly=True,
+        documents_dir=None, backup_keep=0, project_name="P",
+    )
+    assert (batch.status_code, json.loads(batch.body)) == (200, expected)
+    # ... and a single message through the public entry point.
+    single = await proxy_mcp(
+        None, _FakeRequest(json.dumps(message).encode("utf-8")), "http://worker.invalid/mcp",
+        readonly=True, documents_dir=None, backup_keep=0, project_name="P",
+    )
+    assert (single.status_code, json.loads(single.body)) == (200, expected)
+    lines = [m for m in caplog.messages if m.startswith("proxy request refused ")]
+    assert lines == ["proxy request refused kind=unicode_encode_error handler=_handle_batch",
+                     "proxy request refused kind=unicode_encode_error handler=proxy_mcp"]
+
+
+async def test_the_proxy_leaves_the_error_to_the_gateway_for_an_element_it_was_handed():
+    # With body_override the gateway is driving one element of its own batch;
+    # the gateway's shared handler answers the whole exchange, so the proxy
+    # lets the error through instead of answering for that member alone.
+    message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": _PROXY_UNENCODABLE_CALLS["unknown tool"]}
+    with pytest.raises(UnicodeEncodeError):
+        await proxy_mcp(
+            None, _FakeRequest(b""), "http://worker.invalid/mcp", readonly=True, documents_dir=None,
+            backup_keep=0, project_name="P", body_override=json.dumps(message).encode("utf-8"),
+        )

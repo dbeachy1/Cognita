@@ -59,8 +59,10 @@ from .mcp_protocol import (
     MessageKind,
     classify_message,
     error_body,
+    log_safe,
     negotiate_protocol_version,
     parse_body,
+    unencodable_text_reply,
 )
 from .oauth import (
     RejectionLogCoalescer,
@@ -942,6 +944,30 @@ def create_gateway_app(
         """
         return _tool_result(msg_id, refusal_payload(tool_name, reason, message, **fields), tool_name)
 
+    def _unknown_argument_refusal(msg_id, tool_name: str, arguments: dict,
+                                  accepted: tuple[str, ...]) -> JSONResponse | None:
+        """16.1.3: the refusal for an argument a self-test tool does not take, or
+        None when every argument is accepted.
+
+        These two tools used to answer an unknown argument with "section must
+        be a string when supplied", which names the wrong problem. This uses
+        the reason every other tool uses for it (`unknown_argument`, see
+        docs/ERROR-REASONS.md). The message echoes client text into a result,
+        so each name goes through log_safe (one line, printable, 40
+        characters) and at most five are named.
+        """
+        extra = sorted(str(key) for key in arguments if key not in accepted)
+        if not extra:
+            return None
+        named = ", ".join(repr(log_safe(key, 40)) for key in extra[:5])
+        more = f" (and {len(extra) - 5} more)" if len(extra) > 5 else ""
+        log.info("Refused %s: unknown argument(s) count=%d reason=unknown_argument", tool_name, len(extra))
+        return _refusal(
+            msg_id, tool_name, "unknown_argument",
+            f"{tool_name} does not accept {named}{more}. NOTHING was executed. "
+            f"Accepted arguments: {', '.join(accepted)}.",
+        )
+
     def _combined_capabilities(connector: ConnectorDefinition, contract_version: int) -> frozenset[str]:
         names = set(_public_tool_names(contract_version))
         if contract_version != PUBLIC_CONTRACT_VERSION:
@@ -1645,12 +1671,12 @@ def create_gateway_app(
             project_name = inferred_project
         if not isinstance(project_name, str) or not project_name or project_name != project_name.strip():
             log.info("tools/call refused: project missing or malformed tool=%s reason=invalid",
-                     params["name"])
+                     log_safe(params["name"]))
             return None, None, _refusal(
                 message.get("id"), params["name"], "invalid", "project must be a nonempty exact string")
         if _nested_project({key: value for key, value in args.items() if key != "project"}):
             log.info("tools/call refused: nested project routing tool=%s reason=invalid",
-                     params["name"])
+                     log_safe(params["name"]))
             return None, None, _refusal(
                 message.get("id"), params["name"], "invalid", "nested project routing is not allowed")
         return params["name"], project_name, None
@@ -1847,13 +1873,13 @@ def create_gateway_app(
                 )
             except asyncio.CancelledError:
                 log.info("connector batch cancelled connector_id=%s index=%d tool=%s",
-                         connector_id, index, tool)
+                         connector_id, index, log_safe(tool))
                 raise
             except Exception:
                 # A malformed/failed worker should be an element error, not an
                 # outer 500 that discards earlier committed children.
                 log.exception("connector batch child failed connector_id=%s index=%d tool=%s",
-                              connector_id, index, tool)
+                              connector_id, index, log_safe(tool))
                 item, child_failed, child_omitted = _batch_child_item(
                     index, tool, None
                 )
@@ -1880,7 +1906,7 @@ def create_gateway_app(
             log.info(
                 "connector batch element connector_id=%s index=%d tool=%s outcome=%s "
                 "reason=%s elapsed_ms=%d",
-                connector_id, index, tool, item.get("status"), reason or "", elapsed_ms,
+                connector_id, index, log_safe(tool), item.get("status"), reason or "", elapsed_ms,
             )
             results.append(item)
             if child_failed:
@@ -1945,19 +1971,21 @@ def create_gateway_app(
                     if isinstance(structured, dict):
                         status = structured.get("status", "-")
                         structured_bytes = len(json.dumps(structured))
-                        reason = str(structured.get("reason", "-"))[:64]
-                        structured_keys = ",".join(sorted(str(k) for k in structured))[:300]
+                        # 16.1.3: log_safe on every value that can carry client
+                        # text (a message such as "Unknown tool: <name>" does).
+                        reason = log_safe(structured.get("reason", "-"), 64)
+                        structured_keys = log_safe(",".join(sorted(str(k) for k in structured)), 300)
                     if isinstance(first.get("text"), str):
                         fingerprint = _describe_text(first["text"])
                 elif "error" in decoded:
                     status = "jsonrpc_error"
-                    reason = str((decoded.get("error") or {}).get("message", "-"))[:120]
+                    reason = log_safe((decoded.get("error") or {}).get("message", "-"), 120)
             except (ValueError, AttributeError):
                 status = "unparsed"
         log.info("tool call connector_id=%s tool=%s id=%s arguments=%s status=%s reason=%s is_error=%s "
                  "content_blocks=%s block_types=%s text_chars=%s structured_bytes=%s structured_keys=%s "
                  "%s bytes=%s content_type=%s elapsed_ms=%d",
-                 connector_id, tool, _describe_id(message.get("id")), argument_names, status, reason,
+                 connector_id, log_safe(tool, 80), _describe_id(message.get("id")), argument_names, status, reason,
                  is_error, blocks, block_types, text_chars, structured_bytes, structured_keys,
                  fingerprint, size, response.headers.get("content-type", "-"), elapsed_ms)
         return response
@@ -1984,13 +2012,14 @@ def create_gateway_app(
         parts = []
         for key in sorted(str(k) for k in arguments):
             value = arguments.get(key)
+            # 16.1.3: the key is client text too (log_safe), not only the value.
+            shown_key = log_safe(key, 60)
             if isinstance(value, (list, tuple)):
-                parts.append(f"{key}=<{len(value)} items>")
+                parts.append(f"{shown_key}=<{len(value)} items>")
             elif key in _LOGGED_ARGUMENT_VALUES and isinstance(value, (str, int, float, bool)):
-                rendered = " ".join(str(value).split())[:80]
-                parts.append(f"{key}={rendered}")
+                parts.append(f"{shown_key}={log_safe(value, 80)}")
             else:
-                parts.append(key)
+                parts.append(shown_key)
         return ",".join(parts)
 
     def _describe_text(text: str) -> str:
@@ -2005,7 +2034,10 @@ def create_gateway_app(
         """JSON-RPC id with its type, bounded — a client chooses the id."""
         if msg_id is None:
             return "null"
-        return f"{type(msg_id).__name__}:{str(msg_id)[:40]}"
+        # 16.1.3: ids are lenient (an array or object is echoed), so the value
+        # goes through log_safe: no newline forges a line, and a container
+        # shows its type and never its content.
+        return f"{type(msg_id).__name__}:{log_safe(msg_id, 40)}"
 
     def _describe_mcp_body(raw: bytes) -> tuple[str, str, str]:
         """(methods, ids, batch) of a JSON-RPC request body. Never the params."""
@@ -2026,7 +2058,18 @@ def create_gateway_app(
                     methods.append("invalid")
                     ids.append("-")
                     continue
-                methods.append(str(item.get("method")))
+                # 16.1.3: a method is client text. A string is logged through
+                # log_safe (one line, printable, bounded); a message with no
+                # `method` member keeps its old "None"; anything else (null,
+                # a number, an object) is the word "invalid", never its
+                # content.
+                method = item.get("method")
+                if isinstance(method, str):
+                    methods.append(log_safe(method))
+                elif "method" not in item:
+                    methods.append("None")
+                else:
+                    methods.append("invalid")
                 ids.append(_describe_id(item.get("id")))
         except (BodyParseError, RecursionError) as exc:
             log.debug("mcp body not described cause=%s bytes=%d",
@@ -2045,16 +2088,19 @@ def create_gateway_app(
         """
         if kind.kind == NOTIFICATION and (kind.method or "").startswith("notifications/"):
             return
+        # 16.1.3: the method is client text, so it goes through log_safe (one
+        # line, printable, bounded) like every client value in these lines.
         log.info("mcp message not executed connector=%s kind=%s method=%s reason=%s member=%s",
-                 connector_slug, kind.kind, " ".join((kind.method or "-").split())[:60],
+                 log_safe(connector_slug, 80), kind.kind, log_safe(kind.method or "-"),
                  kind.reason or "-", "-" if member is None else member)
 
     def _header(request: Request, name: str, limit: int = 120) -> str:
         value = request.headers.get(name)
         if value is None:
             return "-"
-        value = value.strip()
-        return value[:limit] if value else "-"
+        # 16.1.3: a header value is client text in a log line; log_safe keeps
+        # it on one line, printable and bounded (it also strips).
+        return log_safe(value, limit) or "-"
 
     async def _dispatch_call(request: Request, snapshot: ConnectorConfig,
                              connector_id: str, message: dict,
@@ -2214,7 +2260,7 @@ def create_gateway_app(
             )
             log.info(
                 "project authorization denied connector_id=%s project=%s outcome=%s",
-                connector_id, project_name, outcome,
+                connector_id, log_safe(project_name, 80), outcome,
             )
             return _project_unavailable(message.get("id"), tool)
         project, access = resolved
@@ -2227,10 +2273,13 @@ def create_gateway_app(
         readonly = config.remote_readonly or access == "read"
         if tool == SELFTEST_TOOL_NAME:
             call_arguments = params.get("arguments", {})
-            if set(call_arguments) - {"project", "section"} or (
-                "section" in call_arguments
-                and not isinstance(call_arguments["section"], str)
-            ):
+            # 16.1.3: an unknown argument is named as such; the section
+            # message below is only for a section that is not a string.
+            unknown = _unknown_argument_refusal(
+                message.get("id"), SELFTEST_TOOL_NAME, call_arguments, ("project", "section"))
+            if unknown is not None:
+                return unknown
+            if "section" in call_arguments and not isinstance(call_arguments["section"], str):
                 return _refusal(message.get("id"), SELFTEST_TOOL_NAME, "invalid",
                                 "section must be a string when supplied")
             section = call_arguments.get("section")
@@ -2399,8 +2448,6 @@ def create_gateway_app(
                     replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
                 continue
             method = kind.method
-            if method.startswith("notifications/"):
-                continue
             if method == "tools/call":
                 response = await _logged_call(
                     request, snapshot, connector_id, message, contract_version
@@ -2427,22 +2474,26 @@ def create_gateway_app(
         params = params if isinstance(params, dict) else {}
         # 13.2.4: say which client this is. The name/version a client declares
         # is the only way to tell a SillyTavern session from a claude.ai one in
-        # the log, and the protocol version it asks for is what we echo back.
+        # the log. 16.1.3: the protocol version it asks for is no longer simply
+        # echoed back; the answer is negotiated (mcp_protocol), and the logged
+        # `protocol=` is what the client asked for. Every one of these values
+        # is client text, so each goes through log_safe.
         client = params.get("clientInfo") if isinstance(params.get("clientInfo"), dict) else {}
         capabilities = params.get("capabilities")
         log.info("mcp initialize id=%s client=%s client_version=%s protocol=%s capabilities=%s",
-                 _describe_id(msg_id), str(client.get("name", "-"))[:60],
-                 str(client.get("version", "-"))[:40],
-                 str(params.get("protocolVersion", "-"))[:40],
-                 ",".join(sorted(str(k) for k in capabilities)) or "-"
+                 _describe_id(msg_id), log_safe(client.get("name", "-"), 60),
+                 log_safe(client.get("version", "-"), 40),
+                 log_safe(params.get("protocolVersion", "-"), 40),
+                 log_safe(",".join(sorted(str(k) for k in capabilities)), 200) or "-"
                  if isinstance(capabilities, dict) else "-")
-        # 16.1.3: answer with the requested version only if this server speaks
-        # it, else the newest it does (spec, Version Negotiation); before, any
-        # string was echoed back. An absent version still gets 2025-03-26.
+        # 16.1.3: answer with the requested version if this server speaks it
+        # (or is one of the two legacy revisions it still echoes), else the
+        # newest it does (spec, Version Negotiation); before, any string was
+        # echoed back. An absent version still gets 2025-03-26.
         granted = negotiate_protocol_version(params)
         if "protocolVersion" in params and params["protocolVersion"] != granted:
             log.info("mcp version negotiated requested=%s granted=%s",
-                     " ".join(str(params["protocolVersion"]).split())[:40], granted)
+                     log_safe(params["protocolVersion"], 40), granted)
         return JSONResponse({"jsonrpc": "2.0", "id": msg_id, "result": {
             "protocolVersion": granted,
             "capabilities": {"tools": {}},
@@ -2472,14 +2523,29 @@ def create_gateway_app(
         a Workspace body carries file content.
         """
         started = time.monotonic()
+        # 16.1.3: the slug and the version segment come from the percent-decoded
+        # URL path and are logged BEFORE authentication, so `%0A` in either
+        # would write a forged second log line. Both go through log_safe; the
+        # unmodified values still drive routing and the wire capture.
+        slug_for_log = log_safe(connector_slug, 80)
+        route_for_log = log_safe(version_segment, 40)
         try:
             if workspace_path is not None:
                 response = await _serve_workspace_mcp(request, connector_slug, workspace_path)
             else:
                 response = await _serve_connector_mcp(request, connector_slug, version_segment)
+        except UnicodeEncodeError:
+            # 16.1.3: the one place both MCP routes share. A reply that cannot
+            # be encoded as UTF-8 (the request carried a lone surrogate in an
+            # id, method, tool name or section) used to be an HTTP 500. It is
+            # a JSON-RPC error instead; for a batch the whole batch gets this
+            # one reply. Only the kind and the route are logged, never the
+            # offending text.
+            log.info("mcp request refused kind=unicode_encode_error route=%s", route_for_log)
+            response = JSONResponse(unencodable_text_reply())
         except Exception:
             log.exception("mcp exchange raised connector=%s route=%s elapsed_ms=%d",
-                          connector_slug, version_segment,
+                          slug_for_log, route_for_log,
                           int((time.monotonic() - started) * 1000))
             raise
         elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -2494,7 +2560,7 @@ def create_gateway_app(
         log.info("mcp exchange connector=%s route=%s http_method=%s methods=%s ids=%s batch=%s "
                  "request_bytes=%s accept=%s content_type=%s protocol_version=%s session_id=%s "
                  "user_agent=%s -> http=%d media_type=%s response_bytes=%d elapsed_ms=%d",
-                 connector_slug, version_segment, request.method, methods, ids, batch,
+                 slug_for_log, route_for_log, request.method, methods, ids, batch,
                  len(raw) if raw is not None else "unknown",
                  _header(request, "accept"), _header(request, "content-type"),
                  # 16.1.3: read for this log line ONLY. The MCP-Protocol-Version
@@ -2669,7 +2735,7 @@ def create_gateway_app(
             # 16.1.3: invalid UTF-8 and over-deep nesting are parse errors too
             # (they used to escape as HTTP 500). The reply carries no id member.
             log.info("mcp parse error connector=%s cause=%s bytes=%d",
-                     connector_slug, exc.cause, len(raw_body))
+                     log_safe(connector_slug, 80), exc.cause, len(raw_body))
             return _jsonrpc_error(NO_ID, "Parse error", code=-32700)
         if isinstance(body, list):
             return await _dispatch_batch(
@@ -2686,11 +2752,9 @@ def create_gateway_app(
             if kind.kind == INVALID:
                 return _jsonrpc_error(kind.reply_id, "Invalid request", code=-32600)
             return Response(status_code=202)
+        # (classify_message makes every notifications/* message a notification,
+        # so a REQUEST never needs a notifications/ check of its own.)
         method = kind.method
-        if method.startswith("notifications/"):
-            # classify_message already made every notifications/* message a
-            # notification (202, whatever its id); kept as a backstop.
-            return Response(status_code=202)
         if method == "initialize":
             return _initialize_response(body.get("id"), body.get("params"))
         if method == "ping":
@@ -2726,9 +2790,12 @@ def create_gateway_app(
                 "message": "Workspace is not configured on this host.",
             }, tool)
         if tool == WORKSPACE_SELFTEST_TOOL_NAME:
-            if set(arguments) - {"section"} or (
-                "section" in arguments and not isinstance(arguments["section"], str)
-            ):
+            # 16.1.3: an unknown argument is named as such; the section
+            # message is only for a section that is not a string.
+            unknown = _unknown_argument_refusal(msg_id, tool, arguments, ("section",))
+            if unknown is not None:
+                return unknown
+            if "section" in arguments and not isinstance(arguments["section"], str):
                 return _refusal(msg_id, tool, "invalid", "section must be a string when supplied")
             # 16.1.3: this result was never validated (no tool name was passed),
             # although workspace_generate_self_test advertises an outputSchema.
@@ -2836,7 +2903,7 @@ def create_gateway_app(
             # 16.1.3: invalid UTF-8 and over-deep nesting are parse errors too
             # (they used to escape as HTTP 500). The reply carries no id member.
             log.info("mcp parse error connector=%s cause=%s bytes=%d",
-                     workspace_slug, exc.cause, len(raw_body))
+                     log_safe(workspace_slug, 80), exc.cause, len(raw_body))
             return _jsonrpc_error(NO_ID, "Parse error", code=-32700)
         if isinstance(body, list):
             if not body:
@@ -2856,8 +2923,6 @@ def create_gateway_app(
                         replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
                     continue
                 method = kind.method
-                if method.startswith("notifications/"):
-                    continue
                 if method == "initialize":
                     response = _initialize_response(message.get("id"), message.get("params"))
                 elif method == "ping":
@@ -2889,8 +2954,6 @@ def create_gateway_app(
                 return _jsonrpc_error(kind.reply_id, "Invalid request", code=-32600)
             return Response(status_code=202)
         method = kind.method
-        if method.startswith("notifications/"):
-            return Response(status_code=202)
         if method == "initialize":
             return _initialize_response(body.get("id"), body.get("params"))
         if method == "ping":

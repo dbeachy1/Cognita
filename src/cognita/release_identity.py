@@ -26,6 +26,13 @@ APPLICATION_VERSION = "16.1.3"
 # that contract — a tool's wire shape, the error envelope, the catalog — never
 # for an ordinary release; `cognita.connectors` re-exports it under the name
 # the rest of the code already uses, PUBLIC_CONTRACT_VERSION.
+#
+# Note (16.1.3, 2026-10-10): a repair that makes results match what the current
+# generation ALREADY advertises (a result that violated its own outputSchema, a
+# refusal in the wrong shape) and breaks nothing that validated before is not
+# such a change and does not bump this. A bump retires every connector URL: a
+# client holding the old /v<N> URL must be given a new one. 16.1.3 repaired
+# results of exactly that kind and stayed on this generation.
 COMBINED_CONTRACT_VERSION = 6
 
 # The Workspace-only MCP generation, served at `/mcp/workspace/<slug>/mcp/v<N>`.

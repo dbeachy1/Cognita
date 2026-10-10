@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import functools
 import hashlib
 import json
 import logging
@@ -40,6 +41,7 @@ from .mcp_protocol import (
     classify_message,
     error_body,
     parse_body,
+    unencodable_text_reply,
 )
 from .workspace_selftest import WORKSPACE_SELFTEST_TOOL_NAME, workspace_selftest_tool_definition
 from .backups import (
@@ -2377,6 +2379,35 @@ async def _forward_one(
                     media_type=upstream.headers.get("content-type"))
 
 
+def _answer_unencodable_text(handler):
+    """16.1.3: a reply that cannot be encoded as UTF-8 is a JSON-RPC error.
+
+    A request can carry text that is not valid Unicode (a JSON "\\ud800" escape
+    yields a lone surrogate, which json.loads accepts); the reply built from it
+    (an unknown tool or method name, a rejected argument name) raised
+    UnicodeEncodeError out of this module as an HTTP 500. Same error, same
+    shape, as the gateway's shared handler (mcp_protocol.unencodable_text_reply);
+    a batch gets this one reply as a whole. Only UnicodeEncodeError is caught,
+    and only the kind is logged, never the offending text.
+
+    When the gateway drives one element of its own batch (`body_override` is
+    set) the error is NOT answered here: it propagates to the gateway's shared
+    handler, which answers the whole exchange, so a gateway batch gets one
+    error for the whole batch on every path rather than one for this member.
+    """
+    @functools.wraps(handler)
+    async def guarded(*args, **kwargs):
+        try:
+            return await handler(*args, **kwargs)
+        except UnicodeEncodeError:
+            if kwargs.get("body_override") is not None:
+                raise
+            log.info("proxy request refused kind=unicode_encode_error handler=%s", handler.__name__)
+            return JSONResponse(unencodable_text_reply())
+    return guarded
+
+
+@_answer_unencodable_text
 async def _handle_batch(
     client: httpx.AsyncClient,
     request: Request,
@@ -2420,9 +2451,6 @@ async def _handle_batch(
                 replies.append(error_body(kind.reply_id, -32600, "Invalid request"))
             continue
         _log_request(project_name, message)
-        method = kind.method
-        if method.startswith("notifications/"):
-            continue  # a notification gets no reply, in a batch or out of one
         response = await _intercept(
             client, request, worker_url, message, readonly=readonly,
             documents_dir=documents_dir, backup_keep=backup_keep,
@@ -2447,6 +2475,7 @@ async def _handle_batch(
     return JSONResponse(replies)
 
 
+@_answer_unencodable_text
 async def proxy_mcp(
     client: httpx.AsyncClient,
     request: Request,

@@ -3,10 +3,12 @@
 A leaf module: it imports nothing from Cognita, so the connector route, the
 Workspace-only route, the proxy's batch handler and the local engine all call
 the same code instead of carrying their own copies of the same rule. Before
-16.1.3 the two gateway routes classified a message differently (a missing
-`id` was a request on one route and a dropped notification on the other), the
-engine echoed any protocol version a client asked for, and a malformed body
-could escape as HTTP 500.
+16.1.3 each entry point kept its own copy of the message rules (on 16.1.2
+both gateway routes answered a single request without an `id` with
+`"id": null`, and both dropped the replies to id-less batch members; that
+behavior is kept on purpose, see classify_message), the engine echoed any
+protocol version a client asked for, and a malformed body could escape as
+HTTP 500.
 
 Cognita is a legacy (initialize-handshake) server for the revisions below. The
 `MCP-Protocol-Version` request HEADER is deliberately NOT part of this module
@@ -25,6 +27,14 @@ from typing import Any
 # Newest first. The one authority for the revisions this server speaks.
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
+# 16.1.3: the two oldest revisions are still answered as requested although
+# they are NOT in SUPPORTED_PROTOCOL_VERSIONS. Cognita does not implement the
+# HTTP+SSE transport those revisions defined, but a client that asks for one
+# of them over Streamable HTTP worked on 16.1.2 (initialize echoed any version)
+# and must keep working: a client that checks the answer against what it asked
+# for would otherwise disconnect. Deliberately separate so the supported list
+# above stays an honest statement of what the server speaks.
+LEGACY_ECHOED_PROTOCOL_VERSIONS = ("2024-11-05", "2024-10-07")
 # What an `initialize` that names no protocolVersion has always been answered
 # with; kept so such a client sees exactly what it saw before 16.1.3.
 ABSENT_PROTOCOL_VERSION = "2025-03-26"
@@ -36,15 +46,20 @@ def negotiate_protocol_version(params: Any) -> str:
     The spec: answer with the requested version if the server supports it,
     otherwise with one it does support. Before 16.1.3 any string was echoed
     back, including a revision this server does not implement. A request that
-    names no version keeps 2025-03-26. A present value that is not a supported
-    string (a future revision such as 2026-07-28, a typo, a non-string) is
-    answered with the newest supported revision, which the client then accepts
-    or disconnects from, as the spec intends.
+    names no version keeps 2025-03-26. The three supported revisions and the
+    two legacy ones (LEGACY_ECHOED_PROTOCOL_VERSIONS) are answered as
+    requested. Any other present value (a future revision such as
+    2026-07-28, a typo, a non-string) is answered with the newest supported
+    revision, which the client then accepts or disconnects from, as the spec
+    intends.
     """
     if not isinstance(params, dict) or "protocolVersion" not in params:
         return ABSENT_PROTOCOL_VERSION
     requested = params["protocolVersion"]
-    if isinstance(requested, str) and requested in SUPPORTED_PROTOCOL_VERSIONS:
+    if isinstance(requested, str) and (
+        requested in SUPPORTED_PROTOCOL_VERSIONS
+        or requested in LEGACY_ECHOED_PROTOCOL_VERSIONS
+    ):
         return requested
     return LATEST_PROTOCOL_VERSION
 
@@ -97,6 +112,25 @@ def is_valid_request_id(value: Any) -> bool:
     return isinstance(value, float) and math.isfinite(value)
 
 
+def id_encodes_as_json(value: Any) -> bool:
+    """True when an id can be written back as strict JSON in UTF-8.
+
+    Python's JSON parser accepts NaN / Infinity (also nested in an array or
+    object id) and a JSON-escaped lone surrogate ("\\ud800"); the reply
+    encoder then raises (ValueError for the first, UnicodeEncodeError for the
+    second) and the exchange became HTTP 500. Every id that encodes is still
+    accepted and echoed exactly as before; one that does not is refused as an
+    invalid request (see classify_message).
+    """
+    if value is None or isinstance(value, (bool, int)):
+        return True  # the common ids; no need to encode them to know
+    try:
+        json.dumps(value, allow_nan=False, ensure_ascii=False).encode("utf-8")
+    except ValueError:  # NaN / Infinity (ValueError) and a surrogate (UnicodeEncodeError)
+        return False
+    return True
+
+
 def classify_message(message: Any) -> MessageKind:
     """Decide what a message IS (Base Protocol; Transports, Sending Messages).
     Single messages and batch members alike, on every route.
@@ -106,9 +140,12 @@ def classify_message(message: Any) -> MessageKind:
     - any other string `method`: a REQUEST, executed and answered exactly as
       before 16.1.3, whatever its `id` is (missing, null, string, number, bool,
       object, array); the reply echoes the id the way 16.1.2 did, so a missing
-      id comes back as `"id": null`. The ONLY refused id is a non-finite float
-      (NaN, Infinity, -Infinity), which crashed response encoding with HTTP
-      500: that is an invalid request (-32600) with no `id` member;
+      id comes back as `"id": null`. The ONLY refused ids are those that cannot
+      be written back as strict JSON in UTF-8 (id_encodes_as_json): a
+      non-finite float (NaN, Infinity, -Infinity) or one nested in an array or
+      object id, and a string holding a lone surrogate. They crashed response
+      encoding with HTTP 500: that is an invalid request (-32600) with no `id`
+      member;
     - no `method`, but `result` or `error`: a response from the client,
       accepted (202, no body); an object with both is classified by `method`;
     - anything else: an invalid request (-32600).
@@ -122,7 +159,8 @@ def classify_message(message: Any) -> MessageKind:
         return MessageKind(INVALID, reason="not_an_object")
     raw_id = message.get("id")
     non_finite = isinstance(raw_id, float) and not math.isfinite(raw_id)
-    usable_id = raw_id if is_valid_request_id(raw_id) else NO_ID
+    encodes = id_encodes_as_json(raw_id)
+    usable_id = raw_id if encodes and is_valid_request_id(raw_id) else NO_ID
     if "method" in message:
         method = message["method"]
         if not isinstance(method, str):
@@ -131,6 +169,8 @@ def classify_message(message: Any) -> MessageKind:
             return MessageKind(NOTIFICATION, method=method)
         if non_finite:
             return MessageKind(INVALID, method=method, reason="non_finite_id")
+        if not encodes:
+            return MessageKind(INVALID, method=method, reason="id_not_encodable")
         return MessageKind(REQUEST, method=method, reply_id=raw_id)
     if "result" in message or "error" in message:
         return MessageKind(RESPONSE)
@@ -148,6 +188,44 @@ def error_body(msg_id: Any, code: int, message: str) -> dict:
         body["id"] = msg_id
     body["error"] = {"code": code, "message": message}
     return body
+
+
+# 16.1.3: what a request is answered with when a reply cannot be encoded as
+# UTF-8 because the request carried text that is not valid Unicode (a JSON
+# "\ud800" escape yields a lone surrogate, which json.loads accepts and the
+# response encoder refuses). It used to be an HTTP 500. No `id` member: the id
+# may be the very text that cannot be written back.
+UNENCODABLE_TEXT_MESSAGE = "Invalid request: the request contains text that is not valid Unicode"
+
+
+def unencodable_text_reply() -> dict:
+    """The JSON-RPC error a request is answered with when its reply cannot be
+    encoded (see UNENCODABLE_TEXT_MESSAGE): -32600, no `id` member."""
+    return error_body(NO_ID, -32600, UNENCODABLE_TEXT_MESSAGE)
+
+
+def log_safe(value: Any, limit: int = 60) -> str:
+    """A client-controlled value as it may appear in a log line (16.1.3).
+
+    A client chooses these values (method names, client name and version, the
+    requested protocol version, ids, tool names, even the URL path), and a
+    percent-decoded `%0A` or a JSON `\\n` would otherwise write a second,
+    forged log line. Whitespace of every kind is collapsed to single spaces,
+    every other non-printable character (control characters, lone surrogates,
+    format characters) becomes `?`, and the result is cut to `limit`
+    characters. Only a string, a number, a bool or null is rendered by value;
+    a list or object shows its type (`<dict>`), never its content, because
+    str() of it would print request content into the log.
+    """
+    if isinstance(value, str):
+        text = value
+    elif value is None or isinstance(value, (bool, int, float)):
+        text = str(value)
+    else:
+        text = f"<{type(value).__name__}>"
+    # Bound first so a megabyte-long value costs no more than a short one.
+    text = " ".join(text[: limit * 4].split())
+    return "".join(ch if ch.isprintable() else "?" for ch in text)[:limit]
 
 
 # ----------------------------------------------------------------- body parsing
