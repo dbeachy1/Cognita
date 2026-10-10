@@ -78,13 +78,20 @@ def validate_schema_registry(tool_names: Iterable[str] = PUBLIC_TOOL_NAMES) -> N
             f"structured output contract mismatch: missing={sorted(set(expected)-set(actual))} "
             f"orphaned={sorted(set(actual)-set(expected))}"
         )
-    for name, schema in OUTPUT_SCHEMAS_BY_TOOL.items():
+    # 16.1.3: every advertised schema is checked, the Workspace and bridge
+    # adapter ones included, and the ROOT must itself say "type": "object".
+    # Until 16.1.3 this looked only at the first oneOf branch, so the book and
+    # storage envelopes shipped with a oneOf-only root; MCP requires the root
+    # type, and a client that checks the catalog then drops every tool.
+    for name, schema in _ALL_OUTPUT_SCHEMAS_BY_TOOL.items():
         try:
             Draft202012Validator.check_schema(schema)
         except Exception as exc:  # pragma: no cover - startup diagnostic
             raise RuntimeError(f"invalid output schema for {name}: {exc}") from exc
-        if schema.get("oneOf", [{}])[0].get("type") != "object":
+        if schema.get("type") != "object":
             raise RuntimeError(f"output schema for {name} does not have an object root")
+        if schema.get("oneOf", [{}])[0].get("type") != "object":
+            raise RuntimeError(f"output schema for {name} does not have an object first branch")
 
 
 validate_schema_registry()

@@ -127,9 +127,16 @@ def _envelope_schema(
         },
         "required": ["status", "reason", "message", "operation_outcome", "correlation_id"],
     }
+    # 16.1.3: the root states "type": "object" itself. MCP requires it of every
+    # tool outputSchema, and a client that checks the catalog (the official
+    # TypeScript SDK does) refuses the WHOLE tools/list answer when one tool
+    # lacks it, so it ends up with no Cognita tools at all. 16.1.0 through
+    # 16.1.2 shipped these envelopes with only "oneOf" at the root. Both
+    # branches are objects already, so this changes no result that validates.
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$defs": definitions,
+        "type": "object",
         "oneOf": [success, error],
     }
 
@@ -248,6 +255,9 @@ def with_directory_move_result(existing_schema: dict[str, Any]) -> dict[str, Any
     """Add the new directory variant while preserving the full legacy result schema."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        # 16.1.3: an MCP outputSchema root must say "type": "object" (see
+        # _envelope_schema); both variants are objects.
+        "type": "object",
         "oneOf": [deepcopy(existing_schema), deepcopy(DIRECTORY_MOVE_RESULT_SCHEMA)],
     }
 

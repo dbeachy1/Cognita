@@ -27,12 +27,12 @@ def test_every_schema_is_valid_draft_2020_object_root_and_strict_success():
     for name, schema in OUTPUT_SCHEMAS_BY_TOOL.items():
         Draft202012Validator.check_schema(schema)
         assert schema["oneOf"]
-        # Legacy contracts declare their common object root. Generated book
-        # envelopes use oneOf as their root, so every variant owns that fact.
-        if "type" in schema:
-            assert schema["type"] == "object"
-        else:
-            assert all(branch.get("type") == "object" for branch in schema["oneOf"])
+        # 16.1.3: the root itself must say "type": "object" (MCP requires it of
+        # an outputSchema). This test used to excuse the generated book
+        # envelopes because each oneOf branch was an object; a client that
+        # checks the catalog does not look that far and drops every tool.
+        assert schema["type"] == "object", name
+        assert all(branch.get("type") == "object" for branch in schema["oneOf"]), name
         success_branches = [
             branch for branch in schema["oneOf"]
             if branch.get("properties", {}).get("status", {}).get("const") != "error"

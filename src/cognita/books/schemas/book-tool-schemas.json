@@ -1441,7 +1441,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_cancel_job": {
@@ -1576,7 +1577,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_commit_build": {
@@ -1825,7 +1827,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_find_chunk": {
@@ -2209,7 +2212,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_get_book": {
@@ -2658,7 +2662,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_get_chapter": {
@@ -3696,7 +3701,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_get_generations": {
@@ -4300,7 +4306,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_get_job": {
@@ -5109,7 +5116,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_import_audio": {
@@ -5443,7 +5451,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_inspect_chapter": {
@@ -5912,7 +5921,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_prepare_chapter": {
@@ -6700,7 +6710,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "audiobook_record_generation": {
@@ -7400,7 +7411,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "book_get_index_status": {
@@ -7737,7 +7749,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "list_project_files": {
@@ -7983,7 +7996,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "read_project_file": {
@@ -8139,7 +8153,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     },
     "set_folder_indexing": {
@@ -8285,7 +8300,8 @@
             ],
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       }
     }
   }
