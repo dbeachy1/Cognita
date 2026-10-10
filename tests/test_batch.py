@@ -153,6 +153,8 @@ async def test_empty_batch_is_invalid_request(env):
     app, tok, _, _, _ = env
     r = await post(app, tok, [])
     assert r.json()["error"]["code"] == -32600
+    # 16.1.3: no usable id, so no id member (never "id": null).
+    assert "id" not in r.json()
 
 
 async def test_non_object_element_is_reported_without_sinking_the_batch(env):
@@ -160,7 +162,9 @@ async def test_non_object_element_is_reported_without_sinking_the_batch(env):
     r = await post(app, tok, ["not an object", call("list_categories", {}, 2)])
     body = r.json()
     assert len(body) == 2
-    assert body[0]["error"]["code"] == -32600 and body[0]["id"] is None
+    # 16.1.3: the id cannot be known, so the reply has no id member at all
+    # (the MCP schema never allows "id": null).
+    assert body[0]["error"]["code"] == -32600 and "id" not in body[0]
     assert "result" in body[1]
 
 
