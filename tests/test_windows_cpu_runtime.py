@@ -388,7 +388,9 @@ async def test_watcher_schedules_reconciliation_when_reconnect_has_no_filesystem
             self.state = "available"
             return SimpleNamespace(state=self.state)
 
-    state = SimpleNamespace(task=None, dirty={}, retry_at=0.0)
+    # 16.1.3: the watcher state gained queue_generation in 16.1.1 and passes it to _run_batch; this fake
+    # was not updated then, so the test has failed since.
+    state = SimpleNamespace(task=None, dirty={}, retry_at=0.0, queue_generation=0)
     manager = object.__new__(WatcherManager)
     manager._stopping = False
     manager._states = {"Knowledge": state}
@@ -401,7 +403,7 @@ async def test_watcher_schedules_reconciliation_when_reconnect_has_no_filesystem
     manager.source_guard = Guard()
     reconciliations = []
 
-    async def record_reconciliation(project, batch):
+    async def record_reconciliation(project, batch, _queue_generation=None):
         reconciliations.append((project, tuple(batch)))
         manager.source_guard.mark_reconciled(tmp_path)
         manager._stopping = True
