@@ -364,8 +364,25 @@ def _extract_json(filepath: Path) -> str:
 
 def _extract_docx_bytes(raw: bytes) -> str:
     import docx
+    from docx.oxml.ns import qn
 
     doc = docx.Document(io.BytesIO(raw))
+    # python-docx exposes paragraphs and tables only when they are direct
+    # children of the document body or a table cell. Unwrap content controls
+    # in the parsed XML so its normal traversal and text formatting still apply.
+    root = doc._element
+    for control in list(root.iter(qn("w:sdt"))):
+        content = control.find(qn("w:sdtContent"))
+        parent = control.getparent()
+        if content is None or parent is None:
+            continue
+        index = parent.index(control)
+        children = list(content)
+        for offset, child in enumerate(children):
+            content.remove(child)
+            parent.insert(index + offset, child)
+        parent.remove(control)
+
     parts = []
     for para in doc.paragraphs:
         text = para.text.strip()

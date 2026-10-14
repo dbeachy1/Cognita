@@ -11,6 +11,9 @@ French, German, Italian, and Brazilian Portuguese**.
 [Linux source installer 16.1.0](https://github.com/dbeachy1/Cognita/releases/download/v16.1.0/cognita-src-16.1.0.tar.gz).
 The Linux archive installs Cognita using its release container images.
 
+[Source patch 16.1.4](docs/RELEASE-16.1.4.md) fixes DOCX content-control extraction.
+The platform installers linked above remain version 16.1.0.
+
 It also gives the assistant an optional **Workspace**: a private, sandboxed Linux machine where
 it can run code, process files and search the web, then copy results back into your documents.
 

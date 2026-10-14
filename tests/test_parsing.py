@@ -147,6 +147,133 @@ def test_parse_file_docx_matches_existing_office_extractor(docs):
     assert parse_file(path, docs).content == _extract_docx(path)
 
 
+def _make_content_control(children, *, alias="metadata alias"):
+    """Wrap XML children in a Word content control for DOCX regression fixtures."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    control = OxmlElement("w:sdt")
+    properties = OxmlElement("w:sdtPr")
+    alias_element = OxmlElement("w:alias")
+    alias_element.set(qn("w:val"), alias)
+    properties.append(alias_element)
+    control.append(properties)
+    content = OxmlElement("w:sdtContent")
+    control.append(content)
+    for child in children:
+        content.append(child)
+    return control
+
+
+def test_docx_extracts_block_and_inline_content_controls(docs):
+    """Only control content joins normal paragraph and table extraction."""
+    import docx
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    path = docs / "controls.docx"
+    document = docx.Document()
+    paragraph = document.add_paragraph("Before ")
+    paragraph.add_run(" after")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "inside control"
+    run.append(text)
+    inner_control = _make_content_control([run], alias="inner alias")
+    inline_control = _make_content_control([inner_control], alias="outer alias")
+    paragraph._p.insert(1, inline_control)
+
+    controlled_heading = document.add_paragraph("Controlled heading", style="Heading 2")
+    body = document._element.body
+    heading = controlled_heading._p
+    heading_control = _make_content_control([])
+    body.replace(heading, heading_control)
+    heading_control.find(qn("w:sdtContent")).append(heading)
+
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "controlled left"
+    table.cell(0, 1).text = "controlled right"
+    table_element = table._tbl
+    table_control = _make_content_control([])
+    body.replace(table_element, table_control)
+    table_control.find(qn("w:sdtContent")).append(table_element)
+    document.save(path)
+    original_bytes = path.read_bytes()
+
+    from cognita.parsing import _extract_docx
+
+    assert _extract_docx(path) == (
+        "Before inside control after\n\n"
+        "## Controlled heading\n\n"
+        "controlled left | controlled right"
+    )
+    assert path.read_bytes() == original_bytes
+
+
+def test_parse_file_accepts_docx_with_only_block_content_controls(docs):
+    """A valid DOCX whose text is entirely in controls does not parse empty."""
+    import docx
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    path = docs / "controlled-only.docx"
+    document = docx.Document()
+    paragraph = document.add_paragraph("Only controlled text")
+    body = document._element.body
+    p = paragraph._p
+    block_control = _make_content_control([])
+    body.replace(p, block_control)
+    block_control.find(qn("w:sdtContent")).append(p)
+
+    empty = OxmlElement("w:sdt")
+    empty.append(OxmlElement("w:sdtPr"))
+    empty.append(OxmlElement("w:sdtContent"))
+    body.insert(len(body) - 1, empty)  # an empty control contributes no text
+    document.save(path)
+    original_bytes = path.read_bytes()
+
+    parsed = parse_file(path, docs)
+
+    assert parsed is not None
+    assert parsed.content == "Only controlled text"
+    assert path.read_bytes() == original_bytes
+
+
+def test_docx_extracts_nested_controls_inside_table_cells(docs):
+    """Table-cell paragraphs and inline runs survive nested control wrappers."""
+    import docx
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    path = docs / "table-controls.docx"
+    document = docx.Document()
+    table = document.add_table(rows=1, cols=2)
+    cell = table.cell(0, 0)
+    paragraph = cell.paragraphs[0]
+    paragraph.add_run("Start ")
+
+    run = OxmlElement("w:r")
+    for tag, value in (("w:t", "Alpha"), ("w:tab", None),
+                       ("w:t", "Beta"), ("w:br", None), ("w:t", "Gamma")):
+        element = OxmlElement(tag)
+        if value is not None:
+            element.text = value
+        run.append(element)
+    paragraph._p.insert(1, _make_content_control([run], alias="inline metadata"))
+    paragraph.add_run(" end")
+
+    inner_block = _make_content_control([])
+    outer_block = _make_content_control([inner_block], alias="outer metadata")
+    cell._tc.replace(paragraph._p, outer_block)
+    inner_block.find(qn("w:sdtContent")).append(paragraph._p)
+    table.cell(0, 1).text = "right"
+    document.save(path)
+
+    from cognita.parsing import _extract_docx
+
+    assert _extract_docx(path) == "Start Alpha\tBeta\nGamma end | right"
+
+
 def test_parse_file_xlsx_and_pptx_match_existing_office_extractors(docs):
     """All Office loaders accept the captured in-memory source stream."""
     import openpyxl

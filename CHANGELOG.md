@@ -1,5 +1,11 @@
 # Changelog
 
+## 16.1.4 — Index DOCX content-control text (2026-10-14)
+
+- General DOCX extraction includes text inside Word content controls, including nested block and inline controls and controls in tables. Documents containing only content-control text no longer fail upload as empty; mixed documents no longer silently omit that text.
+- Stored DOCX bytes and formatting are preserved. The stricter audiobook speech-projection contract and connector schemas are unchanged.
+- Existing partial indexes need a full rebuild of the affected project to recover text from unchanged files. Retry uploads previously rejected with `parse_failed` after upgrading. See `docs/RELEASE-16.1.4.md` and `docs/SPEC-DOCX-CONTENT-CONTROLS.md`.
+
 ## 16.1.3 — MCP conformance: strict clients get the full tool list and readable errors (2026-10-10)
 
 - Clients that check the tool list they are given (the official TypeScript SDK, and the SillyTavern MCP client built on it) were offered no Cognita tools at all on 16.1.0 through 16.1.2: sixteen tools (the audiobook, book-index and project-file tools) advertised an output schema without the `"type": "object"` root MCP requires, and such a client rejects the whole list. Every tool's output schema now has that root.
