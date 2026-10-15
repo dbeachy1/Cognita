@@ -194,6 +194,10 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     # Chrome applies form-action to the Authorize POST's redirect chain.
     assert "form-action 'self' https://chatgpt.com;" in consent["Content-Security-Policy"]
     assert "form-action 'self';" in login_page["Content-Security-Policy"]
+    # no-referrer makes Chrome send "Origin: null" on the login POST, which
+    # fails CSRF; same-origin keeps the real origin for Cognita only.
+    assert login_page["Referrer-Policy"] == "same-origin"
+    assert consent["Referrer-Policy"] == "same-origin"
     assert "future enabled projects are included unless excluded" in consent.text
     assert "includes all enabled projects" not in consent.text
 

@@ -265,7 +265,11 @@ def _browser_security(response: HttpResponse, callback_uri: object = None) -> Ht
         "frame-ancestors 'none'; base-uri 'none'"
     )
     response["X-Frame-Options"] = "DENY"
-    response["Referrer-Policy"] = "no-referrer"
+    # same-origin, not no-referrer: under no-referrer Chrome sends "Origin: null"
+    # on the login and consent POSTs and Django's CSRF check refuses them
+    # (seen on kei 2026-10-15, the first time 16.1.5 forwarded this header).
+    # same-origin still sends nothing to other sites, including the callback.
+    response["Referrer-Policy"] = "same-origin"
     response["X-Content-Type-Options"] = "nosniff"
     return response
 

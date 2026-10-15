@@ -1,5 +1,9 @@
 # Changelog
 
+## 16.1.6 — OAuth sign-in passes Cognita's form check again (2026-10-15)
+
+- 16.1.5 began forwarding the sign-in pages' referrer policy, `no-referrer`, to the browser. Under that policy Chrome reports the origin of a form POST as `null`, so the login and approval forms failed Cognita's cross-site request check with "CSRF verification failed". The policy is now `same-origin`: Cognita sees its own origin, and other sites, including the client's callback, still receive nothing.
+
 ## 16.1.5 — Any OAuth MCP client can connect (2026-10-15)
 
 - Cognita accepted OAuth sign-ins only from Claude, ChatGPT, OpenAI, and localhost. Every other MCP client, such as TypingMind, was refused at sign-up with `redirect_uris contains an unsupported URI`, and its final redirect would also have been blocked. Any client can now register, by dynamic registration or by a client metadata document from any HTTPS host.

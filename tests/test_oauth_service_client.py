@@ -160,7 +160,7 @@ async def test_forward_preserves_repeated_cookies_and_rejects_loopback_location(
             headers=[
                 ("set-cookie", "a=1"), ("set-cookie", "b=2"), ("location", "https://public.example/ok"),
                 ("content-security-policy", "default-src 'none'; form-action 'self'"),
-                ("x-frame-options", "DENY"), ("referrer-policy", "no-referrer"),
+                ("x-frame-options", "DENY"), ("referrer-policy", "same-origin"),
                 ("x-content-type-options", "nosniff"), ("x-internal-debug", "drop-me"),
             ],
             content=b"redirect",
@@ -180,7 +180,7 @@ async def test_forward_preserves_repeated_cookies_and_rejects_loopback_location(
     # The child's browser protections reach the browser; unknown headers do not.
     assert response.headers["content-security-policy"] == "default-src 'none'; form-action 'self'"
     assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["referrer-policy"] == "same-origin"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert "x-internal-debug" not in response.headers
 

@@ -1,3 +1,5 @@
+Version 16.1.6 carries this change; 16.1.5 was withdrawn because its sign-in pages failed Cognita's cross-site request check in Chrome.
+
 Cognita now accepts OAuth sign-ins from any MCP client. Earlier releases accepted only Claude, ChatGPT, OpenAI, and localhost. Other clients, such as TypingMind, were refused when they tried to register (`redirect_uris contains an unsupported URI`).
 
 **Latest verified platform installers (16.1.0; these do not include this patch):**
