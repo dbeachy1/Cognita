@@ -1,5 +1,13 @@
 # Changelog
 
+## 16.1.5 — Any OAuth MCP client can connect (2026-10-15)
+
+- Cognita accepted OAuth sign-ins only from Claude, ChatGPT, OpenAI, and localhost. Every other MCP client, such as TypingMind, was refused at sign-up with `redirect_uris contains an unsupported URI`, and its final redirect would also have been blocked. Any client can now register, by dynamic registration or by a client metadata document from any HTTPS host.
+- Your Cognita password on the approval page remains the gate. That page now says which site the access is sent to, because a client chooses its own display name. Callback hosts with non-ASCII lookalike characters are refused so that line cannot be spoofed; internationalized domains work in their `xn--` form.
+- Callback addresses must still be HTTPS, or plain HTTP to this machine's loopback, with no embedded credentials or fragment. The rule is checked at registration and again at every authorization, whichever way the client registered. Client metadata and key fetches still refuse private addresses, redirects, and oversized or slow responses. A metadata URL seen for the first time must fit under the same 100-client cap as dynamic registration and a budget of 10 new URLs per hour, and a failed fetch backs off instead of retrying on every request.
+- The approval and sign-in pages now reach the browser with their security headers (content security policy, frame blocking, referrer policy, nosniff). The OAuth proxy had been dropping them since 7.0, so those protections never applied. The approval page's form policy permits the one callback origin validated for that request.
+- `oauth_allowed_client_hosts` and `oauth_cimd_allowed_hosts` are removed. A `cognita.yaml` that still lists them loads unchanged; the keys are ignored. Existing connectors keep working. See `docs/RELEASE-16.1.5.md`.
+
 ## 16.1.4 — Index DOCX content-control text (2026-10-14)
 
 - General DOCX extraction includes text inside Word content controls, including nested block and inline controls and controls in tables. Documents containing only content-control text no longer fail upload as empty; mixed documents no longer silently omit that text.

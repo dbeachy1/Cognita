@@ -202,16 +202,14 @@ class CognitaConfig(BaseModel):
     oauth_connect_grace_s: float = 6.0
     oauth_service_shutdown_timeout_s: float = 2.0
     oauth_service_store_path: Path | None = None  # default: <data_root>/oauth-service.sqlite3
-    oauth_cimd_allowed_hosts: list[str] = ["chatgpt.com", "claude.ai"]
     oauth_store_path: Path | None = None  # default: <data_root>/oauth.sqlite3
     oauth_access_token_ttl_seconds: int = 3600
-    oauth_allowed_client_hosts: list[str] = [
-        "claude.ai",
-        "chatgpt.com",
-        "openai.com",
-        "127.0.0.1",
-        "localhost",
-    ]
+    # 16.1.5: the oauth_allowed_client_hosts and oauth_cimd_allowed_hosts lists
+    # are gone. They limited which MCP clients could sign in to Claude, ChatGPT,
+    # and OpenAI, which locked out every other OAuth client (TypingMind was the
+    # first to hit it). The password-gated consent page is the real gate, and it
+    # now names the site the approval returns to. Old configs that still carry
+    # either key load unchanged; pydantic ignores the unknown keys.
     # Isolated-test compatibility switch for retired /mcp/<secret> requests.
     # Release mode ignores it; production uses the connector's canonical
     # /mcp/connectors/<connector-slug>/mcp/v<generation> resource.
@@ -669,28 +667,6 @@ class CognitaConfig(BaseModel):
             raise ValueError("oauth_connect_grace_s must be between 5 and 30 seconds")
         if self.oauth_service_shutdown_timeout_s > 2.0:
             raise ValueError("oauth_service_shutdown_timeout_s must not exceed 2 seconds")
-        for host in self.oauth_cimd_allowed_hosts:
-            labels = host.split(".")
-            if (
-                host != host.strip()
-                or not host
-                or host.startswith(".")
-                or host.endswith(".")
-                or "*" in host
-                or ":" in host
-                or "/" in host
-                or any(
-                    not label
-                    or not label.replace("-", "").isalnum()
-                    or label.startswith("-")
-                    or label.endswith("-")
-                    for label in labels
-                )
-            ):
-                raise ValueError(
-                    "oauth_cimd_allowed_hosts entries must be exact hostnames "
-                    f"without wildcard or subdomain syntax (got {host!r})"
-                )
         return self
 
 
@@ -761,10 +737,6 @@ def oauth_service_readiness(config: CognitaConfig) -> list[str]:
             problems.append("an Argon2id admin password is not configured")
     if config.oauth_access_token_ttl_seconds < 60:
         problems.append("oauth_access_token_ttl_seconds must be at least 60")
-    if not config.oauth_allowed_client_hosts:
-        problems.append("oauth_allowed_client_hosts is empty")
-    if not config.oauth_cimd_allowed_hosts:
-        problems.append("oauth_cimd_allowed_hosts is empty")
     try:
         ensure_oauth_service_key(config)
     except (OSError, RuntimeError, ValueError) as exc:

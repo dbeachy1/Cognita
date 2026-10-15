@@ -32,6 +32,7 @@ from cognita.connectors import (
     parse_route_resource,
     resolve_project_access,
 )
+from cognita.oauth_redirect import redirect_uri_safe
 from cognita.public_url import effective_public_base_url
 from cognita.registry import Registry
 
@@ -305,6 +306,23 @@ def get_policy() -> ResourcePolicy:
 
 class CognitaOAuth2Validator(OAuth2Validator):
     """DOT validator with Cognita's single-connector resource binding."""
+
+    # 16.1.5: any client may register (DCR, or CIMD from any host), and DOT's
+    # own CIMD resolver stores redirect URIs without checking their shape.
+    # Every authorization passes through these two hooks, so the redirect rule
+    # lives here: HTTPS anywhere, plain HTTP only to loopback.
+    def validate_redirect_uri(self, client_id, redirect_uri, request, *args, **kwargs):
+        if not redirect_uri_safe(redirect_uri):
+            log.warning(
+                "OAuth authorization rejected reason=unsafe_redirect_uri correlation_id=%s",
+                self._auth_correlation_id(request),
+            )
+            return False
+        return super().validate_redirect_uri(client_id, redirect_uri, request, *args, **kwargs)
+
+    def get_default_redirect_uri(self, client_id, request, *args, **kwargs):
+        default = super().get_default_redirect_uri(client_id, request, *args, **kwargs)
+        return default if redirect_uri_safe(default) else None
 
     @staticmethod
     def _auth_correlation_id(request) -> str:

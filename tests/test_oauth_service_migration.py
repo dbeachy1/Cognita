@@ -93,8 +93,6 @@ def make_config(root: Path) -> Path:
                 "data_root": str(root / "data"),
                 "registry_path": str(registry),
                 "public_base_url": "http://127.0.0.1:8675",
-                "oauth_allowed_client_hosts": ["claude.ai"],
-                "oauth_cimd_allowed_hosts": ["chatgpt.com", "claude.ai"],
             },
             sort_keys=False,
         ),
@@ -112,7 +110,7 @@ def make_source(root: Path) -> tuple[Path, bytes]:
             "INSERT INTO clients VALUES(?,?,?,?,?)",
             [
                 ("client-dcr", "DCR client", json.dumps(["https://claude.ai/callback"]), "dcr", 100),
-                ("client-bad", "Bad client", json.dumps(["https://evil.example/callback"]), "dcr", 100),
+                ("client-bad", "Bad client", json.dumps(["http://evil.example/callback"]), "dcr", 100),
             ],
         )
         resource = "http://127.0.0.1:8675/mcp/KEI"

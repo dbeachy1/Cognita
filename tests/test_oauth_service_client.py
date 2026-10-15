@@ -157,7 +157,12 @@ async def test_forward_preserves_repeated_cookies_and_rejects_loopback_location(
         assert request.headers["host"] == "public.example"
         return httpx.Response(
             302,
-            headers=[("set-cookie", "a=1"), ("set-cookie", "b=2"), ("location", "https://public.example/ok")],
+            headers=[
+                ("set-cookie", "a=1"), ("set-cookie", "b=2"), ("location", "https://public.example/ok"),
+                ("content-security-policy", "default-src 'none'; form-action 'self'"),
+                ("x-frame-options", "DENY"), ("referrer-policy", "no-referrer"),
+                ("x-content-type-options", "nosniff"), ("x-internal-debug", "drop-me"),
+            ],
             content=b"redirect",
         )
 
@@ -172,6 +177,12 @@ async def test_forward_preserves_repeated_cookies_and_rejects_loopback_location(
         await client._http_client.aclose()
     assert response.status_code == 302
     assert response.headers.get_list("set-cookie") == ["a=1", "b=2"]
+    # The child's browser protections reach the browser; unknown headers do not.
+    assert response.headers["content-security-policy"] == "default-src 'none'; form-action 'self'"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "x-internal-debug" not in response.headers
 
     async def leaked(_: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "http://127.0.0.1:8778/oauth/login"})
@@ -186,11 +197,13 @@ async def test_forward_preserves_repeated_cookies_and_rejects_loopback_location(
 
 
 @pytest.mark.asyncio
-async def test_forward_accepts_policy_allowed_callbacks_but_not_untrusted_hosts() -> None:
+async def test_forward_accepts_any_safe_callback_but_not_unsafe_shapes() -> None:
     locations = iter([
         "https://chatgpt.com/oauth/callback?code=one&state=two",
         "http://127.0.0.1:49152/callback?code=one",
-        "https://evil.example/callback?code=one",
+        "https://www.typingmind.com/oauth/callback?code=one",
+        "http://evil.example/callback?code=one",
+        "http://127.0.0.1:8778/oauth/authorize?code=one",
     ])
 
     async def handler(_: httpx.Request) -> httpx.Response:
@@ -199,18 +212,21 @@ async def test_forward_accepts_policy_allowed_callbacks_but_not_untrusted_hosts(
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = OAuthServiceClient(
         public_base_url="https://public.example",
-        allowed_redirect_hosts=["chatgpt.com"],
         http_client=http_client,
     )
     try:
         first = await client.forward(method="GET", path="/oauth/authorize")
         second = await client.forward(method="GET", path="/oauth/authorize")
-        rejected = await client.forward(method="GET", path="/oauth/authorize")
+        any_https_host = await client.forward(method="GET", path="/oauth/authorize")
+        plain_http_remote = await client.forward(method="GET", path="/oauth/authorize")
+        child_origin = await client.forward(method="GET", path="/oauth/authorize")
     finally:
         await http_client.aclose()
     assert first.status_code == 302
     assert second.status_code == 302
-    assert rejected.status_code == 502
+    assert any_https_host.status_code == 302
+    assert plain_http_remote.status_code == 502
+    assert child_origin.status_code == 502
 
 @pytest.mark.asyncio
 async def test_revoke_controls_bootstrap_django_csrf_and_preserve_basic_auth() -> None:

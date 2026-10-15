@@ -189,8 +189,35 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     assert "name=\"deny\"" in consent.text
     assert "&lt;Client &amp; Test&gt;" in consent.text
     assert "<Client & Test>" not in consent.text
+    # Any client may register, so the page names where approval sends access.
+    assert "access is sent to chatgpt.com" in consent.text
+    # Chrome applies form-action to the Authorize POST's redirect chain.
+    assert "form-action 'self' https://chatgpt.com;" in consent["Content-Security-Policy"]
+    assert "form-action 'self';" in login_page["Content-Security-Policy"]
     assert "future enabled projects are included unless excluded" in consent.text
     assert "includes all enabled projects" not in consent.text
+
+    # DOT's own CIMD resolver stores redirect URIs unchecked, so the validator
+    # refuses an unsafe one at authorize time whatever registered it.
+    from oauth2_provider.models import get_application_model
+
+    application_model = get_application_model()
+    unsafe_client = application_model.objects.create(
+        client_id="unsafe-client",
+        name="Unsafe",
+        client_type=application_model.CLIENT_PUBLIC,
+        authorization_grant_type=application_model.GRANT_AUTHORIZATION_CODE,
+        redirect_uris="http://evil.example/callback",
+        client_secret="",
+    )
+    unsafe_authorization = client.get(
+        "/oauth/authorize",
+        {**authorization, "client_id": unsafe_client.client_id,
+         "redirect_uri": "http://evil.example/callback"},
+    )
+    assert unsafe_authorization.status_code == 400
+    assert "evil.example" not in unsafe_authorization.get("Location", "")
+    unsafe_client.delete()
 
     malformed_consent = client.post("/oauth/authorize", {"allow": "1"})
     assert malformed_consent.status_code == 200
@@ -284,12 +311,22 @@ with TemporaryDirectory(prefix="cognita-oauth8-host-test-") as root:
     )
     assert capacity_rejected.status_code == 503
 
-    invalid = dict(valid)
-    invalid["redirect_uris"] = ["https://evil.example/callback"]
-    rejected = client.post(
-        "/oauth/register", data=json.dumps(invalid), content_type="application/json"
-    )
-    assert rejected.status_code == 400
+    # 16.1.5: no client host list. Unsafe shapes are still refused: plain HTTP
+    # off loopback, userinfo, fragments, wildcards, and non-HTTP schemes.
+    for unsafe in (
+        "http://evil.example/callback",
+        "https://user@evil.example/callback",
+        "https://evil.example/callback#frag",
+        "https://*.evil.example/callback",
+        "javascript:alert(1)",
+    ):
+        invalid = dict(valid)
+        invalid["redirect_uris"] = [unsafe]
+        rejected = client.post(
+            "/oauth/register", data=json.dumps(invalid), content_type="application/json"
+        )
+        assert rejected.status_code == 400, unsafe
+        assert rejected.json()["error_description"] == "redirect_uris contains an unsupported URI"
     assert client.get("/_cognita/connections", HTTP_AUTHORIZATION=internal).json() == []
 
     db.connections.close_all()

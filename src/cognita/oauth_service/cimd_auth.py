@@ -107,21 +107,8 @@ def _setting(name: str, default):
     return value
 
 
-def _allowed_hosts() -> set[str]:
-    user_settings = getattr(oauth2_settings, "user_settings", {})
-    if "CIMD_ALLOWED_HOSTS" in user_settings:
-        configured = user_settings["CIMD_ALLOWED_HOSTS"]
-    else:
-        # Keep the lazy DOT setting uncached until the backing mapping has no
-        # explicit value.  Evaluating it as a ``dict.get`` default would cache
-        # an earlier host list and make runtime/test reconfiguration stale.
-        configured = getattr(oauth2_settings, "CIMD_ALLOWED_HOSTS", ())
-    configured = configured or ()
-    # Cognita's config validator intentionally permits exact hostnames only.
-    return {str(host).lower() for host in configured if isinstance(host, str)}
-
-
-def _exact_allowed_https_uri(uri: object, *, allowed_hosts: set[str] | None = None) -> bool:
+def _safe_https_uri(uri: object) -> bool:
+    """Accept any well-formed HTTPS URL; the fetchers enforce public addresses."""
     if not isinstance(uri, str) or len(uri) > 2048:
         return False
     try:
@@ -130,12 +117,9 @@ def _exact_allowed_https_uri(uri: object, *, allowed_hosts: set[str] | None = No
         port = parsed.port
     except (TypeError, ValueError):
         return False
-    hosts = _allowed_hosts() if allowed_hosts is None else allowed_hosts
     return bool(
         parsed.scheme.lower() == "https"
         and host
-        and hosts
-        and host.lower() in hosts
         and parsed.username is None
         and parsed.password is None
         and parsed.fragment == ""
@@ -193,8 +177,8 @@ class SafeJWKSFetcher:
     """Fetch a JWKS with the same bounded SSRF defenses as DOT CIMD."""
 
     def fetch(self, uri: str) -> tuple[dict, int]:
-        if not _exact_allowed_https_uri(uri):
-            raise ValueError("JWKS URI is not an allowed HTTPS endpoint")
+        if not _safe_https_uri(uri):
+            raise ValueError("JWKS URI is not a valid HTTPS endpoint")
         parsed = urlsplit(uri)
         port = parsed.port or 443
         try:
@@ -285,15 +269,74 @@ def _metadata_record(client_id: str) -> ClientAuthMetadata | None:
     return None
 
 
+# 16.1.5: any HTTPS host may publish a client metadata document, and an
+# unauthenticated GET /oauth/authorize?client_id=<url> is enough to make the
+# service fetch it and store a row. A client that already has a row may always
+# refresh. A URL seen for the first time must fit under the shared client cap
+# and a service-wide budget of new URLs per hour, so wildcard DNS cannot fill
+# the cap (locking out DCR clients) or turn Cognita into an open fetcher. The
+# budget is global rather than per address because the attacker picks both.
+FIRST_SIGHT_CIMD_PER_HOUR = 10
+FIRST_SIGHT_WINDOW_SECONDS = 3600
+# Cognita's resolver and DOT's both consult the permission for one request;
+# a URL admitted moments ago is admitted again without spending budget.
+FIRST_SIGHT_GRACE_SECONDS = 600
+_first_sight_lock = threading.Lock()
+_first_sight: OrderedDict[str, float] = OrderedDict()
+_first_sight_clock = time.monotonic  # injectable for tests
+
+
+class CognitaCIMDPermission:
+    """DOT CIMD permission: any host, with first-sight cap and rate budget."""
+
+    def has_permission(self, request, client_id) -> bool:
+        if get_application_model().objects.filter(client_id=client_id).exists():
+            return True
+        from .views import REGISTERED_CLIENT_CAPACITY, registered_client_count
+
+        now = _first_sight_clock()
+        with _first_sight_lock:
+            while _first_sight and next(iter(_first_sight.values())) <= now - FIRST_SIGHT_WINDOW_SECONDS:
+                _first_sight.popitem(last=False)
+            admitted = _first_sight.get(client_id)
+            if admitted is not None and admitted > now - FIRST_SIGHT_GRACE_SECONDS:
+                return True
+            if registered_client_count() >= REGISTERED_CLIENT_CAPACITY:
+                log.warning("CIMD first-sight registration refused reason=capacity client_host=%s",
+                            _safe_client_host(client_id))
+                return False
+            if len(_first_sight) >= FIRST_SIGHT_CIMD_PER_HOUR:
+                log.warning("CIMD first-sight registration refused reason=rate_limit client_host=%s",
+                            _safe_client_host(client_id))
+                return False
+            _first_sight.pop(client_id, None)
+            _first_sight[client_id] = now
+            return True
+
+
 def _fetch_metadata(client_id: str) -> tuple[dict, int]:
     if not dot_cimd._registration_permitted(None, client_id):
         raise ValueError("CIMD host is not permitted")
     if not dot_cimd._validate_client_id_url(client_id):
         raise ValueError("CIMD client_id URL is invalid")
-    fetcher = _setting("CIMD_METADATA_FETCHER", dot_cimd.SafeMetadataFetcher)
-    data, age = fetcher().fetch(client_id)
-    if not isinstance(data, dict) or data.get("client_id") != client_id:
-        raise ValueError("CIMD metadata client_id mismatch")
+    # Same failure backoff and in-flight cap as DOT's own resolver, so a slow
+    # or failing URL cannot be refetched on every request or tie up workers.
+    backoff_key = dot_cimd._backoff_cache_key(client_id)
+    if dot_cimd.cache.get(backoff_key):
+        raise ValueError("CIMD metadata fetch is backing off")
+    with dot_cimd._fetch_slot() as acquired:
+        if not acquired:
+            raise ValueError("CIMD metadata fetch capacity reached")
+        try:
+            fetcher = _setting("CIMD_METADATA_FETCHER", dot_cimd.SafeMetadataFetcher)
+            data, age = fetcher().fetch(client_id)
+            if not isinstance(data, dict) or data.get("client_id") != client_id:
+                raise ValueError("CIMD metadata client_id mismatch")
+        except Exception:
+            dot_cimd.cache.set(
+                backoff_key, True, oauth2_settings.CIMD_FAILURE_BACKOFF_SECONDS
+            )
+            raise
     return data, int(age)
 
 
@@ -331,7 +374,7 @@ def _private_metadata(client_id: str, metadata: dict) -> ClientAuthMetadata | No
     if metadata.get("token_endpoint_auth_method", "none") != "private_key_jwt":
         return None
     jwks_uri = metadata.get("jwks_uri")
-    if not _exact_allowed_https_uri(jwks_uri):
+    if not _safe_https_uri(jwks_uri):
         raise ValueError("CIMD private_key_jwt metadata has an invalid jwks_uri")
     # RFC 7591 client metadata uses the singular
     # ``token_endpoint_auth_signing_alg`` member.  The similarly named
@@ -698,3 +741,5 @@ def clear_caches_for_tests() -> None:
         _metadata.clear()
         _jwks.clear()
         _replays.clear()
+    with _first_sight_lock:
+        _first_sight.clear()

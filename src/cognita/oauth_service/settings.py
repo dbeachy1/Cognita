@@ -161,9 +161,12 @@ def configure_django(config: CognitaConfig, key: bytes, store_path: Path) -> Non
                     "oauth2_provider.dcr.AllowAllDCRPermission",
                 ),
                 "CIMD_ENABLED": True,
-                "CIMD_ALLOWED_HOSTS": list(config.oauth_cimd_allowed_hosts),
+                # 16.1.5: any HTTPS client metadata URL may register, matching
+                # DCR, under the shared client cap and a first-sight budget.
+                # DOT's SafeMetadataFetcher still refuses non-public addresses,
+                # redirects, and oversized or slow documents.
                 "CIMD_REGISTRATION_PERMISSION_CLASSES": (
-                    "oauth2_provider.cimd.HostAllowlistCIMDPermission",
+                    "cognita.oauth_service.cimd_auth.CognitaCIMDPermission",
                 ),
                 # Cognita's validator adds RFC 7523 private_key_jwt for the
                 # OpenAI CIMD client while retaining DOT's public ``none`` path.

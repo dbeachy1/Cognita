@@ -156,6 +156,7 @@
   "oauth.consent.error_return": "Retournez à l’application demandeuse et réessayez.",
   "oauth.consent.heading": "Autoriser {application}",
   "oauth.consent.intro": "Cognita demande un accès via ce connecteur.",
+  "oauth.consent.callback": "Après votre approbation, l’accès est envoyé à {host}. N’approuvez que si vous avez lancé cette connexion depuis ce site.",
   "oauth.consent.connector_access": "Accès au connecteur",
   "oauth.consent.project_mode_all": "{name} inclut les projets activés avec un accès par défaut {access}, sauf si un projet est exclu des valeurs par défaut. Les dérogations explicites sont affichées ci-dessous ; les futurs projets activés seront aussi inclus, sauf exclusion. Votre administrateur gère ces paramètres d’accès et ils peuvent changer.",
   "oauth.consent.project_mode_selected": "{name} est limité aux projets activés sélectionnés ci-dessous. Votre administrateur gère ces paramètres d’accès et ils peuvent changer.",

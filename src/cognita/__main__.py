@@ -705,7 +705,6 @@ async def _serve_async(
         internal_client_secret=oauth_key.hex(),
         timeout=config.oauth_service_request_timeout_s,
         public_base_url=config.public_base_url,
-        allowed_redirect_hosts=config.oauth_allowed_client_hosts,
     )
     oauth_supervisor = OAuthServiceSupervisor(
         config,

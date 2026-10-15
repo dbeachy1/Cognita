@@ -19,10 +19,11 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urlparse
 
 from cognita.config import DEFAULT_CONFIG_PATH, CognitaConfig, load_config
+from cognita.oauth_redirect import redirect_uri_safe
 from cognita.registry import Registry
 from cognita.oauth_service.storage import ensure_private_sqlite
 
@@ -94,36 +95,12 @@ def _hash(value: Any) -> str | None:
     return value.lower()
 
 
-def _valid_host(host: str, allowed: Iterable[str]) -> bool:
-    host = host.lower().rstrip(".")
-    for configured in allowed:
-        item = str(configured).lower().strip().rstrip(".")
-        if host == item or (item not in {"localhost", "127.0.0.1", "::1"} and host.endswith("." + item)):
-            return True
-    return False
-
-
-def _valid_redirect(uri: Any, allowed: Iterable[str]) -> bool:
-    if not isinstance(uri, str) or not uri or "\x00" in uri:
-        return False
-    try:
-        parsed = urlparse(uri)
-        if parsed.fragment or parsed.username or parsed.password or not parsed.hostname:
-            return False
-        loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
-            return False
-        return _valid_host(parsed.hostname, allowed)
-    except ValueError:
-        return False
-
-
-def _valid_cimd_id(value: str, allowed: Iterable[str]) -> bool:
+def _valid_cimd_id(value: str) -> bool:
     try:
         parsed = urlparse(value)
     except ValueError:
         return False
-    return parsed.scheme == "https" and bool(parsed.hostname) and _valid_host(parsed.hostname, allowed)
+    return parsed.scheme == "https" and bool(parsed.hostname)
 
 
 def _redirects(value: Any) -> tuple[str, ...] | None:
@@ -282,9 +259,9 @@ def _application_for(row: sqlite3.Row, subject: Any, config: CognitaConfig) -> t
         return None, "invalid_client_metadata"
     if source not in {"cimd", "dcr", "manual"}:
         return None, "unsupported_registration_source"
-    if source == "cimd" and not _valid_cimd_id(client_id, config.oauth_cimd_allowed_hosts):
+    if source == "cimd" and not _valid_cimd_id(client_id):
         return None, "invalid_cimd_client_id"
-    if redirects is None or any(not _valid_redirect(item, config.oauth_allowed_client_hosts) for item in redirects):
+    if redirects is None or any(not redirect_uri_safe(item) for item in redirects):
         return None, "invalid_redirect_uri"
     model = get_application_model()
     defaults = {

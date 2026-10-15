@@ -21,7 +21,7 @@ if not settings.configured:
         USE_TZ=True,
         INSTALLED_APPS=["django.contrib.auth", "django.contrib.contenttypes", "oauth2_provider"],
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
-        OAUTH2_PROVIDER={"CIMD_ALLOWED_HOSTS": ["chatgpt.com"]},
+        OAUTH2_PROVIDER={},
     )
     import django
 
@@ -151,19 +151,17 @@ def test_jwks_transport_failure_fails_closed(monkeypatch):
     assert not cimd_auth.validate_client_assertion(record, _assertion(private), TOKEN_ENDPOINT)
 
 
-def test_private_metadata_requires_exact_allowed_jwks_host(monkeypatch):
-    monkeypatch.setitem(cimd_auth.oauth2_settings.user_settings, "CIMD_ALLOWED_HOSTS", ["chatgpt.com"])
+def test_private_metadata_requires_https_jwks_uri():
     metadata = {
         "token_endpoint_auth_method": "private_key_jwt",
-        "jwks_uri": "https://sub.chatgpt.com/oauth/jwks.json",
+        "jwks_uri": "http://chatgpt.com/oauth/jwks.json",
         "token_endpoint_auth_signing_alg": "RS256",
     }
     with pytest.raises(ValueError):
         cimd_auth._private_metadata(CLIENT_ID, metadata)
 
 
-def test_private_metadata_accepts_chatgpt_standard_signing_algorithm_field(monkeypatch):
-    monkeypatch.setitem(cimd_auth.oauth2_settings.user_settings, "CIMD_ALLOWED_HOSTS", ["chatgpt.com"])
+def test_private_metadata_accepts_chatgpt_standard_signing_algorithm_field():
     metadata = {
         "token_endpoint_auth_method": "private_key_jwt",
         "jwks_uri": "https://chatgpt.com/oauth/jwks.json",
@@ -174,12 +172,19 @@ def test_private_metadata_accepts_chatgpt_standard_signing_algorithm_field(monke
     assert record.algorithms == frozenset({"RS256"})
 
 
-def test_allowed_cimd_hosts_follow_runtime_setting_after_lazy_lookup(monkeypatch):
-    monkeypatch.setitem(cimd_auth.oauth2_settings.user_settings, "CIMD_ALLOWED_HOSTS", ["chatgpt.com"])
-    assert not cimd_auth._exact_allowed_https_uri("https://claude.ai/client.json")
-
-    monkeypatch.setitem(cimd_auth.oauth2_settings.user_settings, "CIMD_ALLOWED_HOSTS", ["claude.ai"])
-    assert cimd_auth._exact_allowed_https_uri("https://claude.ai/client.json")
+def test_jwks_uri_accepts_any_https_host_but_not_unsafe_shapes():
+    # 16.1.5: no CIMD host list; SafeJWKSFetcher still refuses private addresses.
+    assert cimd_auth._safe_https_uri("https://www.typingmind.com/jwks.json")
+    assert cimd_auth._safe_https_uri("https://claude.ai/client.json")
+    for unsafe in (
+        "http://claude.ai/jwks.json",
+        "https://user@claude.ai/jwks.json",
+        "https://claude.ai/jwks.json#frag",
+        "https://claude.ai",
+        "https://" + "a" * 2050 + ".example/jwks.json",
+        None,
+    ):
+        assert not cimd_auth._safe_https_uri(unsafe), unsafe
 
 
 def test_public_metadata_accepts_claude_auxiliary_jwt_bearer_grant():
@@ -222,25 +227,16 @@ def test_public_metadata_rejects_unadvertised_auxiliary_grants(grant_type):
         cimd_auth._public_application_kwargs(metadata)
 
 
-def test_cimd_fetch_rejects_unknown_host_and_client_id_mismatch(monkeypatch):
-    monkeypatch.setitem(
-        cimd_auth.oauth2_settings.user_settings,
-        "CIMD_ALLOWED_HOSTS",
-        ["claude.ai"],
-    )
-    monkeypatch.setitem(
-        cimd_auth.oauth2_settings.user_settings,
-        "CIMD_REGISTRATION_PERMISSION_CLASSES",
-        ("oauth2_provider.cimd.HostAllowlistCIMDPermission",),
-    )
-
+def test_cimd_fetch_accepts_any_host_and_rejects_client_id_mismatch(monkeypatch):
     class Fetcher:
         def fetch(self, client_id):
+            if client_id == "https://www.typingmind.com/client.json":
+                return {"client_id": client_id}, 300
             return {"client_id": "https://claude.ai/another-document"}, 300
 
     monkeypatch.setitem(cimd_auth.oauth2_settings.user_settings, "CIMD_METADATA_FETCHER", Fetcher)
-    with pytest.raises(ValueError, match="host is not permitted"):
-        cimd_auth._fetch_metadata("https://evil.example/client.json")
+    data, _ = cimd_auth._fetch_metadata("https://www.typingmind.com/client.json")
+    assert data["client_id"] == "https://www.typingmind.com/client.json"
     with pytest.raises(ValueError, match="client_id mismatch"):
         cimd_auth._fetch_metadata("https://claude.ai/oauth/mcp-oauth-client-metadata")
 
@@ -622,13 +618,15 @@ with TemporaryDirectory(prefix="cognita-oauth-cimd-token-") as owned:
         "connectors_path": str(connectors),
         "public_base_url": BASE_URL,
         "oauth_service_store_path": str(data / "oauth.sqlite3"),
-        "oauth_cimd_allowed_hosts": ["chatgpt.com"],
         "admin_username": "admin",
         "admin_password_hash": PasswordHasher().hash("pw"),
     }), encoding="utf-8")
 
     context = bootstrap_service(config)
     create_application(context)
+    from oauth2_provider import cimd as dot_cimd
+    # 16.1.5: the service registers CIMD clients from any HTTPS host.
+    assert dot_cimd._registration_permitted(None, "https://www.typingmind.com/client.json")
     from django.contrib.auth import get_user_model
     from django.test import Client
     from django.utils import timezone

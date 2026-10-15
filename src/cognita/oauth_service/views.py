@@ -42,6 +42,7 @@ from oauthlib.oauth2.rfc6749.errors import CustomOAuth2Error
 
 from cognita.admin_auth import has_argon2_credentials, verify_login
 from cognita.localization import SUPPORTED_LOCALES, resolve_locale, translate
+from cognita.oauth_redirect import is_ipv6_literal, redirect_uri_safe
 from cognita.public_url import effective_public_base_url
 
 from .policy import get_policy
@@ -73,6 +74,17 @@ def context() -> ServiceContext:
     if _CONTEXT is None:
         raise RuntimeError("OAuth service context is not initialized")
     return _CONTEXT
+
+
+# One cap on stored third-party clients, shared by DCR and first-sight CIMD
+# registration (16.1.5 opened both to any host).
+REGISTERED_CLIENT_CAPACITY = 100
+
+
+def registered_client_count() -> int:
+    return get_application_model().objects.exclude(
+        client_id=context().internal_client_id
+    ).count()
 
 
 def _public_base_url() -> str:
@@ -218,12 +230,38 @@ def _internal_error() -> JsonResponse:
     return response
 
 
-def _browser_security(response: HttpResponse) -> HttpResponse:
-    """Apply the browser-flow protections to pages, errors, and redirects."""
+def _callback_csp_source(redirect_uri: object) -> str:
+    """Return a safe callback URI's origin as a CSP source, else an empty string."""
+    if not redirect_uri_safe(redirect_uri):
+        return ""
+    parsed = urlsplit(redirect_uri)
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return f"{parsed.scheme.lower()}://{parsed.hostname.lower()}{port}"
+
+
+def _browser_security(response: HttpResponse, callback_uri: object = None) -> HttpResponse:
+    """Apply the browser-flow protections to pages, errors, and redirects.
+
+    Chrome applies form-action to the whole form redirect chain, so the consent
+    page must also permit the one callback origin DOT has validated for this
+    request, or the Authorize POST's redirect to the client is blocked. These
+    headers reach the browser only because the parent proxy forwards them
+    (16.1.5; before that it dropped them and this policy never applied).
+    """
     response["Cache-Control"] = "no-store"
     response["Pragma"] = "no-cache"
+    form_action = "form-action 'self'; "
+    if redirect_uri_safe(callback_uri):
+        parsed = urlsplit(callback_uri)
+        if is_ipv6_literal(parsed.hostname):
+            # CSP source syntax has no IPv6 literals; Chrome would drop the
+            # source and block the redirect to e.g. http://[::1]:8080. Leave
+            # form-action out for that one page rather than break the client.
+            form_action = ""
+        else:
+            form_action = f"form-action 'self' {_callback_csp_source(callback_uri)}; "
     response["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+        f"default-src 'none'; style-src 'unsafe-inline'; {form_action}"
         "frame-ancestors 'none'; base-uri 'none'"
     )
     response["X-Frame-Options"] = "DENY"
@@ -399,6 +437,17 @@ class CognitaAuthorizationView(AuthorizationView):
             ui["heading"] = _message(
                 locale, "oauth.consent.heading", {"application": application.name}
             )
+        # Any client may register and choose its own name, so the name alone
+        # cannot tell a real connector from an impostor. DOT has already matched
+        # this redirect URI to the client's registration; show its host so the
+        # approver can see where the access is sent.
+        redirect_uri = kwargs.get("redirect_uri") or self.oauth2_data.get("redirect_uri")
+        try:
+            callback_host = urlsplit(redirect_uri).hostname if isinstance(redirect_uri, str) else None
+        except ValueError:
+            callback_host = None
+        if callback_host:
+            ui["callback"] = _message(locale, "oauth.consent.callback", {"host": callback_host})
         error = context_data.get("error")
         if error:
             error_id = (
@@ -491,7 +540,11 @@ class CognitaAuthorizationView(AuthorizationView):
                 return _browser_security(
                     _authorization_error_page(request)
                 )
-        return _browser_security(super().dispatch(request, *args, **kwargs))
+        response = super().dispatch(request, *args, **kwargs)
+        # DOT sets oauth2_data only after it has validated the request, so this
+        # is the client's registered callback, never an unchecked parameter.
+        callback_uri = (getattr(self, "oauth2_data", None) or {}).get("redirect_uri")
+        return _browser_security(response, callback_uri)
 
     def get(self, request, *args, **kwargs):
         try:
@@ -521,26 +574,15 @@ class CognitaAuthorizationView(AuthorizationView):
         return super().post(request, *args, **kwargs)
 
 
-def _host_allowed(uri: str, configured: list[str]) -> bool:
-    parsed = urlparse(uri)
-    if parsed.fragment or parsed.username or parsed.password or "*" in uri or not parsed.hostname:
-        return False
-    host = parsed.hostname.lower()
-    allowed = {item.lower().lstrip(".") for item in configured}
-    if parsed.scheme == "http":
-        return host in {"127.0.0.1", "localhost", "::1"}
-    if parsed.scheme != "https":
-        return False
-    return any(host == item or host.endswith("." + item) for item in allowed)
-
-
 class CognitaDCRView(DynamicClientRegistrationView):
     @staticmethod
     def _validate(data: dict) -> str | None:
         redirect_uris = data.get("redirect_uris", [])
         if not isinstance(redirect_uris, list) or not 1 <= len(redirect_uris) <= 10:
             return "redirect_uris must contain between one and ten URIs"
-        if not all(isinstance(uri, str) and _host_allowed(uri, context().config.oauth_allowed_client_hosts) for uri in redirect_uris):
+        # DOT runs with ALLOW_URI_WILDCARDS off; refusing "*" here keeps a
+        # wildcard-looking URI from being stored as a literal.
+        if not all(redirect_uri_safe(uri) and "*" not in uri for uri in redirect_uris):
             return "redirect_uris contains an unsupported URI"
         if data.get("token_endpoint_auth_method", "client_secret_basic") != "none":
             return "Only public clients are supported"
@@ -567,10 +609,7 @@ class CognitaDCRView(DynamicClientRegistrationView):
         # The IMMEDIATE SQLite transaction serializes the capacity check with DOT's
         # Application insert so concurrent anonymous registrations cannot exceed it.
         with transaction.atomic():
-            applications = get_application_model().objects.exclude(
-                client_id=context().internal_client_id
-            )
-            if applications.count() >= 100:
+            if registered_client_count() >= REGISTERED_CLIENT_CAPACITY:
                 return _json_error(
                     "temporarily_unavailable", "Registration capacity reached.", 503
                 )

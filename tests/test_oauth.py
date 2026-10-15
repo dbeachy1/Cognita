@@ -190,8 +190,6 @@ def _write_config(root: Path, port: int) -> tuple[Path, Path]:
             "oauth_service_port": port,
             "oauth_service_store_path": str(data / "oauth.sqlite3"),
             "connectors_path": str(connectors),
-            "oauth_allowed_client_hosts": ["chatgpt.com", "claude.ai", "127.0.0.1"],
-            "oauth_cimd_allowed_hosts": ["chatgpt.com", "claude.ai"],
             "admin_username": "admin",
             "admin_password_hash": PasswordHasher().hash("pw"),
         }),

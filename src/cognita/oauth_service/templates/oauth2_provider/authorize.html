@@ -9,6 +9,7 @@
   {% else %}
     <h1 id="authorization-title">{{ ui.heading }}</h1>
     <p class="muted">{{ ui.intro }}</p>
+    {% if ui.callback %}<p class="callback">{{ ui.callback }}</p>{% endif %}
     {% if connector %}
       <h2>{{ ui.connector_access }}</h2>
       {% if connector.project_mode == "all" %}

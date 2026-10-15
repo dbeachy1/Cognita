@@ -33,6 +33,7 @@ from .admin_auth import (
     verify_login,
 )
 from .config import CognitaConfig
+from .oauth_redirect import redirect_uri_safe
 from .oauth_store import SCOPE, ClientRegistration, OAuthStore, OAuthStoreError
 from .registry import Registry
 
@@ -159,8 +160,6 @@ def oauth_readiness(config: CognitaConfig) -> list[str]:
             problems.append("an Argon2id admin password is not configured")
     if config.oauth_access_token_ttl_seconds < 60:
         problems.append("oauth_access_token_ttl_seconds must be at least 60")
-    if not config.oauth_allowed_client_hosts:
-        problems.append("oauth_allowed_client_hosts is empty")
     if durable_install_secret(config) is None:
         problems.append("a durable per-install secret could not be created under data_root")
     return problems
@@ -189,28 +188,6 @@ def _token_error(code: str, description: str, status: int = 400) -> JSONResponse
         {"error": code, "error_description": description}, status_code=status,
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
-
-
-def _host_allowed(host: str | None, allowed: list[str]) -> bool:
-    host = (host or "").lower().rstrip(".")
-    for item in allowed:
-        item = item.lower().strip().rstrip(".")
-        if host == item or (item not in {"localhost", "127.0.0.1", "::1"} and host.endswith("." + item)):
-            return True
-    return False
-
-
-def _valid_redirect(uri: str, allowed: list[str]) -> bool:
-    try:
-        parsed = urlparse(uri)
-        if parsed.fragment or parsed.username or parsed.password or not parsed.hostname:
-            return False
-        loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
-            return False
-        return _host_allowed(parsed.hostname, allowed)
-    except ValueError:
-        return False
 
 
 def _redirect_matches(registered: str, presented: str) -> bool:
@@ -352,9 +329,7 @@ def _check_public_ip(host: str) -> None:
 
 async def _cimd_client(config: CognitaConfig, client_id: str) -> ClientRegistration:
     parsed = urlparse(client_id)
-    if parsed.scheme != "https" or not parsed.path or not _host_allowed(
-        parsed.hostname, config.oauth_allowed_client_hosts
-    ):
+    if parsed.scheme != "https" or not parsed.path or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Untrusted client metadata URL")
     _check_public_ip(parsed.hostname or "")
     try:
@@ -368,8 +343,7 @@ async def _cimd_client(config: CognitaConfig, client_id: str) -> ClientRegistrat
     redirects = data.get("redirect_uris")
     if data.get("client_id") != client_id or not isinstance(redirects, list) or not redirects:
         raise HTTPException(status_code=400, detail="Invalid client metadata document")
-    if any(not isinstance(uri, str) or not _valid_redirect(uri, config.oauth_allowed_client_hosts)
-           for uri in redirects):
+    if any(not redirect_uri_safe(uri) for uri in redirects):
         raise HTTPException(status_code=400, detail="Client metadata has an untrusted redirect URI")
     return ClientRegistration(
         client_id, str(data.get("client_name") or parsed.hostname)[:200], tuple(redirects), "cimd"
@@ -438,8 +412,7 @@ def install_oauth_routes(
         redirects = data.get("redirect_uris")
         if not isinstance(redirects, list) or not redirects or len(redirects) > 10:
             return _token_error("invalid_redirect_uri", "redirect_uris is required")
-        if any(not isinstance(uri, str) or not _valid_redirect(uri, config.oauth_allowed_client_hosts)
-               for uri in redirects):
+        if any(not redirect_uri_safe(uri) for uri in redirects):
             return _token_error("invalid_redirect_uri", "A redirect URI is not trusted")
         if data.get("token_endpoint_auth_method", "none") != "none":
             return _token_error("invalid_client_metadata", "Only public clients are supported")

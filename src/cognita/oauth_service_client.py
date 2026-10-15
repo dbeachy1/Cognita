@@ -19,13 +19,19 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .oauth_redirect import redirect_uri_safe
+
 log = logging.getLogger("cognita.oauth_service_client")
 
 REQUEST_HEADERS = frozenset(
     {"accept", "accept-language", "authorization", "content-type", "cookie", "origin", "referer", "user-agent"}
 )
+# 16.1.5: the browser-security headers are forwarded too. Before, the proxy
+# dropped them, so the consent and login pages reached the browser with no CSP,
+# frame protection, referrer policy, or nosniff.
 RESPONSE_HEADERS = frozenset(
-    {"cache-control", "content-language", "content-type", "expires", "location", "pragma", "retry-after", "set-cookie", "vary", "www-authenticate"}
+    {"cache-control", "content-language", "content-security-policy", "content-type", "expires", "location", "pragma",
+     "referrer-policy", "retry-after", "set-cookie", "vary", "www-authenticate", "x-content-type-options", "x-frame-options"}
 )
 HOP_BY_HOP_HEADERS = frozenset(
     {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"}
@@ -119,8 +125,6 @@ class OAuthServiceClient:
         internal_client_secret: str | bytes = "",
         timeout: float = 10.0,
         public_base_url: str = "",
-        accepted_redirect_uris: tuple[str, ...] | list[str] = (),
-        allowed_redirect_hosts: tuple[str, ...] | list[str] = (),
         max_body_bytes: int = 2 * 1024 * 1024,
         http_client: httpx.AsyncClient | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -134,10 +138,6 @@ class OAuthServiceClient:
         self.internal_client_secret = internal_client_secret.decode("utf-8", "replace") if isinstance(internal_client_secret, bytes) else internal_client_secret
         self.timeout = timeout
         self.public_base_url = public_base_url.rstrip("/")
-        self.accepted_redirect_uris = frozenset(accepted_redirect_uris)
-        self.allowed_redirect_hosts = frozenset(
-            host.lower().lstrip(".") for host in allowed_redirect_hosts
-        )
         self.max_body_bytes = max_body_bytes
         self._http_client = http_client
         self._transport = transport
@@ -513,36 +513,13 @@ class OAuthServiceClient:
             issuer = urlsplit(self.public_base_url)
             if parsed.scheme == issuer.scheme and parsed.netloc == issuer.netloc:
                 return True
-        if any(self._matches_registered_redirect(parsed, uri) for uri in self.accepted_redirect_uris):
-            return True
         child = urlsplit(self.base_url)
         if parsed.scheme == child.scheme and parsed.netloc == child.netloc:
             return False
-        host = parsed.hostname.lower()
-        if parsed.scheme == "http":
-            return host in {"127.0.0.1", "localhost", "::1"}
-        if parsed.scheme != "https":
-            return False
-        return any(host == item or host.endswith("." + item) for item in self.allowed_redirect_hosts)
-
-    @staticmethod
-    def _matches_registered_redirect(location, registered: str) -> bool:
-        expected = urlsplit(registered)
-        return (
-            not expected.fragment
-            and not expected.username
-            and not expected.password
-            and expected.scheme in {"http", "https"}
-            and bool(expected.hostname)
-            and location.scheme == expected.scheme
-            and location.netloc == expected.netloc
-            and location.path == expected.path
-            and (
-                not expected.query
-                or location.query == expected.query
-                or location.query.startswith(expected.query + "&")
-            )
-        )
+        # The child has already matched this redirect to the client's
+        # registration; the parent only refuses unsafe shapes (16.1.5 removed
+        # the client host list, so any client's callback may pass).
+        return redirect_uri_safe(location)
 
 
 __all__ = ["IntrospectionResult", "OAuthServiceClient", "OAuthServiceUnavailable"]

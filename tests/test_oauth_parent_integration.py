@@ -91,13 +91,13 @@ def _context(tmp_path):
     return config, registry, connector.slug, resource
 
 
-@pytest.mark.parametrize(
-    "host",
-    ["*", ".chatgpt.com", "*.chatgpt.com", "https://chatgpt.com", "chatgpt.com."],
-)
-def test_cimd_allowlist_rejects_non_exact_hosts(host):
-    with pytest.raises(ValueError, match="must be exact hostnames"):
-        CognitaConfig(oauth_cimd_allowed_hosts=[host])
+def test_retired_client_host_lists_are_ignored():
+    # 16.1.5 removed both lists; configs that still carry them must load.
+    config = CognitaConfig(
+        oauth_allowed_client_hosts=["claude.ai"], oauth_cimd_allowed_hosts=["*"]
+    )
+    assert not hasattr(config, "oauth_allowed_client_hosts")
+    assert not hasattr(config, "oauth_cimd_allowed_hosts")
 
 
 async def _client(app):

@@ -99,8 +99,10 @@ in the way of the connector's sign-in. Fine for a quick test; not for daily use.
 
    You should see `{"status":"ok","service":"cognita","version":"..."}`.
 3. **Create the connector.** In Admin, open **Connectors**, copy the connector's
-   **Stable MCP URL**, and add it as a custom connector in claude.ai or ChatGPT. The
-   client sends you to Cognita's sign-in page once.
+   **Stable MCP URL**, and add it as a custom connector in claude.ai, ChatGPT, or any
+   other MCP client that signs in with OAuth (TypingMind, for example). The client sends
+   you to Cognita's sign-in page once. The approval page names the site the access is
+   sent to; approve only if that is the client you are connecting.
 
 ### What the errors mean
 

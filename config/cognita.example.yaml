@@ -35,7 +35,8 @@ public_base_url: ""       # canonical HTTPS origin, e.g. https://cognita.example
 oauth_enabled: true       # global default; per-project overrides live in authentication.yaml
 oauth_store_path: null    # null -> <data_root>/oauth.sqlite3 (OAuth service state)
 oauth_access_token_ttl_seconds: 3600
-oauth_allowed_client_hosts: ["claude.ai", "chatgpt.com", "openai.com", "127.0.0.1", "localhost"]
+# Any OAuth MCP client may sign in; the password-gated consent page shows the
+# site each approval returns to. (oauth_allowed_client_hosts was removed in 16.1.5.)
 # Legacy /mcp/<project> paths are retired after the 9.0 cutover. This flag only
 # exists for isolated test fixtures and is never honored in release mode.
 legacy_path_auth_enabled: false
