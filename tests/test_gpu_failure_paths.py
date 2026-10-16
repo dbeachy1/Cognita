@@ -161,6 +161,35 @@ def test_the_canary_refuses_a_device_that_returns_a_short_vector(caplog):
     assert "different vector width" in caplog.text
 
 
+class FixedWorker(DimWorker):
+    """A worker returning one fixed vector, whatever the text."""
+
+    def __init__(self, vector):
+        super().__init__(width=len(vector))
+        self._vector = vector
+
+    def embed(self, texts, timeout, record=True):
+        return [list(self._vector)]
+
+
+@pytest.mark.parametrize("vector", [
+    [float("nan")] * 3,
+    # A finite first element hid every later NaN from `max()`.
+    [0.1, float("nan"), float("inf")],
+])
+def test_the_canary_refuses_a_non_finite_vector(caplog, vector):
+    """🔴 16.1.7 review: `nan > tolerance` is False and a NaN never wins a
+    `max()`, so a device returning NaNs passed the canary."""
+    worker = FixedWorker(vector)
+    pool = GpuPool(workers=[worker], holder="test")
+    with caplog.at_level(logging.ERROR):
+        survivors = check_canary(pool, cpu_embed, 1e-4)
+    assert survivors == []
+    assert worker.terminated
+    assert "non-finite" in caplog.text
+    assert worker.stats.failed_reason.startswith("canary ")
+
+
 def test_the_canary_still_accepts_a_matching_device():
     worker = DimWorker(width=3)
     pool = GpuPool(workers=[worker], holder="test")

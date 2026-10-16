@@ -17,6 +17,7 @@ import collections
 import contextvars
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -62,6 +63,7 @@ _EXIT_MEANING = {
     3: "warmup embed failed — the FIRST inference, before any slice",
     4: "protocol error — undecodable or truncated request frame",
     5: "the slice itself failed — embed raised, or returned the wrong count",
+    6: "stale output — the device returned the previous batch's vectors for new text",
 }
 
 # A signal is a native crash, and which one narrows it a long way.
@@ -689,6 +691,17 @@ class GpuWorker:
             self.report_death("mid-slice",
                               detail=f"texts={len(texts)} "
                                      f"waited={time.monotonic() - started:.2f}s")
+            # report_death has already waited for the exit, so the code is in.
+            code = self.proc.poll() if self.proc is not None else self._last_returncode
+            if code == 6:
+                # 16.1.7: the worker refused a batch that repeated the previous
+                # batch's vectors. At start-up that is the same verdict the
+                # canary reached for it before the worker could see it (delta
+                # 1.025e-01, the warm-up's vector), so it keeps the canary's
+                # classification rather than reading as a startup failure.
+                self.stats.failed_reason = "stale output (exit 6)"
+                raise GpuUnavailable("worker refused stale output",
+                                     reason="stale_output")
             raise GpuUnavailable("worker exited mid-slice")
         vectors = unpack_vectors(frame)
         if len(vectors) != len(texts):
@@ -1217,15 +1230,37 @@ def check_canary(pool: GpuPool, cpu_embed, tolerance: float) -> list[GpuWorker]:
             )
             worker.terminate()
             return None
+        # 🔴 FINITE BEFORE DELTA. A NaN never wins a `max()` comparison and
+        # `nan > tolerance` is False, so an all-NaN vector — or one NaN after a
+        # finite first element — scored as a pass (found in the 16.1.7 review).
+        # A provider overflowing to NaN/inf is exactly what this check is for.
+        if not all(math.isfinite(value) for value in candidate):
+            log.error(
+                "embed.gpu.canary  device=%s FAILED — the device returned a "
+                "non-finite (NaN or infinite) vector. Storing these would "
+                "corrupt the index.",
+                worker.device.sysfs_name,
+            )
+            worker.stats.failed_reason = "canary non-finite vector"
+            worker.terminate()
+            return None
         delta = max(abs(a - b) for a, b in zip(reference, candidate))
         worker.stats.canary_delta = delta
         if delta > tolerance:
+            # The delta alone could not say WHAT came back. Cosine and norm do:
+            # ~1.0 cosine is numeric drift, a lower one is a different text's
+            # vector (2026-10-15: the warm-up's), and a norm far from 1.0 is
+            # garbage or zeros rather than a real embedding.
+            dot = sum(a * b for a, b in zip(reference, candidate))
+            ref_norm = math.sqrt(sum(a * a for a in reference))
+            cand_norm = math.sqrt(sum(b * b for b in candidate))
+            cosine = dot / (ref_norm * cand_norm) if ref_norm and cand_norm else 0.0
             log.error(
-                "embed.gpu.canary  device=%s delta=%.3e tolerance=%.1e FAILED — "
-                "refusing to use this device. A provider that loads and computes "
-                "the wrong answer corrupts the index in a way count-based checks "
-                "cannot see.",
-                worker.device.sysfs_name, delta, tolerance,
+                "embed.gpu.canary  device=%s delta=%.3e tolerance=%.1e "
+                "cosine=%.6f norm=%.6f FAILED — refusing to use this device. A "
+                "provider that loads and computes the wrong answer corrupts the "
+                "index in a way count-based checks cannot see.",
+                worker.device.sysfs_name, delta, tolerance, cosine, cand_norm,
             )
             worker.stats.failed_reason = f"canary delta {delta:.3e}"
             worker.terminate()

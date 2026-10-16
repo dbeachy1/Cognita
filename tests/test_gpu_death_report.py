@@ -96,6 +96,9 @@ STUB = textwrap.dedent(
     if mode == "slice":
         log("embed failed for 1 texts: RuntimeError: boom", "ERROR")
         sys.exit(5)
+    if mode == "stale":
+        log("stale output for 1 texts: all 4 vectors repeated", "ERROR")
+        sys.exit(6)
     if mode == "silent":
         os._exit(0)
     if mode == "crash":
@@ -147,6 +150,27 @@ def test_a_failed_slice_names_the_slice(tmp_path, monkeypatch, caplog):
             worker.embed(["hello"], timeout=10, record=False)
     assert "exit code 5" in caplog.text
     assert "the slice itself failed" in caplog.text
+    worker.terminate()
+
+
+def test_a_stale_output_refusal_keeps_the_canarys_classification(
+        tmp_path, monkeypatch, caplog):
+    """16.1.7: exit 6 is the canary's verdict reached inside the worker. It
+    must stay `canary_failed` in the scheduler and the Admin verifier, not
+    fall through to a generic startup failure / runtime_missing."""
+    from cognita.acceleration_verify import _safe_category
+    from cognita.index_scheduler import GpuHostRuntime
+
+    worker = make_worker(tmp_path, monkeypatch, "stale")
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(GpuUnavailable) as raised:
+            worker.embed(["hello"], timeout=10, record=False)
+    assert "exit code 6" in caplog.text
+    assert "stale output" in caplog.text
+    assert raised.value.reason == "stale_output"
+    assert worker.stats.failed_reason == "stale output (exit 6)"
+    assert GpuHostRuntime._qualification_reason(worker) == "canary_failed"
+    assert _safe_category(raised.value, deadline=1e9, clock=lambda: 0.0) == "canary_failed"
     worker.terminate()
 
 

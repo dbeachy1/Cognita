@@ -1,5 +1,12 @@
 # Changelog
 
+## 16.1.7 — GPU indexing refuses a repeated batch of vectors (2026-10-15)
+
+- On AMD (MIGraphX), a GPU sometimes returned the previous batch's vectors instead of computing the current batch. Kei logged it on about 2% of GPU start-ups, on both cards: the start-up check then got the warm-up text's vector back and rejected the card. That check runs only once, at start-up, so the same fault on a later batch would have stored the previous chunks' vectors under new chunks without any error.
+- The GPU worker now compares every batch with the batch before it. If a whole batch comes back identical to the previous batch for different text, the worker stops with its own exit code (6, "stale output"), and the slice is embedded again on another card or, when none is left, on the CPU. Nothing from that batch is stored.
+- When the start-up check fails, its log line now also gives the cosine similarity and length of the vector that came back, so the line shows what kind of wrong answer the card returned.
+- The start-up check now rejects a card that returns NaN or infinite values. Before this release, such a vector could pass the check, because a NaN compares as false against the limit. See `docs/RELEASE-16.1.7.md`.
+
 ## 16.1.6 — OAuth sign-in passes Cognita's form check again (2026-10-15)
 
 - 16.1.5 began forwarding the sign-in pages' referrer policy, `no-referrer`, to the browser. Under that policy Chrome reports the origin of a form POST as `null`, so the login and approval forms failed Cognita's cross-site request check with "CSRF verification failed". The policy is now `same-origin`: Cognita sees its own origin, and other sites, including the client's callback, still receive nothing.

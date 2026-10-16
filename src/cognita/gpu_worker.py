@@ -470,7 +470,49 @@ def build_embedder(args) -> tuple[object, dict]:
     return model, facts
 
 
-def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
+class StaleOutput(RuntimeError):
+    """The device handed back the previous batch's vectors for new text."""
+
+
+class RepeatGuard:
+    """🔴 Catches a device returning the LAST batch's output instead of this one.
+
+    Observed on kei, 2026-10-13..15: 12 canary failures in ~570 runs, on BOTH
+    cards, every one with the identical delta 1.025e-01 — which is exactly the
+    CPU distance between the canary and WARMUP_TEXT (1.025087e-01, measured in
+    the container). The canary batch runs straight after the warm-up batch, and
+    about 2% of the time MIGraphX returned the warm-up's vectors unchanged. Not
+    our code: nothing in this process caches a result, so the stale buffer is
+    below fastembed, in ORT/MIGraphX.
+
+    The canary only sees the FIRST batch after warm-up. Every later batch in a
+    walk is the same shape, runs back to back the same way, and had no check at
+    all — a stale batch there stores the previous chunks' vectors under new
+    chunks, silently. So this compares every batch with the one before it.
+
+    The test is the WHOLE batch bit-for-bit equal to the previous one while the
+    text differs. A stale buffer repeats the entire output tensor; two
+    different texts that tokenize identically (bge is uncased, whitespace
+    collapses) can legitimately repeat ONE row, never a whole batch.
+    """
+
+    def __init__(self) -> None:
+        self._texts: list[str] | None = None
+        self._vectors: list[list[float]] | None = None
+
+    def check(self, texts: list[str], vectors: list[list[float]]) -> None:
+        previous_texts, previous_vectors = self._texts, self._vectors
+        self._texts, self._vectors = texts, vectors
+        if (previous_vectors is not None and texts != previous_texts
+                and vectors == previous_vectors):
+            raise StaleOutput(
+                f"all {len(vectors)} vectors in this batch are bit-for-bit the "
+                f"previous batch's, for different text"
+            )
+
+
+def embed_batch(model, texts: list[str], batch_size: int,
+                guard: RepeatGuard | None = None) -> list[list[float]]:
     """Embed one slice, streaming rather than materializing (5.8's lesson).
 
     🔴 The slice is padded to a FIXED batch size and the padding discarded
@@ -504,6 +546,11 @@ def embed_batch(model, texts: list[str], batch_size: int) -> list[list[float]]:
     vectors: list[list[float]] = []
     for vector in model.embed(padded, batch_size=batch_size):
         vectors.append(vector.tolist())
+        # fastembed walks the padded input in batch_size groups, so every
+        # batch_size rows is one device run — the unit a stale buffer repeats.
+        if guard is not None and len(vectors) % batch_size == 0:
+            start = len(vectors) - batch_size
+            guard.check(padded[start:start + batch_size], vectors[start:])
     return vectors[:wanted]
 
 
@@ -665,9 +712,12 @@ def main(argv=None) -> int:
     # 15.0: the warm-up is one FULL batch of full-context text (`WARMUP_TEXT` x
     # batch_size), not the one-line canary, so the arena reaches its high-water
     # mark before the parent takes its settled-free baseline. See WARMUP_TEXT.
+    # One guard for the life of the process: the canary's batch is compared
+    # with the warm-up's, and each slice's first batch with the last slice's.
+    guard = RepeatGuard()
     warm_started = time.monotonic()
     try:
-        embed_batch(model, [WARMUP_TEXT] * args.batch_size, args.batch_size)
+        embed_batch(model, [WARMUP_TEXT] * args.batch_size, args.batch_size, guard)
     except Exception:
         log_exception("warmup failed")
         return 3
@@ -699,7 +749,15 @@ def main(argv=None) -> int:
         log(f"slice in: {len(texts)} texts, {sum(len(t) for t in texts)} chars",
             "DEBUG")
         try:
-            vectors = embed_batch(model, texts, args.batch_size)
+            vectors = embed_batch(model, texts, args.batch_size, guard)
+        except StaleOutput as exc:
+            # Same contract as a failed slice — the parent drops this worker and
+            # requeues the slice for another card, or the CPU when none is left
+            # — but its own exit code, so the death report names it.
+            log(f"stale output for {len(texts)} texts: {exc} — the device "
+                f"returned its last result instead of computing this one",
+                "ERROR")
+            return 6
         except Exception:
             # A failed slice is the parent's to requeue; this process is no
             # longer trustworthy for GPU work, so it exits rather than

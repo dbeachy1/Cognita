@@ -302,7 +302,9 @@ class GpuHostRuntime:
     def _qualification_reason(worker: Any) -> str:
         """Map private worker failure text to a safe bounded reason code."""
         raw = str(getattr(getattr(worker, "stats", None), "failed_reason", "") or "").lower()
-        if raw.startswith("canary "):
+        # 16.1.7: a stale-output refusal is the canary's verdict reached one
+        # step earlier, inside the worker; it keeps the canary's handling.
+        if raw.startswith("canary ") or raw.startswith("stale output"):
             return "canary_failed"
         return "worker_startup_failed"
 

@@ -68,6 +68,10 @@ def _safe_category(exc: BaseException, *, deadline: float, clock: Callable[[], f
     if getattr(exc, "reason", None) == "driver_too_old":
         log.info("acceleration verification category=driver_too_old source=worker_reason")
         return "driver_too_old"
+    if getattr(exc, "reason", None) == "stale_output":
+        # 16.1.7: the worker refused the canary batch because it repeated the
+        # warm-up's vectors — the canary failing, caught one step earlier.
+        return "canary_failed"
     if _remaining(deadline, clock) <= 0:
         return "verification_timeout"
     if isinstance(exc, TimeoutError):

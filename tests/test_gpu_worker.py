@@ -719,6 +719,95 @@ def test_the_warmup_batch_size_follows_the_argument(monkeypatch, capsys):
     assert model.seen == [[WARMUP_TEXT] * 16]
 
 
+# -- a device returning the previous batch's output (16.1.7) -----------------
+
+
+def test_the_guard_refuses_a_whole_batch_repeated_for_new_text():
+    from cognita.gpu_worker import RepeatGuard, StaleOutput
+
+    guard = RepeatGuard()
+    guard.check(["a", "b"], [[1.0, 2.0], [3.0, 4.0]])
+    with pytest.raises(StaleOutput):
+        guard.check(["c", "d"], [[1.0, 2.0], [3.0, 4.0]])
+
+
+def test_the_guard_allows_the_same_text_to_embed_the_same():
+    from cognita.gpu_worker import RepeatGuard
+
+    guard = RepeatGuard()
+    guard.check(["a", "b"], [[1.0, 2.0], [3.0, 4.0]])
+    guard.check(["a", "b"], [[1.0, 2.0], [3.0, 4.0]])
+
+
+def test_the_guard_allows_one_row_to_repeat():
+    """Two texts that tokenize the same (bge is uncased) can repeat ONE row
+    legitimately; only a whole repeated batch is a stale buffer."""
+    from cognita.gpu_worker import RepeatGuard
+
+    guard = RepeatGuard()
+    guard.check(["Chapter 1", "x"], [[1.0, 2.0], [3.0, 4.0]])
+    guard.check(["CHAPTER 1", "y"], [[1.0, 2.0], [5.0, 6.0]])
+
+
+class _StaleModel:
+    """Returns the same vectors for every batch, whatever the text — the
+    observed MIGraphX fault."""
+
+    def embed(self, texts, batch_size=None):
+        for index, _ in enumerate(texts):
+            yield _FakeVector([float(index % batch_size), 1.0])
+
+
+def test_embed_batch_catches_a_repeat_between_batches_of_one_slice():
+    from cognita.gpu_worker import RepeatGuard, StaleOutput, embed_batch
+
+    with pytest.raises(StaleOutput):
+        embed_batch(_StaleModel(), ["a", "b", "c", "d"], 2, RepeatGuard())
+
+
+def test_embed_batch_carries_the_guard_across_slices():
+    from cognita.gpu_worker import RepeatGuard, StaleOutput, embed_batch
+
+    guard = RepeatGuard()
+    embed_batch(_StaleModel(), ["a", "b"], 2, guard)
+    with pytest.raises(StaleOutput):
+        embed_batch(_StaleModel(), ["c", "d"], 2, guard)
+
+
+def test_a_canary_that_returns_the_warmup_vectors_exits_6(monkeypatch, capsys):
+    """The kei failure end to end: the canary batch comes back as the warm-up
+    batch. The worker must refuse it, not send it to the parent."""
+    from cognita import gpu_worker
+
+    request = io.BytesIO()
+    write_frame(request, b'{"texts": ["the canary"]}')
+    request.seek(0)
+    data_out = io.BytesIO()
+    monkeypatch.setattr(gpu_worker, "build_embedder", lambda args: (_StaleModel(), {}))
+    monkeypatch.setattr(gpu_worker, "claim_stdout", lambda: data_out)
+    monkeypatch.setattr(gpu_worker, "die_with_parent", lambda *a, **k: False)
+    monkeypatch.setattr(gpu_worker, "faulthandler", type(
+        "NoFaultHandler", (), {"enable": staticmethod(lambda **k: None),
+                               "register": staticmethod(lambda *a, **k: None)}))
+    monkeypatch.setattr(sys, "stdin", type("Stdin", (), {"buffer": request})())
+
+    code = gpu_worker.main(["--model", "m", "--cache-dir", "c", "--batch-size", "4"])
+
+    err = capsys.readouterr().err
+    assert code == 6, err
+    assert "stale output" in err
+    # Only the handshake went out: no vectors for the refused batch.
+    out = io.BytesIO(data_out.getvalue())
+    assert b'"event": "ready"' in read_frame(out)
+    assert read_frame(out) is None
+
+
+def test_the_parent_names_exit_6():
+    from cognita.gpu_host import _EXIT_MEANING
+
+    assert "stale output" in _EXIT_MEANING[6]
+
+
 def test_a_warmup_failure_still_exits_3(monkeypatch, capsys):
     class Exploding:
         def embed(self, texts, batch_size=None):
