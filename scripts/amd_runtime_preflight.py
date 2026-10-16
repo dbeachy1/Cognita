@@ -174,6 +174,12 @@ def _run_isolated_embedding_card(card, deadline: float) -> None:
 
 
 def _embed(deadline: float, card_uuid: str | None = None) -> None:
+    # 16.1.8: set before HIP loads, and inherited by the per-card children.
+    # Without them MIGraphX can copy the result back before the GPU has
+    # written it, so a healthy card fails this canary. Same values as the AMD
+    # profile's `worker_env` in src/cognita/acceleration_profiles.py.
+    os.environ["AMD_SERIALIZE_KERNEL"] = "3"
+    os.environ["AMD_SERIALIZE_COPY"] = "3"
     import onnxruntime as ort
     from fastembed import TextEmbedding
 

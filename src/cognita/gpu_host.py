@@ -325,11 +325,12 @@ class GpuWorker:
             cache_note = f"skipped (profile {profile.name} has no program cache)"
         log.info(
             "gpu.worker[%s] launch profile=%s provider=%s fixed_seq_len=%s (%s) "
-            "program_cache=%s device_env=%s batch=%s",
+            "program_cache=%s device_env=%s batch=%s worker_env=%s",
             self.device.sysfs_name, profile.name, provider, fixed_seq_len,
             seq_len_source, cache_note,
             profile.device_env if self.device.unique_id else "none (no unique_id)",
             self.config.gpu_batch_size,
+            ",".join(f"{k}={v}" for k, v in profile.worker_env) or "none",
         )
         argv = [
             self.config.gpu_venv_python,
@@ -372,6 +373,10 @@ class GpuWorker:
         # parts.
         if self.device.unique_id and profile.device_env:
             env[profile.device_env] = profile.device_env_value(self.device.unique_id)
+        # 16.1.8: assigned, not defaulted. On AMD these are what make the
+        # worker's vectors correct (see acceleration_profiles.AMD), so an
+        # inherited value must not be able to switch them off.
+        env.update(profile.worker_env)
         # The worker verifies what it actually bound against this and refuses a
         # mismatch, so the selection above is never trusted on its own.
         env.setdefault("PYTHONUNBUFFERED", "1")

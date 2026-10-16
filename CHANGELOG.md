@@ -1,5 +1,11 @@
 # Changelog
 
+## 16.1.8 — AMD GPU embeddings are correct again (2026-10-15)
+
+- Found the cause of the wrong vectors 16.1.7 started catching. The AMD GPU runtime (ONNX Runtime 1.23.1, MIGraphX) copies each result back to Cognita without reliably waiting for the GPU to finish. When the card is slower than the copy, Cognita receives the previous batch's vectors, or a half-written mix of two batches. A card that fell behind could stay behind for a whole slice. 16.1.7's check stopped a lagging run only when it began with a clean copy of the previous batch; it never caught a mix, or a lagging run that began with one.
+- AMD embedding workers now start with the AMD settings that make each GPU step finish before the next begins (`AMD_SERIALIZE_KERNEL=3`, `AMD_SERIALIZE_COPY=3`). Tested on Kei with two workers per card to provoke the race: 13 stale batches and 29 wrong vectors in 4,608 without the settings; with them, no wrong vectors in 14,208 and no race in about 3,700 batches checked. GPU speed drops by about 3%. The AMD image's runtime check (`amd_runtime_preflight.py`) sets the same values, so a race should no longer fail a healthy card there.
+- Indexes built on an AMD GPU before 16.1.8 can contain wrong vectors, and some of them match no text, so they cannot be found by looking for duplicates. Rebuild AMD-indexed projects with `reindex_documents(project=..., full_rebuild=true)`. CPU indexing was not affected. NVIDIA uses a different runtime (CUDA) and was not tested for this race. See `docs/RELEASE-16.1.8.md`.
+
 ## 16.1.7 — GPU indexing refuses a repeated batch of vectors (2026-10-15)
 
 - On AMD (MIGraphX), a GPU sometimes returned the previous batch's vectors instead of computing the current batch. Kei logged it on about 2% of GPU start-ups, on both cards: the start-up check then got the warm-up text's vector back and rejected the card. That check runs only once, at start-up, so the same fault on a later batch would have stored the previous chunks' vectors under new chunks without any error.

@@ -481,14 +481,18 @@ class RepeatGuard:
     cards, every one with the identical delta 1.025e-01 — which is exactly the
     CPU distance between the canary and WARMUP_TEXT (1.025087e-01, measured in
     the container). The canary batch runs straight after the warm-up batch, and
-    about 2% of the time MIGraphX returned the warm-up's vectors unchanged. Not
-    our code: nothing in this process caches a result, so the stale buffer is
-    below fastembed, in ORT/MIGraphX.
+    MIGraphX returned the warm-up's vectors unchanged.
 
-    The canary only sees the FIRST batch after warm-up. Every later batch in a
-    walk is the same shape, runs back to back the same way, and had no check at
-    all — a stale batch there stores the previous chunks' vectors under new
-    chunks, silently. So this compares every batch with the one before it.
+    16.1.8 found the cause, below fastembed: ORT's MIGraphX EP copies the
+    result to the host without reliably waiting for the asynchronous program,
+    so a slow card hands back whatever the output buffer held. Once a card is
+    behind it can stay behind, every batch returning the one before it, and a
+    copy that overlaps the write returns a mix matching no text. This guard
+    catches a lagging run only when it begins with a clean stale batch; it
+    never catches a mix, or a lagging run that begins with one. The fix is the
+    AMD profile's `worker_env` (kernel and copy serialization), which made it
+    stop. The guard stays as a cheap backstop: if the race ever returns, the
+    first stale batch still ends the worker instead of reaching the index.
 
     The test is the WHOLE batch bit-for-bit equal to the previous one while the
     text differs. A stale buffer repeats the entire output tensor; two

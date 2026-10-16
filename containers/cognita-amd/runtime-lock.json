@@ -57,7 +57,7 @@
     },
     "preflight_source": {
       "path": "scripts/amd_runtime_preflight.py",
-      "sha256": "0008faaacc68e9f333633b0d824a440ddd2d70359c92cd9834d296452ec590df"
+      "sha256": "2410d2ab10993e21d786d6b16ed543d43b2b8813c207a2bf4d3d0583fcfb2160"
     },
     "dockerfile_source": {
       "path": "containers/cognita-amd/Dockerfile",

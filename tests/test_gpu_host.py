@@ -752,6 +752,23 @@ def test_the_amd_launch_is_todays(monkeypatch, tmp_path):
     assert "CUDA_VISIBLE_DEVICES" not in env
 
 
+def test_the_amd_worker_serializes_kernels_and_copies(monkeypatch):
+    """🔴 16.1.8: without these MIGraphX hands back the previous batch's
+    vectors (measured on kei). An inherited value must not switch them off."""
+    monkeypatch.setenv("AMD_SERIALIZE_KERNEL", "0")
+    _, env = _launch(monkeypatch, _LaunchConfig(), profile="amd")
+    assert env["AMD_SERIALIZE_KERNEL"] == "3"
+    assert env["AMD_SERIALIZE_COPY"] == "3"
+
+
+def test_the_nvidia_worker_gets_no_amd_serialization(monkeypatch):
+    monkeypatch.delenv("AMD_SERIALIZE_KERNEL", raising=False)
+    monkeypatch.delenv("AMD_SERIALIZE_COPY", raising=False)
+    _, env = _launch(monkeypatch, _LaunchConfig(), profile="nvidia")
+    assert "AMD_SERIALIZE_KERNEL" not in env
+    assert "AMD_SERIALIZE_COPY" not in env
+
+
 def test_the_cpu_profile_launches_exactly_as_amd_did(monkeypatch, tmp_path):
     """No profile set is the bare-metal `cognita serve` and every test that does
     not set one. Before profiles existed every GPU default was MIGraphX's."""
@@ -763,6 +780,8 @@ def test_the_cpu_profile_launches_exactly_as_amd_did(monkeypatch, tmp_path):
     assert _flag(argv, "--fixed-seq-len") == "512"
     assert _flag(argv, "--program-cache-dir") == str(tmp_path / "mxr")
     assert env["ROCR_VISIBLE_DEVICES"] == "GPU-0123abcd"
+    assert env["AMD_SERIALIZE_KERNEL"] == "3"
+    assert env["AMD_SERIALIZE_COPY"] == "3"
 
 
 def test_an_explicit_provider_is_honored_whatever_the_profile(monkeypatch):

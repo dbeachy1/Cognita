@@ -90,6 +90,9 @@ class AccelerationProfile:
     probe_factory: Callable[[], object]
     runtime_root: str | None
     vendor_label: str | None         # UI text
+    # Extra environment for every embedding worker this profile starts, as
+    # (name, value) pairs. Set over the inherited environment, never merged.
+    worker_env: tuple[tuple[str, str], ...] = ()
 
     def device_env_value(self, unique_id: str) -> str | None:
         """What to put in `device_env` to scope a worker to ONE card.
@@ -145,6 +148,20 @@ AMD = AccelerationProfile(
     probe_factory=_sysfs_or_null_probe,
     runtime_root=RUNTIME_ROOT,
     vendor_label="AMD",
+    # 🔴 16.1.8: WITHOUT THESE, MIGraphX (ORT 1.23.1) RETURNS WRONG VECTORS.
+    # The program runs asynchronously on the EP's stream and the copy of the
+    # result back to the host does not reliably wait for it, so when the card
+    # is slower than the copy the host reads whatever the output buffer held:
+    # the previous batch's vectors, or a half-written mix of two. Measured on
+    # kei, two real workers per card (2026-10-15): 13 stale batches and 29 wrong
+    # vectors in 4608 without; with them, 0 races in ~3700 batches each run
+    # twice to detect one, and 0 wrong vectors in 14,208. Serializing kernels
+    # and copies makes each step finish before the next starts. Cost: 47.1 vs
+    # 48.6 chunks/s on one card (~3%).
+    worker_env=(
+        ("AMD_SERIALIZE_KERNEL", "3"),
+        ("AMD_SERIALIZE_COPY", "3"),
+    ),
 )
 
 NVIDIA = AccelerationProfile(

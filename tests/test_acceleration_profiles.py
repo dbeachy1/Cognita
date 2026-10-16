@@ -105,6 +105,10 @@ def test_the_amd_row_reproduces_the_pre_refactor_literals():
     assert AMD.runtime_root == "/opt/cognita-runtimes"
     assert AMD.vendor_label == "AMD"
     assert AMD.max_busy_percent_default == 20
+    # 16.1.8, not a pre-refactor literal: the fix for MIGraphX returning the
+    # previous batch's vectors.
+    assert dict(AMD.worker_env) == {"AMD_SERIALIZE_KERNEL": "3",
+                                    "AMD_SERIALIZE_COPY": "3"}
 
 
 def test_the_nvidia_row_carries_the_measured_numbers():
