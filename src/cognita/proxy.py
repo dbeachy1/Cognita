@@ -854,12 +854,33 @@ def _strip_operation_id(message: dict) -> None:
         args.pop(OPERATION_ID_ARG, None)
 
 
+# Refusals a retry must be allowed to re-run (16.1.9). A reason belongs here only
+# if EVERY emitter returns it before any write, so not replaying it can never
+# repeat a write that happened:
+#   busy               — the project write lock was not acquired (engine_local)
+#   backup_failed      — the pre-write backup failed; "No changes were made"
+#                        (proxy edit/batch/restore/write paths, engine remove/copy)
+#   source_unavailable — the source is unmounted or reconciling; checked before
+#                        the handler runs (engine_local, directory move)
+# Deterministic refusals (stale_file, invalid, not_found, ...) stay stored: a
+# retry would fail the same way, or, worse, hit state the first call changed.
+_NOTHING_RAN_TRANSIENT_REASONS = frozenset({"busy", "backup_failed", "source_unavailable"})
+
+
 def _remember_operation(connector: str, project: str, tool: str, operation_id: str | None,
                         response: Response, msg_id, request_digest: str | None = None) -> Response:
     """Store this call's result under `operation_id` so a retry can replay it.
 
     Errors are stored too: a retry of a call that genuinely failed must not
     silently re-attempt a write the caller believes did not happen.
+
+    🔴 Except _NOTHING_RAN_TRANSIENT_REASONS. Each of those means NOTHING was
+    written and the cause passes (the write lock frees, disk is freed, the
+    source remounts). Stored, every retry with the same operation_id replayed
+    the refusal for the TTL (an hour), so the retry `busy` itself recommends
+    could never succeed — seen live on a `reindex_documents(full_rebuild=true)`
+    queued behind a watcher walk (fixed in 16.1.9). Not storing them lets the
+    retry run; whatever it returns then is what later retries replay.
     """
     if operation_id is None:
         return response
@@ -873,7 +894,7 @@ def _remember_operation(connector: str, project: str, tool: str, operation_id: s
                 stored = json.loads(blocks[0].get("text") or "")
             except (json.JSONDecodeError, TypeError):
                 return response  # not a tool payload we can replay; store nothing
-        if isinstance(stored, dict):
+        if isinstance(stored, dict) and stored.get("reason") not in _NOTHING_RAN_TRANSIENT_REASONS:
             _operations.remember(connector, project, tool, operation_id, stored,
                                  request_digest=request_digest)
     return response

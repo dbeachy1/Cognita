@@ -11,6 +11,7 @@ French, German, Italian, and Brazilian Portuguese**.
 [Linux source installer 16.1.0](https://github.com/dbeachy1/Cognita/releases/download/v16.1.0/cognita-src-16.1.0.tar.gz).
 The Linux archive installs Cognita using its release container images.
 
+[Source patch 16.1.9](docs/RELEASE-16.1.9.md) lets a write refused before anything was written be retried with the same operation_id.
 [Source patch 16.1.8](docs/RELEASE-16.1.8.md) fixes AMD GPU indexing storing wrong vectors.
 [Source patch 16.1.6](docs/RELEASE-16.1.5.md) lets any OAuth MCP client connect, not only
 Claude and ChatGPT. [Source patch 16.1.4](docs/RELEASE-16.1.4.md) fixes DOCX content-control extraction.

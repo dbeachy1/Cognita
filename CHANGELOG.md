@@ -1,5 +1,9 @@
 # Changelog
 
+## 16.1.9 — A retry with the same operation_id runs after a refusal that wrote nothing (2026-10-16)
+
+- Three refusals mean nothing was written and the cause passes: `busy` (another write, usually a reindex, held the project for more than 20 seconds), `backup_failed` (the backup taken before a write failed, for example on a full disk), and `source_unavailable` (the project folder was unmounted or being reconciled). `busy` even tells the caller to retry with an `operation_id`. But the gateway remembered these refusals under the `operation_id`, so every retry with the same id got the same refusal back for an hour and never ran. They are no longer remembered: the retry runs, and its result is what later retries replay. Other failures are still remembered, so a retry never repeats a write that may already have happened. Asset, book and project-storage tools keep their own receipts and were not affected. See `docs/RELEASE-16.1.9.md`.
+
 ## 16.1.8 — AMD GPU embeddings are correct again (2026-10-15)
 
 - Found the cause of the wrong vectors 16.1.7 started catching. The AMD GPU runtime (ONNX Runtime 1.23.1, MIGraphX) copies each result back to Cognita without reliably waiting for the GPU to finish. When the card is slower than the copy, Cognita receives the previous batch's vectors, or a half-written mix of two batches. A card that fell behind could stay behind for a whole slice. 16.1.7's check stopped a lagging run only when it began with a clean copy of the previous batch; it never caught a mix, or a lagging run that began with one.

@@ -53,6 +53,15 @@ def make_fake_worker(seen: list, documents_dir) -> FastAPI:
         args = (params.get("arguments") or {}) if isinstance(params, dict) else {}
         engine = {"status": "success", "old_chunks_removed": 2, "new_chunks_added": 3,
                   "dedup_skipped": 0, "filepath": args.get("filepath", "")}
+        if params.get("name") == "reindex_documents":
+            engine = {"status": "started", "operation": "nuclear_rebuild",
+                      "message": "Reindex running in background."}
+        if getattr(request.app.state, "refuse_next", None):
+            # A pre-write refusal (write lock, backup, source): nothing ran.
+            reason = request.app.state.refuse_next
+            request.app.state.refuse_next = None
+            engine = {"status": "error", "reason": reason,
+                      "message": "Refused before anything was written."}
         if params.get("name") == "move_document" and "expected_policy_revision" in args:
             engine = {
                 "status": "success", "filepath": args.get("filepath", ""),
@@ -1296,6 +1305,34 @@ async def test_a_failed_write_is_replayed_as_the_same_failure(env):
     assert second["reason"] == "not_found"
     assert second["replayed"] is True
     assert seen == []
+    proxy_mod._operations.clear()
+
+
+@pytest.mark.parametrize("reason", ["busy", "backup_failed", "source_unavailable"])
+async def test_a_nothing_ran_refusal_is_not_replayed_so_the_retry_runs(env, reason):
+    """16.1.9: each of these means NOTHING was written and the cause passes, and
+    `busy` even tells the caller to retry with an operation_id. Remembering them
+    made that retry replay the refusal for the next hour (seen live on a
+    `reindex_documents(full_rebuild=true)` behind a watcher walk)."""
+    import cognita.proxy as proxy_mod
+
+    proxy_mod._operations.clear()
+    app, tok, _, _docs, seen = env
+    app.state.test_engine_worker.state.refuse_next = reason
+    args = {"full_rebuild": True, "operation_id": f"op-rebuild-{reason}"}
+
+    first = result_payload(await post(app, tok, call("reindex_documents", args)))
+    assert first["status"] == "error" and first["reason"] == reason
+    calls_after_first = len(seen)
+
+    second = result_payload(await post(app, tok, call("reindex_documents", args)))
+    assert second["status"] == "started", second
+    assert "replayed" not in second, "the retry must run, not replay the refusal"
+    assert len(seen) > calls_after_first, "the retry must reach the engine"
+
+    # And once it has run, THAT result is what a further retry replays.
+    third = result_payload(await post(app, tok, call("reindex_documents", args)))
+    assert third["replayed"] is True and third["status"] == "started"
     proxy_mod._operations.clear()
 
 
