@@ -46,6 +46,10 @@ it can run code, process files and search the web, then copy results back into y
   on an RTX 4090, indexing ran at 112 chunks a second against 3.6 on the CPU. Without a
   supported card, everything runs on the CPU with the same results.
 
+![Cognita log showing successful indexing across two GPUs and the CPU](docs/images/gpu-indexing.png)
+
+Indexing 961 text chunks with both AMD GPUs and the CPU: 512 on card 1, 358 on card 2, and 91 on the CPU.
+
 **[Everything Cognita can do](docs/CAPABILITIES.md)**: every feature, every permission and all
 73 tools, each in a sentence.
 
