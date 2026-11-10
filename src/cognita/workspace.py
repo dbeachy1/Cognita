@@ -1364,10 +1364,12 @@ class WorkspaceManager:
                     volume_matches = (
                         bool(current.volume_name)
                         and observed.get("volume_name") == current.volume_name
-                        and isinstance(observed.get("volume_id"), str)
-                        and bool(observed["volume_id"])
                     )
-                    runtime_matches = volume_matches and self._runtime_identity_matches(current, observed)
+                    runtime_matches = (
+                        volume_matches
+                        and observed.get("sandbox_name") == current.runtime_name
+                        and self._runtime_identity_matches(current, observed)
+                    )
                     if native == "stopped" and observed.get("state") == "stopped" and runtime_matches:
                         projected = "stopped"
                     elif (
@@ -1376,7 +1378,6 @@ class WorkspaceManager:
                         or (
                             observed.get("state") == "partial"
                             and observed.get("partial_state") == "volume_only"
-                            and observed.get("path_status") == "verified"
                             and runtime_matches
                         )
                     ):

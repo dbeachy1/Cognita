@@ -1,5 +1,9 @@
 # Changelog
 
+## 16.4.0 — Reconcile terminal Workspace runtimes without optional volume IDs (2026-11-09)
+
+- Reconciliation now projects exact stopped and crashed sandboxes using the broker-validated canonical volume name and sandbox identity, even when the SDK cannot report a volume ID. Broker-verified volume-only remnants are also projected when their host path is not reported. Ambiguous or mismatched identities remain counted.
+
 ## 16.3.0 — Explicit Cognita Workspace opening and stale runtime reconciliation (2026-11-09)
 
 - Workspace file, job, bridge, and book-source operations now require an already-running Workspace. They never create or start one as a side effect. When the user explicitly asks for a Cognita Workspace, call `workspace_open`; prefer the chat's own Workspace or execution environment when available.

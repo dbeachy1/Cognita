@@ -110,7 +110,9 @@ def test_runtime_reconciliation_projects_only_exact_terminal_states(tmp_path: Pa
         assert store.get(workspace_id).state == "running"
         store.release_lease(lease_id)
         assert manager.reconcile_running_workspaces() == 0
-        runtime.inspect_result.update(volume_id="verified-volume", volume_name="different-volume")
+        runtime.inspect_result.update(
+            sandbox_name=before.runtime_name, volume_name="different-volume",
+        )
         assert manager.reconcile_running_workspaces() == 0
         runtime.inspect_result.update(volume_name=before.volume_name)
         assert manager.reconcile_running_workspaces() == 1
@@ -125,9 +127,36 @@ def test_runtime_reconciliation_projects_only_exact_terminal_states(tmp_path: Pa
         store.update(workspace_id, state="running", desired_state="running")
         runtime.inspect_result = {"state": "running", "native_state": "running"}
         assert manager.reconcile_running_workspaces() == 0
-        runtime.inspect_result = {"state": "partial", "partial_state": "volume_only", "path_status": "stale"}
+        runtime.inspect_result = {
+            "state": "partial", "partial_state": "volume_only", "path_status": "not_reported",
+            "sandbox_name": before.runtime_name, "volume_name": before.volume_name,
+        }
+        assert manager.reconcile_running_workspaces() == 1
+        assert store.get(workspace_id).state == "failed"
+        store.update(workspace_id, state="running", desired_state="running")
+        runtime.inspect_result.update(volume_name="different-volume")
         assert manager.reconcile_running_workspaces() == 0
         assert store.get(workspace_id).state == "running"
+    finally:
+        store.close()
+
+
+def test_runtime_reconciliation_accepts_stopped_sandbox_without_volume_id(tmp_path: Path):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    manager = WorkspaceManager(store, runtime)
+    principal = FakePrincipal()
+    try:
+        opened = manager.open(principal)
+        workspace_id = opened["workspace"]["workspace_id"]
+        row = store.get(workspace_id)
+        runtime.inspect_result = {
+            "state": "stopped", "native_state": "stopped",
+            "sandbox_name": row.runtime_name, "volume_name": row.volume_name,
+        }
+
+        assert manager.reconcile_running_workspaces() == 1
+        assert store.get(workspace_id).state == "stopped"
     finally:
         store.close()
 
