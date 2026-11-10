@@ -1,4 +1,6 @@
-# 16.3.0 — Explicit Cognita Workspace opening
+# Cognita 16.3.0 release notes
+
+## Explicit Cognita Workspace opening
 
 Workspace tools now require an already-running Workspace. File, job, inspection, Knowledge bridge, and book-source staging calls no longer open or restart one as a side effect. When the user explicitly requests a Cognita Workspace and the chat has no Workspace of its own, call `workspace_open` with an empty object. Prefer the chat's own Workspace or execution environment for speed and integration.
 
