@@ -42,7 +42,7 @@ class Runtime:
     def call(self, workspace_id, operation, arguments, **kwargs):
         self.calls.append((workspace_id, operation, arguments))
         if operation == "ensure":
-            result = {"allocated_bytes": 0, "apparent_bytes": 0, "volume_name": "vol-1"}
+            result = {"state": "running", "allocated_bytes": 0, "apparent_bytes": 0, "volume_name": "vol-1"}
             # The broker's ensure response is the evidence used by lifecycle
             # admission.  Include the explicit path only for this fixture when
             # the fake broker was configured with one; the production manager
@@ -58,6 +58,8 @@ class Runtime:
             return result
         if operation == "job_get":
             return {"state": self.job_state}
+        if operation == "start":
+            return {"state": "running"}
         if operation == "fs_usage":
             return dict(self.fs_usage_result)
         return {"ok": True}
@@ -156,6 +158,7 @@ def test_r5_admission_reserves_separate_workspace_and_root_growth(tmp_path: Path
     try:
         manager = WorkspaceManager(store, runtime)
         assert manager._potential_growth(4 * 1024**3) == 8 * 1024**3
+        manager.open(_principal())
         manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
         ensure = next(arguments for _workspace, operation, arguments in runtime.calls if operation == "ensure")
         assert ensure["create_volume_if_absent"] is True
@@ -377,6 +380,7 @@ def test_runtime_measurement_accepts_verified_path_only(tmp_path: Path):
         runtime.inspect_result["workspace_id"] = "unused"
         # A direct metadata refresh cannot invent a row; first-use creation is
         # still the only operation that admits a Workspace.
+        manager.open(type("P", (), {"principal_id": PRINCIPAL})())
         manager.execute(type("P", (), {"principal_id": PRINCIPAL})(), "workspace_write_file", {"path": "a", "text": "x"})
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None and row.usage_status == "fresh"
@@ -390,6 +394,7 @@ def test_preview_rejects_stale_revision(tmp_path: Path):
     store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
     try:
         manager = WorkspaceManager(store, Runtime())
+        manager.open(type("P", (), {"principal_id": PRINCIPAL})())
         manager.execute(type("P", (), {"principal_id": PRINCIPAL})(), "workspace_write_file", {"path": "a", "text": "x"})
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None
@@ -408,7 +413,7 @@ def test_remove_fails_closed_on_unproven_identity(tmp_path: Path):
     runtime = Runtime({"workspace_id": "not-the-workspace"})
     try:
         manager = WorkspaceManager(store, runtime)
-        manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
+        manager.open(_principal())
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None
         with pytest.raises(WorkspaceError) as error:
@@ -435,7 +440,7 @@ def test_retry_accepts_exact_sdk_sandbox_name_for_volume_only_residual(tmp_path:
         result = manager.start(_principal())
         assert result["status"] == "success"
         assert store.get(workspace_id).state == "running"
-        assert calls == ["inspect", "ensure"]
+        assert calls == ["inspect", "inspect", "ensure"]
     finally:
         if runtime is not None:
             runtime._client.close()
@@ -488,7 +493,7 @@ def test_failed_workspace_ordinary_admission_repairs_only_after_exact_runtime_pr
         admitted = manager._admit(_principal())
 
         assert admitted.state == "running"
-        assert runtime.calls == ["inspect", "ensure"]
+        assert runtime.calls == ["inspect", "inspect", "ensure"]
         assert runtime.ensure_args["create_volume_if_absent"] is False
     finally:
         store.close()
@@ -533,7 +538,7 @@ def test_failed_workspace_denies_admission_without_exact_runtime_proof(tmp_path:
         store.close()
 
 
-def test_running_workspace_recreates_absent_sandbox_without_volume_creation(tmp_path: Path):
+def test_running_workspace_absent_sandbox_requires_admin_repair(tmp_path: Path):
     store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
     try:
         row = store.create(PRINCIPAL, None, "Workspace", now="2026-09-19T00:00:00+00:00", quota_bytes=4, retention_days=30)
@@ -563,11 +568,12 @@ def test_running_workspace_recreates_absent_sandbox_without_volume_creation(tmp_
 
         runtime = Runtime()
         manager = WorkspaceManager(store, runtime)
-        admitted = manager._admit(_principal())
+        with pytest.raises(WorkspaceError) as error:
+            manager._admit(_principal())
 
-        assert admitted.state == "running"
-        assert runtime.calls == ["inspect", "ensure"]
-        assert runtime.ensure_arguments["create_volume_if_absent"] is False
+        assert error.value.reason == "retry_requires_ownership"
+        assert runtime.calls == ["inspect"]
+        assert runtime.ensure_arguments is None
     finally:
         store.close()
 
@@ -602,10 +608,10 @@ def test_running_workspace_missing_volume_fails_closed_without_creating_one(tmp_
         with pytest.raises(WorkspaceError) as error:
             manager._admit(_principal())
 
-        assert error.value.reason == "path_unavailable"
-        assert runtime.calls == ["inspect", "ensure"]
-        assert runtime.ensure_arguments["create_volume_if_absent"] is False
-        assert store.get(row.workspace_id).state == "failed"
+        assert error.value.reason == "retry_requires_ownership"
+        assert runtime.calls == ["inspect"]
+        assert runtime.ensure_arguments is None
+        assert store.get(row.workspace_id).state == "running"
     finally:
         store.close()
 
@@ -624,6 +630,7 @@ def test_public_start_recovers_crashed_running_runtime_in_place(tmp_path: Path):
             if operation == "inspect":
                 return {
                     "state": "failed",
+                    "native_state": "crashed",
                     "sandbox_name": row.runtime_name,
                     "volume_name": row.volume_name,
                     "runtime_id": "sandbox-id",
@@ -1248,7 +1255,7 @@ def test_bulk_delete_is_revision_bound_and_persists_each_outcome(tmp_path: Path)
     runtime = Runtime()
     try:
         manager = WorkspaceManager(store, runtime)
-        manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
+        manager.open(_principal())
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None
         preview = manager.preview_bulk_delete([row.workspace_id], {row.workspace_id: row.revision})
@@ -1280,7 +1287,7 @@ def test_stale_cached_measurement_fails_closed_without_delete(tmp_path: Path):
     runtime = MeasurementUnavailableRuntime()
     try:
         manager = WorkspaceManager(store, runtime)
-        manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
+        manager.open(_principal())
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None
         store.update_measurement(
@@ -1303,6 +1310,7 @@ def test_consumed_preview_replays_after_aggregate_crash(tmp_path: Path):
     runtime = Runtime()
     try:
         manager = WorkspaceManager(store, runtime)
+        manager.open(_principal())
         manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
         row = store.get_by_principal(PRINCIPAL)
         assert row is not None
@@ -1339,6 +1347,7 @@ def test_delete_now_credential_reconciliation_removes_owned_workspace(tmp_path: 
     runtime = Runtime()
     try:
         manager = WorkspaceManager(store, runtime)
+        manager.open(_principal())
         manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
         result = manager.reconcile_credential(
             credential_id=PRINCIPAL, owner_status="tombstoned", retention="delete_now",
@@ -1356,6 +1365,7 @@ def test_normal_credential_retention_unpins_and_scavenges_from_delete_time(tmp_p
     now = [datetime(2026, 9, 19, tzinfo=UTC)]
     try:
         manager = WorkspaceManager(store, runtime, clock=lambda: now[0], retention_days=90)
+        manager.open(_principal())
         manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
         pinned = manager.set_pinned(_principal(), True)
         assert pinned["workspace"]["pinned"] is True
@@ -1387,6 +1397,7 @@ def test_normal_tombstone_replay_keeps_original_deadline_and_revision(tmp_path: 
     deleted_at = "2026-09-19T00:00:00+00:00"
     try:
         manager = WorkspaceManager(store, runtime, clock=lambda: now[0])
+        manager.open(_principal())
         manager.execute(_principal(), "workspace_write_file", {"path": "a", "text": "x"})
         first = manager.reconcile_credential(
             credential_id=PRINCIPAL, owner_status="tombstoned", retention="normal",

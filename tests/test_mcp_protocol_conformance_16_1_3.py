@@ -25,7 +25,7 @@ from httpx import ASGITransport, AsyncClient
 
 from cognita.auth_policy import AuthenticationPolicyStore, CredentialPolicyStore
 from cognita.config import CognitaConfig
-from cognita.connectors import PUBLIC_CONTRACT_VERSION, ConnectorStore, WorkspaceConnectorStore
+from cognita.connectors import PUBLIC_CONTRACT_VERSION, WORKSPACE_CONTRACT_VERSION, ConnectorStore, WorkspaceConnectorStore
 from cognita.engine_local import LocalEngineHost
 from cognita.gateway import create_gateway_app
 from cognita.mcp_protocol import (
@@ -162,7 +162,7 @@ def _workspace_surface(tmp_path) -> Surface:
         workspace_service=manager,
     )
     return Surface(
-        "workspace", app, "/mcp/workspace/workspace/mcp/v3", secret,
+        "workspace", app, f"/mcp/workspace/workspace/mcp/v{WORKSPACE_CONTRACT_VERSION}", secret,
         {"name": "workspace_info", "arguments": {}}, workspace=manager,
     )
 
@@ -604,7 +604,7 @@ async def test_workspace_route_logs_one_exchange_line_like_the_connector_route(t
                  "User-Agent": "WorkspaceClient/1.2"})
     assert r.status_code == 200
     [exchange] = [m for m in caplog.messages if m.startswith("mcp exchange ")]
-    assert "connector=workspace route=v3 http_method=POST methods=ping ids=str:ws-1 batch=no" in exchange
+    assert f"connector=workspace route=v{WORKSPACE_CONTRACT_VERSION} http_method=POST methods=ping ids=str:ws-1 batch=no" in exchange
     assert "accept=application/json content_type=application/json protocol_version=2025-06-18 " in exchange
     assert "session_id=absent user_agent=WorkspaceClient/1.2" in exchange
     assert f"-> http=200 media_type=application/json response_bytes={len(r.content)}" in exchange
@@ -887,7 +887,7 @@ async def test_a_newline_in_the_url_cannot_forge_a_log_line(surface, caplog, whe
     elif surface.name == "connector":
         surface.url = f"/mcp/connectors/{forged}/mcp/v{PUBLIC_CONTRACT_VERSION}"
     else:
-        surface.url = f"/mcp/workspace/{forged}/mcp/v3"
+        surface.url = f"/mcp/workspace/{forged}/mcp/v{WORKSPACE_CONTRACT_VERSION}"
     r = await surface.post(PING, token=None if where == "slug_without_credential" else "")
     assert r.status_code in (401, 404)
     messages = _gateway_records(caplog)
@@ -1141,7 +1141,7 @@ async def test_text_that_cannot_be_encoded_is_a_json_rpc_error_not_a_500(surface
     assert len(refused) == 1 and refused[0].levelno == logging.WARNING
     assert refused[0].exc_info and refused[0].exc_info[0] is UnicodeEncodeError  # the traceback is kept
     assert refused[0].getMessage().endswith("route=v%d" % (
-        PUBLIC_CONTRACT_VERSION if surface.name == "connector" else 3)), refused[0].getMessage()
+        PUBLIC_CONTRACT_VERSION if surface.name == "connector" else WORKSPACE_CONTRACT_VERSION)), refused[0].getMessage()
     # The exchange is still logged once, as 200, and never with the offending text.
     [exchange] = [m for m in messages if m.startswith("mcp exchange ")]
     assert "-> http=200" in exchange

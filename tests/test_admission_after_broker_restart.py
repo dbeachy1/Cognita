@@ -113,7 +113,7 @@ def test_a_second_conflict_in_a_row_still_propagates(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_bridge_reports_admissions_own_reason_not_internal_error(tmp_path: Path, caplog):
     class RejectingWorkspace:
-        def _admit(self, principal, connector_id=None):
+        def require_running(self, principal, *, connector_id=None):
             raise WorkspaceError("generation_conflict", "Workspace runtime rejected the operation",
                                  broker_code="generation_conflict", retryable=True)
 

@@ -504,6 +504,7 @@ class BrokerService:
                 "quota": ErrorCode.QUOTA,
                 "timeout": ErrorCode.TIMEOUT,
                 "unsupported": ErrorCode.UNSUPPORTED,
+                "workspace_not_open": ErrorCode.WORKSPACE_NOT_OPEN,
                 "runtime_failure": ErrorCode.RUNTIME_FAILURE,
             }
             code = mapping.get(exc.category, ErrorCode.RUNTIME_FAILURE)
@@ -539,6 +540,7 @@ class BrokerService:
                     ErrorCode.QUOTA: "Workspace quota was exceeded",
                     ErrorCode.TIMEOUT: "runtime operation timed out",
                     ErrorCode.UNSUPPORTED: "operation is not supported by the pinned runtime",
+                    ErrorCode.WORKSPACE_NOT_OPEN: "Workspace is not running",
                 }.get(code, "runtime operation failed"),
                 stage=exc.stage,
                 category=exc.category,

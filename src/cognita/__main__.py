@@ -864,10 +864,15 @@ async def _serve_async(
 
 
 async def _workspace_retention_loop(credential_store, manager, stopping: asyncio.Event) -> None:
-    """Quiet, bounded startup and periodic reconciliation of durable intents."""
+    """Quiet, bounded startup and periodic Workspace runtime and retention work."""
     credential_cursor = ""
     workspace_cursor = ""
     while not stopping.is_set():
+        try:
+            await asyncio.to_thread(manager.reconcile_running_workspaces, limit=32)
+        except Exception:
+            # Capacity projection is independent of credential-retention work.
+            log.exception("Workspace runtime reconciliation pass deferred")
         try:
             credentials = await asyncio.to_thread(
                 credential_store.reconcile_tombstones, manager,

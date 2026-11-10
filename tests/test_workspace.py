@@ -35,15 +35,20 @@ class FakeRuntime:
         # every test written against "one measurement per admission window"
         # would see an extra inspect+fs_usage pair on every later call.
         self.fs_usage_result = {"entries": [], "truncated": False, "total_bytes": 0}
+        self.workspace_ids = {}
 
     def call(self, workspace_id, operation, arguments, **kwargs):
         self.calls.append((workspace_id, operation, arguments, kwargs))
+        self.workspace_ids.setdefault(workspace_id, f"volume-{workspace_id}")
         if operation == "job_start":
             return {"job_id": "job-1", "state": "running"}
         if operation == "job_get":
             return {"state": self.job_state, "stdout": "", "stderr": ""}
         if operation == "inspect":
-            return {"state": "running", **self.inspect_result}
+            return {"state": "running", "workspace_id": workspace_id,
+                    "volume_name": self.workspace_ids[workspace_id], **self.inspect_result}
+        if operation in {"ensure", "start"}:
+            return {"state": "running", "volume_name": self.workspace_ids[workspace_id]}
         if operation == "fs_usage":
             return dict(self.fs_usage_result)
         return {"ok": True}
@@ -61,12 +66,93 @@ def test_paths_reject_escape_and_pseudo_filesystems():
             raise AssertionError(f"path unexpectedly accepted: {path}")
 
 
+def test_workspace_requires_explicit_open_and_reuses_the_principal_workspace(tmp_path: Path):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    manager = WorkspaceManager(store, runtime)
+    principal = FakePrincipal()
+    try:
+        assert manager.execute(principal, "workspace_info", {})["workspace"] is None
+        with pytest.raises(WorkspaceError) as unopened:
+            manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
+        assert unopened.value.reason == "workspace_not_open"
+        assert store.get_by_principal(principal.principal_id) is None
+        assert runtime.calls == []
+        with pytest.raises(WorkspaceError) as invalid_open:
+            manager.execute(principal, "workspace_open", {"unexpected": True})
+        assert invalid_open.value.reason == "invalid_arguments"
+        assert store.get_by_principal(principal.principal_id) is None
+        assert runtime.calls == []
+
+        first = manager.execute(principal, "workspace_open", {})
+        second = manager.execute(principal, "workspace_open", {})
+        assert first["status"] == second["status"] == "success"
+        assert first["workspace"]["workspace_id"] == second["workspace"]["workspace_id"]
+        assert manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})["status"] == "success"
+    finally:
+        store.close()
+
+
+def test_runtime_reconciliation_projects_only_exact_terminal_states(tmp_path: Path):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    manager = WorkspaceManager(store, runtime, max_running_workspaces=1)
+    principal = FakePrincipal()
+    try:
+        opened = manager.open(principal)
+        workspace_id = opened["workspace"]["workspace_id"]
+        before = store.get(workspace_id)
+        runtime.inspect_result = {"state": "failed", "native_state": "crashed"}
+        lease_id = store.lease(workspace_id, "transfer", 3600)
+        assert manager.reconcile_running_workspaces() == 0
+        assert store.get(workspace_id).state == "running"
+        store.release_lease(lease_id)
+        assert manager.reconcile_running_workspaces() == 1
+        crashed = store.get(workspace_id)
+        assert crashed.state == "failed"
+        assert crashed.desired_state == before.desired_state
+        assert crashed.volume_name == before.volume_name
+
+        second = FakePrincipal()
+        assert manager.open(second)["status"] == "success"
+
+        store.update(workspace_id, state="running", desired_state="running")
+        runtime.inspect_result = {"state": "running", "native_state": "running"}
+        assert manager.reconcile_running_workspaces() == 0
+        runtime.inspect_result = {"state": "partial", "partial_state": "volume_only", "path_status": "stale"}
+        assert manager.reconcile_running_workspaces() == 0
+        assert store.get(workspace_id).state == "running"
+    finally:
+        store.close()
+
+
+def test_explicit_open_starts_an_owned_crashed_sandbox_in_place(tmp_path: Path):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    manager = WorkspaceManager(store, runtime)
+    principal = FakePrincipal()
+    try:
+        first = manager.open(principal)
+        workspace_id = first["workspace"]["workspace_id"]
+        runtime.inspect_result = {"state": "failed", "native_state": "crashed"}
+
+        reopened = manager.open(principal)
+        assert reopened["workspace"]["workspace_id"] == workspace_id
+        assert reopened["workspace"]["state"] == "running"
+        operations = [call[1] for call in runtime.calls]
+        assert operations.count("ensure") == 1
+        assert operations.count("start") == 1
+    finally:
+        store.close()
+
+
 def test_workspace_is_principal_scoped_and_mutations_are_idempotent(tmp_path: Path):
     store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
     try:
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         first = manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x", "idempotency_key": "write-1"})
         second = manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x", "idempotency_key": "write-1"})
         assert second["replayed"] is True
@@ -190,6 +276,7 @@ def test_workspace_responses_retain_last_measured_usage(tmp_path: Path):
         runtime.fs_usage_result = {"entries": [], "truncated": False, "total_bytes": 23}
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {
             "path": "a", "text": "x", "idempotency_key": "usage-write",
         })
@@ -223,6 +310,7 @@ def test_workspace_info_reports_persisted_usage_not_broker_vocabulary(tmp_path: 
         runtime.fs_usage_result = {"entries": [], "truncated": False, "total_bytes": 6424}
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {
             "path": "a", "text": "x", "idempotency_key": "usage-info",
         })
@@ -245,6 +333,7 @@ def test_partial_usage_invalidates_current_quota_until_complete_measurement(tmp_
         runtime.fs_usage_result = {"entries": [], "truncated": False, "total_bytes": 700}
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         first = manager.execute(principal, "workspace_write_file", {
             "path": "a", "text": "x", "idempotency_key": "usage-transition",
         })["workspace"]
@@ -312,6 +401,7 @@ def test_usage_command_failure_keeps_historical_sample_unavailable(tmp_path: Pat
         runtime.fs_usage_result = {"entries": [], "truncated": False, "total_bytes": 900}
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         workspace_id = manager.execute(principal, "workspace_write_file", {
             "path": "a", "text": "x", "idempotency_key": "usage-error",
         })["workspace"]["workspace_id"]
@@ -333,6 +423,7 @@ def test_job_bounds_and_lifecycle(tmp_path: Path):
     try:
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
+        manager.open(principal)
         started = manager.execute(principal, "workspace_start_job", {"argv": ["python", "-c", "print(1)"]})
         assert started["job"]["state"] == "running"
         assert manager.execute(principal, "workspace_get_job", {"job_id": "job-1"})["job"]["state"] == "succeeded"
@@ -354,6 +445,7 @@ def test_job_cwd_is_valid_at_broker_boundary(tmp_path: Path, cwd_argument: dict,
     try:
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
+        manager.open(FakePrincipal())
         manager.execute(FakePrincipal(), "workspace_start_job", {"argv": ["true"], **cwd_argument})
         # 12.18.3: this is the first-ever mutation for this principal, so
         # _measure_after_mutation appends its own inspect+fs_usage calls
@@ -373,6 +465,7 @@ def test_domain_translates_public_arguments_to_strict_broker_contract(tmp_path: 
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {
             "path": "notes.txt", "text": "one\ntwo\n", "create_policy": "parents",
         })
@@ -432,6 +525,7 @@ def test_running_job_blocks_mutations_and_idle_stop_but_pin_does_not(tmp_path: P
         runtime.job_state = "running"
         manager = WorkspaceManager(store, runtime, idle_seconds=1, clock=lambda: now)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "10"]})
         with pytest.raises(WorkspaceError, match="already running"):
             manager.execute(principal, "workspace_write_file", {"path": "x", "text": "y"})
@@ -452,6 +546,7 @@ def test_completed_job_releases_application_lock_without_client_poll(tmp_path: P
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         started = manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         workspace_id = started["workspace"]["workspace_id"]
         assert store.active_job(workspace_id)["job_id"] == "job-1"
@@ -472,6 +567,7 @@ def test_completed_job_allows_next_job_without_client_poll(tmp_path: Path):
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         assert manager.execute(principal, "workspace_start_job", {"argv": ["true"]})["status"] == "success"
         assert [call[1] for call in runtime.calls][-2:] == ["job_get", "job_start"]
@@ -486,6 +582,7 @@ def test_live_job_error_identifies_job_and_unblocks_after_completion(tmp_path: P
         runtime.job_state = "running"
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "10"]})
         with pytest.raises(WorkspaceError) as blocked:
             manager.execute(principal, "workspace_make_directory", {"path": "later"})
@@ -514,6 +611,7 @@ def test_unavailable_runtime_does_not_clear_unproved_job_lock(tmp_path: Path):
         runtime = UnavailableJobRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         started = manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "10"]})
         with pytest.raises(WorkspaceError) as blocked:
             manager.execute(principal, "workspace_write_file", {"path": "later.txt", "text": "ok"})
@@ -543,6 +641,7 @@ def test_job_check_retries_once_after_runtime_generation_change(tmp_path: Path):
         runtime = ReplacedRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         assert manager.execute(principal, "workspace_make_directory", {"path": "after-restart"})["status"] == "success"
         assert runtime.job_reads == 2
@@ -561,7 +660,7 @@ def test_workspace_info_marks_failed_runtime_inspection_degraded(tmp_path: Path)
     try:
         manager = WorkspaceManager(store, FailedInspectRuntime())
         principal = FakePrincipal()
-        manager.execute(principal, "workspace_make_directory", {"path": "test"})
+        manager.open(principal)
         info = manager.info(principal)["workspace"]
         assert info["state"] == "running"  # Durable lifecycle record.
         assert info["runtime_available"] is False
@@ -582,7 +681,10 @@ def test_workspace_info_keeps_persisted_state_when_runtime_is_absent(tmp_path: P
     try:
         manager = WorkspaceManager(store, AbsentInspectRuntime())
         principal = FakePrincipal()
-        manager.execute(principal, "workspace_make_directory", {"path": "test"})
+        manager.open(principal)
+        with pytest.raises(WorkspaceError) as unopened:
+            manager.execute(principal, "workspace_make_directory", {"path": "test"})
+        assert unopened.value.reason == "workspace_not_open"
         info = manager.info(principal)["workspace"]
         assert info["state"] == "running"
         assert info["runtime_state"] == "absent"
@@ -597,6 +699,7 @@ def test_idempotency_key_is_scoped_to_tool_and_arguments(tmp_path: Path):
     try:
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_make_directory", {
             "path": "same", "idempotency_key": "one-key",
         })
@@ -632,6 +735,7 @@ def test_admin_adapter_persists_validated_settings_and_paginates(tmp_path: Path)
     store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
     try:
         manager = WorkspaceManager(store, FakeRuntime())
+        manager.open(FakePrincipal())
         manager.execute(FakePrincipal(), "workspace_make_directory", {"path": "one"})
         secrets = Secrets()
         adapter = WorkspaceAdminAdapter(manager, trusted_secret_store=secrets, brave_search=Brave())
@@ -668,6 +772,7 @@ def test_adapter_returns_bounded_errors(tmp_path: Path):
     store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
     try:
         manager = WorkspaceManager(store, FakeRuntime())
+        manager.open(FakePrincipal())
         result = workspace_tool_result(manager, FakePrincipal(), "workspace_write_file", {"path": "a", "text": "x", "unexpected": True})
         assert result["status"] == "error"
         assert result["reason"] == "invalid_arguments"

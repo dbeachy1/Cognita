@@ -480,7 +480,7 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "read_document", "list_backups", "diff_backup",
     "get_self_test_plan", "edit_document", "edit_document_batch", "insert_in_document",
     "restore_backup", "batch", "list_projects",
-    "workspace_info", "workspace_list_files", "workspace_stat", "workspace_read_file",
+    "workspace_info", "workspace_open", "workspace_list_files", "workspace_stat", "workspace_read_file",
     "workspace_write_file", "workspace_edit_file", "workspace_make_directory",
     "workspace_copy_paths", "workspace_move_paths", "workspace_remove_paths",
     "workspace_search", "workspace_start_job", "workspace_get_job",
@@ -491,7 +491,7 @@ PUBLIC_TOOL_COUNT = len(PUBLIC_TOOL_NAMES)
 # Workspace and bridge use dedicated runtime-backed dispatch services. Keeping
 # their names grouped here makes the public connector catalog deterministic.
 WORKSPACE_TOOL_NAMES: tuple[str, ...] = (
-    "workspace_info", "workspace_list_files", "workspace_stat", "workspace_read_file",
+    "workspace_info", "workspace_open", "workspace_list_files", "workspace_stat", "workspace_read_file",
     "workspace_write_file", "workspace_edit_file", "workspace_make_directory",
     "workspace_copy_paths", "workspace_move_paths", "workspace_remove_paths",
     "workspace_search", "workspace_start_job", "workspace_get_job",
@@ -549,36 +549,33 @@ _WS_LINE_HAS_MORE_DESCRIPTION = (
     " For start_line/end_line/tail_lines reads, has_more means max_bytes cut "
     "the selected lines; total_lines says how many lines the file has."
 )
-# Callers previously interpreted a successful null info result as an unavailable
-# feature. Explain lazy creation in the shared catalog for both route families;
-# this clarifies existing behavior without changing any wire schema.
+# Explain that inspection is read-only and opening is an explicit user action.
 _WS_FIRST_USE_DESCRIPTION = (
     " This inspection does not create a Workspace. A successful response with "
-    "workspace: null means this authenticated identity has no Workspace yet; "
-    "it does not mean Workspace is disabled or unavailable, and it does not "
-    "check runtime readiness. When connector permissions and runtime availability "
-    "allow it, the first Workspace file or job operation automatically creates "
-    "the Workspace. To begin, call workspace_list_files with path '/workspace', "
-    "then call workspace_info again. An empty file list is normal for a new "
-    "Workspace. Report any actual permission or runtime error from that operation; "
-    "do not infer unavailability from workspace: null alone."
+    "workspace: null means this identity has no Workspace yet. If the user "
+    "explicitly requests a Cognita Workspace, call workspace_open with an empty "
+    "object, then use the Workspace tools. Prefer the chat's own Workspace or "
+    "execution environment when available; it is faster and better integrated. "
+    "Ordinary Workspace tools require an already-running Workspace and never "
+    "start one implicitly."
 )
 WORKSPACE_TOOL_DEFS = (
     _adapter_tool(WORKSPACE_TOOL_NAMES[0], "Inspect the authenticated Workspace." + _WS_FIRST_USE_DESCRIPTION + _WS_DELETION_DUE_DESCRIPTION, {}, ()),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[1], "List bounded Workspace file metadata. Use path '/workspace' to begin: this operation automatically creates your Workspace on first use when permitted and the runtime is available. An empty file list is a successful result, not an unavailable Workspace.", {"path": _WS_PATH, "recursive": _WS_BOOL, "max_entries": {"type": "integer", "minimum": 1, "maximum": 2000}}, ("path",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[2], "Inspect one Workspace path.", {"path": _WS_PATH, "include_hash": _WS_BOOL}, ("path",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[3], "Read bounded Workspace file content." + _WS_LINE_HAS_MORE_DESCRIPTION, {"path": _WS_PATH, "offset": _WS_INT, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}, "encoding": {"type": "string", "enum": ["text", "base64"]}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "tail_lines": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("path",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[4], "Atomically write bounded Workspace file content.", {"path": _WS_PATH, "text": {"type": "string", "maxLength": 1048576}, "base64": {"type": "string", "maxLength": 1398104}, "create_policy": {"type": "string", "enum": ["parents", "existing", "fail"]}, "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "idempotency_key": _WS_IDEMPOTENCY}, ("path",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[5], "Apply exact-match edits atomically.", {"path": _WS_PATH, "edits": {"type": "array", "items": {"type": "object", "properties": {"match": {"type": "string", "maxLength": 1048576}, "replacement": {"type": "string", "maxLength": 1048576}}, "required": ["match", "replacement"], "additionalProperties": False}, "minItems": 1, "maxItems": 256}, "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "idempotency_key": _WS_IDEMPOTENCY}, ("path", "edits")),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[6], "Create a Workspace directory.", {"path": _WS_PATH, "parents": _WS_BOOL, "idempotency_key": _WS_IDEMPOTENCY}, ("path",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[7], "Copy paths within the Workspace.", {"sources": _WS_FILES, "destination": _WS_PATH, "conflict_policy": {"type": "string", "enum": ["fail", "skip", "replace", "rename"]}, "idempotency_key": _WS_IDEMPOTENCY}, ("sources", "destination")),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[8], "Move paths within the Workspace.", {"sources": _WS_FILES, "destination": _WS_PATH, "conflict_policy": {"type": "string", "enum": ["fail", "skip", "replace", "rename"]}, "idempotency_key": _WS_IDEMPOTENCY}, ("sources", "destination")),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[9], "Remove exact Workspace paths.", {"paths": _WS_FILES, "recursive": _WS_BOOL, "expected_hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "idempotency_key": _WS_IDEMPOTENCY}, ("paths",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[10], "Search bounded Workspace paths.", {"roots": _WS_FILES, "pattern": {"type": "string", "maxLength": 4096}, "mode": {"type": "string", "enum": ["glob", "text", "regex"]}, "max_paths": {"type": "integer", "minimum": 1, "maximum": 2000}, "max_matches": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("roots", "pattern")),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[11], "Start an asynchronous Workspace job." + _WS_WAIT_DESCRIPTION, {"argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 256}, "shell_script": {"type": "string"}, "cwd": _WS_PATH, "timeout": {"type": "integer", "minimum": 1, "maximum": 3600}, "env": {"type": "object", "maxProperties": 128, "additionalProperties": {"type": "string"}}, "idempotency_key": _WS_IDEMPOTENCY, "wait_ms": _WS_WAIT, "output_encoding": _WS_ENCODING, "strip_ansi": _WS_BOOL}, ()),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[12], "Read bounded asynchronous job state/output." + _WS_WAIT_DESCRIPTION, {"job_id": {"type": "string"}, "stdout_offset": _WS_INT, "stderr_offset": _WS_INT, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}, "wait_ms": _WS_WAIT, "output_encoding": _WS_ENCODING, "strip_ansi": _WS_BOOL, "tail_lines": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("job_id",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[13], "Cancel an asynchronous Workspace job.", {"job_id": {"type": "string"}, "idempotency_key": _WS_IDEMPOTENCY}, ("job_id",)),
-    _adapter_tool(WORKSPACE_TOOL_NAMES[14], "Search the web through configured Brave metadata only.", {"query": {"type": "string", "maxLength": 4096}, "result_count": {"type": "integer", "minimum": 1, "maximum": 20}}, ("query",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[1], "Explicitly open or start this authenticated identity's Cognita Workspace. Call only when the user asks for a Cognita Workspace and no chat-owned Workspace is available.", {}, ()),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[2], "List bounded Workspace file metadata. This operation requires an already-running Workspace; it never creates or starts one. An empty file list is a successful result.", {"path": _WS_PATH, "recursive": _WS_BOOL, "max_entries": {"type": "integer", "minimum": 1, "maximum": 2000}}, ("path",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[3], "Inspect one Workspace path.", {"path": _WS_PATH, "include_hash": _WS_BOOL}, ("path",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[4], "Read bounded Workspace file content." + _WS_LINE_HAS_MORE_DESCRIPTION, {"path": _WS_PATH, "offset": _WS_INT, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}, "encoding": {"type": "string", "enum": ["text", "base64"]}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "tail_lines": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("path",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[5], "Atomically write bounded Workspace file content.", {"path": _WS_PATH, "text": {"type": "string", "maxLength": 1048576}, "base64": {"type": "string", "maxLength": 1398104}, "create_policy": {"type": "string", "enum": ["parents", "existing", "fail"]}, "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "idempotency_key": _WS_IDEMPOTENCY}, ("path",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[6], "Apply exact-match edits atomically.", {"path": _WS_PATH, "edits": {"type": "array", "items": {"type": "object", "properties": {"match": {"type": "string", "maxLength": 1048576}, "replacement": {"type": "string", "maxLength": 1048576}}, "required": ["match", "replacement"], "additionalProperties": False}, "minItems": 1, "maxItems": 256}, "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "idempotency_key": _WS_IDEMPOTENCY}, ("path", "edits")),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[7], "Create a Workspace directory.", {"path": _WS_PATH, "parents": _WS_BOOL, "idempotency_key": _WS_IDEMPOTENCY}, ("path",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[8], "Copy paths within the Workspace.", {"sources": _WS_FILES, "destination": _WS_PATH, "conflict_policy": {"type": "string", "enum": ["fail", "skip", "replace", "rename"]}, "idempotency_key": _WS_IDEMPOTENCY}, ("sources", "destination")),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[9], "Move paths within the Workspace.", {"sources": _WS_FILES, "destination": _WS_PATH, "conflict_policy": {"type": "string", "enum": ["fail", "skip", "replace", "rename"]}, "idempotency_key": _WS_IDEMPOTENCY}, ("sources", "destination")),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[10], "Remove exact Workspace paths.", {"paths": _WS_FILES, "recursive": _WS_BOOL, "expected_hashes": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "idempotency_key": _WS_IDEMPOTENCY}, ("paths",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[11], "Search bounded Workspace paths.", {"roots": _WS_FILES, "pattern": {"type": "string", "maxLength": 4096}, "mode": {"type": "string", "enum": ["glob", "text", "regex"]}, "max_paths": {"type": "integer", "minimum": 1, "maximum": 2000}, "max_matches": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("roots", "pattern")),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[12], "Start an asynchronous Workspace job." + _WS_WAIT_DESCRIPTION, {"argv": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 256}, "shell_script": {"type": "string"}, "cwd": _WS_PATH, "timeout": {"type": "integer", "minimum": 1, "maximum": 3600}, "env": {"type": "object", "maxProperties": 128, "additionalProperties": {"type": "string"}}, "idempotency_key": _WS_IDEMPOTENCY, "wait_ms": _WS_WAIT, "output_encoding": _WS_ENCODING, "strip_ansi": _WS_BOOL}, ()),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[13], "Read bounded asynchronous job state/output." + _WS_WAIT_DESCRIPTION, {"job_id": {"type": "string"}, "stdout_offset": _WS_INT, "stderr_offset": _WS_INT, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}, "wait_ms": _WS_WAIT, "output_encoding": _WS_ENCODING, "strip_ansi": _WS_BOOL, "tail_lines": {"type": "integer", "minimum": 1, "maximum": 10000}}, ("job_id",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[14], "Cancel an asynchronous Workspace job.", {"job_id": {"type": "string"}, "idempotency_key": _WS_IDEMPOTENCY}, ("job_id",)),
+    _adapter_tool(WORKSPACE_TOOL_NAMES[15], "Search the web through configured Brave metadata only.", {"query": {"type": "string", "maxLength": 4096}, "result_count": {"type": "integer", "minimum": 1, "maximum": 20}}, ("query",)),
 )
 # 13.2.8 (DESIGN-13.2 §9): the placement rule, stated where the model reads it.
 # A selected FILE lands at <destination>/<its basename>; a selected DIRECTORY

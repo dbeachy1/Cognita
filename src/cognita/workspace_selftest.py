@@ -1,7 +1,7 @@
 """Catalog-bound Workspace self-test plans.
 
 The plan is generated from one section registry shared by the Workspace-only
-v3 tool and the current combined-contract adapter. It is instructions only: no test action
+v4 tool and the current combined-contract adapter. It is instructions only: no test action
 is executed and no caller-selected Workspace or project is accepted here.
 """
 
@@ -19,7 +19,7 @@ WORKSPACE_ONLY_SECTIONS = tuple(item for item in WORKSPACE_SECTIONS if item != "
 KNOWLEDGE_BRIDGE_PREFIXES = ("copy_to_workspace", "copy_from_workspace")
 
 WORKSPACE_TOOL_NAMES = (
-    "workspace_info", "workspace_list_files", "workspace_stat", "workspace_read_file",
+    "workspace_info", "workspace_open", "workspace_list_files", "workspace_stat", "workspace_read_file",
     "workspace_write_file", "workspace_edit_file", "workspace_make_directory",
     "workspace_copy_paths", "workspace_move_paths", "workspace_remove_paths",
     "workspace_search", "workspace_start_job", "workspace_get_job", "workspace_cancel_job",
@@ -43,14 +43,14 @@ class WorkspaceSelfTestSection:
 
 
 SECTION_CATALOG = (
-    WorkspaceSelfTestSection("W", "Workspace prerequisites, safety, and cleanup index", ("workspace_info",), cleanup=("W12",)),
-    WorkspaceSelfTestSection("W1", "Identity, lazy creation, and bounded metadata", ("workspace_info",), prerequisites=("W",), cleanup=("W12",)),
-    WorkspaceSelfTestSection("W2", "Typed filesystem lifecycle and hashes", tuple(WORKSPACE_TOOL_NAMES[1:11]), prerequisites=("W1",), cleanup=("W12",)),
+    WorkspaceSelfTestSection("W", "Workspace prerequisites, safety, and cleanup index", ("workspace_info", "workspace_open"), cleanup=("W12",)),
+    WorkspaceSelfTestSection("W1", "Identity, explicit opening, and bounded metadata", ("workspace_info", "workspace_open"), prerequisites=("W",), cleanup=("W12",)),
+    WorkspaceSelfTestSection("W2", "Typed filesystem lifecycle and hashes", tuple(WORKSPACE_TOOL_NAMES[2:12]), prerequisites=("W1",), cleanup=("W12",)),
     WorkspaceSelfTestSection("W4", "Direct argv, unpolled completion, and explicit Bash guest jobs", ("workspace_start_job", "workspace_get_job", "workspace_make_directory"), prerequisites=("W1",), cleanup=("W7", "W12")),
     WorkspaceSelfTestSection("W5", "Python, venv, pip, and offline local package", ("workspace_start_job",), prerequisites=("W4",), cleanup=("W12",)),
     WorkspaceSelfTestSection("W6", "Node/npm and pinned toolbox commands", ("workspace_start_job",), prerequisites=("W4",), cleanup=("W12",)),
     WorkspaceSelfTestSection("W7", "Polling, offsets, cancellation, timeout, and truncation", ("workspace_start_job", "workspace_get_job", "workspace_cancel_job"), prerequisites=("W4",), cleanup=("W12",)),
-    WorkspaceSelfTestSection("W8", "Quota, paths, hashes, conflict, and bounds", tuple(WORKSPACE_TOOL_NAMES[1:14]), prerequisites=("W1",), cleanup=("W12",)),
+    WorkspaceSelfTestSection("W8", "Quota, paths, hashes, conflict, and bounds", tuple(WORKSPACE_TOOL_NAMES[2:15]), prerequisites=("W1",), cleanup=("W12",)),
     WorkspaceSelfTestSection("W9", "Network-off and explicitly configured policy", ("workspace_start_job", "workspace_web_search"), prerequisites=("W1",), cleanup=("W12",)),
     WorkspaceSelfTestSection("W11", "Knowledge–Workspace bridge hashes and conflicts", ("copy_to_workspace", "copy_from_workspace"), prerequisites=("W1",), cleanup=("W12",), bridge=True),
     WorkspaceSelfTestSection("W13", "Run-and-wait and text job output", ("workspace_start_job", "workspace_get_job"), prerequisites=("W4",), cleanup=("W12",)),
@@ -91,7 +91,8 @@ def _section_calls(
         "W": [(plan_tool_name, _with_project({"section": "index"}, project), "Record the advertised section index and safety prerequisites.")],
         "W1": [
             ("workspace_info", {}, "Before the first W2 mutation, record workspace:null if no Workspace exists; otherwise record the existing Workspace ID and state."),
-            ("workspace_info", {}, "Repeat after the first W2 mutation; record Workspace ID/state, quota, measured usage, runtime generation, and effective network mode. If a Workspace existed before W2, require its ID to remain unchanged."),
+            ("workspace_open", {}, "Open the authenticated fixture Workspace explicitly; record the returned Workspace ID and require any existing ID to remain unchanged."),
+            ("workspace_info", {}, "Record Workspace ID/state, quota, measured usage, runtime generation, and effective network mode before the first W2 mutation."),
         ],
         "W2": [
             ("workspace_make_directory", {"path": root, "parents": True, "idempotency_key": "<RUN>-mkdir"}, "The owned directory is created."),

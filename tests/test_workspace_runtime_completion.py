@@ -529,6 +529,29 @@ async def test_sdk_070_reuses_one_connected_sandbox_until_lifecycle_transition(m
 
 
 @pytest.mark.asyncio
+async def test_sdk_070_connect_only_refuses_a_stopped_cached_sandbox(monkeypatch):
+    _Volume.items.clear()
+    _SdkSandbox.items.clear()
+    _SdkSandbox.actions.clear()
+    monkeypatch.setattr(sdk, "_sdk_types", lambda: (_SdkSandbox, _Volume, _Network))
+    monkeypatch.setattr(sdk, "pinned_sdk_info", lambda: sdk.SdkRuntimeInfo("0.7.0", sdk.PINNED_RUNTIME_ROOT, "test"))
+    _sdk_070_controls(monkeypatch)
+    workspace_id = uuid4()
+    adapter = sdk.MicrosandboxSdkAdapter(timeout_seconds=10)
+    await adapter.ensure(workspace_id, {"require_writable_root_quota": True})
+    name, _ = adapter.names(workspace_id)
+    _SdkSandbox.actions.clear()
+    await adapter._connected(workspace_id, start=False, deadline=adapter._deadline(10))
+    _SdkSandbox.items[name].status = "stopped"
+
+    with pytest.raises(sdk.SdkOperationError) as error:
+        await adapter._connected(workspace_id, start=False, deadline=adapter._deadline(10))
+    assert error.value.category == "workspace_not_open"
+    assert error.value.stage == "sandbox_connect_running"
+    assert _SdkSandbox.actions == []
+
+
+@pytest.mark.asyncio
 async def test_sdk_070_inspect_and_remove_preserve_volume_only_residual(monkeypatch):
     _Volume.items.clear()
     _SdkSandbox.items.clear()

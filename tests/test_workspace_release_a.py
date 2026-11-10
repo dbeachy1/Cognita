@@ -69,6 +69,8 @@ class FakeRuntime:
 
     def call(self, workspace_id, operation, arguments, **kwargs):
         self.calls.append((workspace_id, operation, dict(arguments), kwargs))
+        if operation in {"ensure", "start"}:
+            return {"state": "running"}
         if operation == "job_start":
             return {"job_id": "job-1", "state": "running"}
         if operation == "job_get":
@@ -112,6 +114,7 @@ def test_read_file_tail_lines_returns_exactly_the_fakes_lines(tmp_path: Path):
         }
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         result = manager.execute(principal, "workspace_read_file", {"path": "big.txt", "tail_lines": 5})
         assert result["data"]["content"] == "6\n7\n8\n9\n10\n"
         assert result["data"]["encoding"] == "text"
@@ -137,6 +140,7 @@ def test_read_file_start_line_end_line_sends_exact_broker_arguments(tmp_path: Pa
         }
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         result = manager.execute(principal, "workspace_read_file", {
             "path": "notes.txt", "start_line": 3, "end_line": 5,
         })
@@ -153,6 +157,7 @@ def test_read_file_offset_with_start_line_is_invalid_arguments(tmp_path: Path):
     try:
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
+        manager.open(principal)
         with pytest.raises(WorkspaceError) as failure:
             manager.execute(principal, "workspace_read_file", {
                 "path": "notes.txt", "offset": 0, "start_line": 1,
@@ -167,6 +172,7 @@ def test_read_file_tail_lines_with_start_line_is_invalid_arguments(tmp_path: Pat
     try:
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
+        manager.open(principal)
         with pytest.raises(WorkspaceError) as failure:
             manager.execute(principal, "workspace_read_file", {
                 "path": "notes.txt", "tail_lines": 5, "start_line": 1,
@@ -183,6 +189,7 @@ def test_read_file_plain_read_sends_todays_fs_read_arguments_and_adds_fs_stat(tm
         runtime.fs_stat_result = {"kind": "file", "size": 42}
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_read_file", {"path": "notes.txt"})
         fs_read_call = next(call for call in runtime.calls if call[1] == "fs_read")
         # Snapshot: the arguments sent to fs_read itself are unchanged by A3.
@@ -208,6 +215,7 @@ def test_get_job_tail_lines_sent_to_broker_and_response_aliases_has_more(tmp_pat
         }
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         result = manager.execute(principal, "workspace_get_job", {"job_id": "job-1", "tail_lines": 2})
         job_get_call = next(call for call in runtime.calls if call[1] == "job_get")
@@ -240,6 +248,7 @@ def test_summary_quota_fields_flip_at_the_configured_warning_threshold(tmp_path:
         # already measures through fs_usage -- no clock advance needed to
         # get past a stale admission-time value the way the old
         # record.measured_at-driven staleness check required.
+        manager.open(principal)
         first = manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         # Default warning_threshold_percent is 80: 100/1000 = 10% is not a warning.
         assert first["workspace"]["quota_remaining_bytes"] == 900
@@ -256,17 +265,18 @@ def test_summary_quota_fields_flip_at_the_configured_warning_threshold(tmp_path:
         store.close()
 
 
-def test_summary_quota_fields_are_null_and_false_when_unmeasured(tmp_path: Path):
+def test_ordinary_operation_fails_closed_when_runtime_inspection_is_unavailable(tmp_path: Path):
     store = _store(tmp_path)
     try:
         runtime = FakeRuntime()
         runtime.inspect_raises = True
         manager = WorkspaceManager(store, runtime, quota_bytes=1000)
         principal = FakePrincipal()
-        result = manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
-        assert result["workspace"]["measured_apparent_bytes"] is None
-        assert result["workspace"]["quota_remaining_bytes"] is None
-        assert result["workspace"]["quota_warning"] is False
+        manager.open(principal)
+        with pytest.raises(WorkspaceError) as failure:
+            manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
+        assert failure.value.reason == "runtime_unavailable"
+        assert not any(operation == "fs_write" for _, operation, _, _ in runtime.calls)
     finally:
         store.close()
 
@@ -283,6 +293,7 @@ def test_stop_idle_records_idle_stop(tmp_path: Path):
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime, idle_seconds=1, clock=clock)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         clock.now += timedelta(seconds=2)
         stopped = manager.stop_idle(now=clock.now)
@@ -301,6 +312,7 @@ def test_stop_emergency_true_records_emergency_stop(tmp_path: Path):
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         result = manager.stop(principal, emergency=True)
         assert result["workspace"]["state"] == "stopped"
@@ -317,6 +329,7 @@ def test_stop_without_emergency_records_admin_stop(tmp_path: Path):
         runtime = FakeRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         manager.stop(principal)
         workspace_id = store.get_by_principal(principal.principal_id).workspace_id
@@ -358,6 +371,7 @@ def test_execute_calls_measure_after_mutation_once_for_a_write(tmp_path: Path):
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
         calls = _spy_on_measure_after_mutation(manager)
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         assert len(calls) == 1
     finally:
@@ -370,6 +384,7 @@ def test_execute_calls_measure_after_mutation_once_for_job_start(tmp_path: Path)
         manager = WorkspaceManager(store, FakeRuntime())
         principal = FakePrincipal()
         calls = _spy_on_measure_after_mutation(manager)
+        manager.open(principal)
         manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         assert len(calls) == 1
     finally:
@@ -383,6 +398,7 @@ def test_execute_never_calls_measure_after_mutation_for_a_read(tmp_path: Path):
         principal = FakePrincipal()
         # Admit the Workspace first (an ordinary write) with no spy attached,
         # then attach the spy and prove the read that follows never calls it.
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         calls = _spy_on_measure_after_mutation(manager)
         manager.execute(principal, "workspace_read_file", {"path": "a"})
@@ -475,6 +491,7 @@ def test_workspace_info_includes_usage_by_directory_from_fs_usage(tmp_path: Path
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
         # Admit the Workspace and bring it to "running" first.
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         result = manager.info(principal)
         assert result["workspace"]["usage_by_directory"] == [
@@ -500,6 +517,7 @@ def test_workspace_info_reports_usage_by_directory_error_on_failure(tmp_path: Pa
         runtime = FailingUsageRuntime()
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         result = manager.info(principal)
         assert "usage_by_directory" not in result["workspace"]
@@ -601,6 +619,7 @@ def test_workspace_info_matches_the_record_it_just_measured_with_one_fs_usage_ca
         manager = WorkspaceManager(store, runtime, quota_bytes=500000)
         principal = FakePrincipal()
         # Admit the Workspace and bring it to "running" first.
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         calls_before_info = len(runtime.calls)
         result = manager.info(principal)["workspace"]
@@ -735,6 +754,7 @@ def test_measure_after_mutation_through_execute_measures_once_per_60s_window(tmp
         manager = WorkspaceManager(store, runtime, clock=clock)
         principal = FakePrincipal()
 
+        manager.open(principal)
         manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         fs_usage_calls_after_first = len([c for c in runtime.calls if c[1] == "fs_usage"])
         assert fs_usage_calls_after_first == 1
@@ -764,6 +784,7 @@ def test_mutation_receipt_reports_fs_usage_total_even_though_ensure_inspected_ze
         manager = WorkspaceManager(store, runtime, quota_bytes=1000000)
         principal = FakePrincipal()
 
+        manager.open(principal)
         result = manager.execute(principal, "workspace_write_file", {"path": "a", "text": "x"})
         assert result["workspace"]["measured_apparent_bytes"] == 331776
         assert result["workspace"]["quota_remaining_bytes"] == 1000000 - 331776

@@ -92,7 +92,7 @@ MEASUREMENT_FRESHNESS_SECONDS = DELETE_PREVIEW_TTL_SECONDS
 # raw broker `inspect` values must not overwrite them in `workspace_info`.
 _INFO_MEASUREMENT_KEYS = frozenset({
     "measured_allocated_bytes", "measured_apparent_bytes", "usage_status",
-    "measured_at", "host_path", "path_status", "volume_name",
+    "measured_at", "host_path", "path_status", "volume_name", "native_state",
 })
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _ENV_KEY = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -277,6 +277,7 @@ class BrokerRuntimeClient:
                     "network_denied": "network_denied",
                     "generation_conflict": "generation_conflict",
                     "ownership_mismatch": "ownership_mismatch",
+                    "workspace_not_open": "workspace_not_open",
                     ErrorCode.INVALID_REQUEST.value: "invalid_arguments",
                 }.get(code, "runtime_unavailable")
                 # 13.2.5 (DESIGN-13.2 §4.2): the reason is IN the line — the
@@ -1121,6 +1122,7 @@ class WorkspaceManager:
         if record.state == "deleting" or record.desired_state == "absent":
             raise WorkspaceError("workspace_deleting", "Workspace is being deleted")
         recovering_running = False
+        start_existing = False
         if record.state == "running" and self.runtime is not None:
             # 13.2.6 (DESIGN-13.2 §6): every deploy restarts the broker and the
             # broker's generation moves (prod: 7 → 8 → 9 across two deploys),
@@ -1137,7 +1139,22 @@ class WorkspaceManager:
             elif runtime_state in {"stopped", "failed", "partial", "absent"}:
                 if not self._running_recovery_proven(record, observed):
                     raise WorkspaceError("retry_requires_ownership", "Workspace identity could not be proven safely")
+                if runtime_state == "absent":
+                    raise WorkspaceError("retry_requires_ownership", "Workspace runtime is absent; Admin repair is required")
                 recovering_running = True
+                start_existing = runtime_state == "stopped" or observed.get("native_state") == "crashed"
+        elif record.state in {"stopped", "failed"} and self.runtime is not None:
+            # Explicit open/start may start a verified stopped sandbox or an
+            # exact owned crashed sandbox in place. Other residual states keep
+            # the existing ensure/recovery policy below.
+            try:
+                observed, record = self._inspect_reconciled(record)
+            except WorkspaceError:
+                observed = {}
+            if observed.get("state") == "stopped" or observed.get("native_state") == "crashed":
+                if not self._runtime_identity_matches(record, observed):
+                    raise WorkspaceError("retry_requires_ownership", "Workspace identity could not be proven safely")
+                start_existing = True
         if record.state in {"stopped", "failed"}:
             running = [row for row in self.metadata.list() if row.state in {"creating", "starting", "running"} and row.workspace_id != record.workspace_id]
             if len(running) >= self.max_running_workspaces:
@@ -1164,15 +1181,20 @@ class WorkspaceManager:
             record = self.metadata.get(record.workspace_id) or record
         try:
             if record.state in {"creating", "starting"}:
-                observed = self._runtime_call(record, "ensure", {
-                    "create_volume_if_absent": created_now and not recovering_running,
-                    "quota_bytes": record.quota_bytes,
-                    "root_quota_bytes": self.root_quota_bytes,
-                    "vcpus": 4,
-                    "memory_bytes": 8 * 1024**3,
-                    "require_writable_root_quota": True,
-                    "network": self.network_policy,
-                })
+                if start_existing:
+                    observed = self._runtime_call(record, "start", {})
+                else:
+                    observed = self._runtime_call(record, "ensure", {
+                        "create_volume_if_absent": created_now and not recovering_running,
+                        "quota_bytes": record.quota_bytes,
+                        "root_quota_bytes": self.root_quota_bytes,
+                        "vcpus": 4,
+                        "memory_bytes": 8 * 1024**3,
+                        "require_writable_root_quota": True,
+                        "network": self.network_policy,
+                    })
+                if observed.get("state") != "running":
+                    raise WorkspaceError("runtime_unavailable", "Workspace runtime did not reach running state")
                 record = self.metadata.update(record.workspace_id, state="running", desired_state="running", stopped_at=None, last_error_code=None, last_error_at=None)
                 record = self._apply_runtime_measurement(record, observed)
         except WorkspaceError as exc:
@@ -1262,14 +1284,128 @@ class WorkspaceManager:
             **self._quota_fields(record), **usage_extra,
         }}
 
+    @staticmethod
+    def _principal_id(principal: Any) -> str:
+        pid = getattr(principal, "principal_id", None) if principal is not None else None
+        if not pid and isinstance(principal, dict):
+            pid = principal.get("principal_id")
+        if not pid:
+            raise WorkspaceError("runtime_unavailable", "Workspace requires a durable authenticated principal")
+        return str(pid)
+
+    def open(self, principal: Any, *, connector_id: str | None = None) -> dict[str, Any]:
+        """Explicitly admit or start the authenticated principal's Workspace."""
+        pid = self._principal_id(principal)
+        with self._principal_queue(pid):
+            current = self.metadata.get_by_principal(pid)
+            if current is None:
+                record = self._ensure(pid, connector_id or getattr(principal, "surface_id", None))
+            else:
+                # Lifecycle actions use principal -> Workspace lock order so an
+                # ordinary operation cannot race an open/start transition.
+                with self._queue(current.workspace_id):
+                    latest = self.metadata.get_by_principal(pid)
+                    if latest is None or latest.workspace_id != current.workspace_id:
+                        raise WorkspaceError("path_conflict", "Workspace identity changed during open")
+                    record = self._ensure(pid, connector_id or getattr(principal, "surface_id", None))
+        return {"status": "success", "workspace": self._summary(record)}
+
+    def _require_running_locked(self, principal_id: str) -> WorkspaceRecord:
+        """Resolve and inspect one already-running Workspace under its queue."""
+        record = self.metadata.get_by_principal(principal_id)
+        if record is None or record.state != "running":
+            raise WorkspaceError(
+                "workspace_not_open",
+                "No Workspace is open. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
+            )
+        observed, record = self._inspect_reconciled(record) if self.runtime is not None else ({"state": "running"}, record)
+        if observed.get("state") != "running":
+            raise WorkspaceError(
+                "workspace_not_open",
+                "Workspace is not running. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
+            )
+        return self._apply_runtime_measurement(record, observed, preserve_revision=True)
+
+    def require_running(self, principal: Any, *, connector_id: str | None = None) -> WorkspaceRecord:
+        """Require an existing running Workspace for a bridge consumer."""
+        pid = self._principal_id(principal)
+        record = self.metadata.get_by_principal(pid)
+        if record is None:
+            raise WorkspaceError(
+                "workspace_not_open",
+                "No Workspace is open. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
+            )
+        with self._queue(record.workspace_id):
+            return self._require_running_locked(pid)
+
+    def reconcile_running_workspaces(self, *, limit: int = 32) -> int:
+        """Project only positively verified stopped or terminal broker states."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 256:
+            raise WorkspaceError("invalid_arguments", "reconciliation limit is invalid")
+        candidates = [row for row in self.metadata.list() if row.state == "running"][:limit]
+        changed = 0
+        for snapshot in candidates:
+            with self._principal_queue(snapshot.principal_id):
+                current = self.metadata.get_by_principal(snapshot.principal_id)
+                if current is None or current.workspace_id != snapshot.workspace_id or current.state != "running":
+                    continue
+                with self._queue(current.workspace_id):
+                    current = self.metadata.get(current.workspace_id)
+                    if current is None or current.state != "running" or self.metadata.has_live_lease(current.workspace_id):
+                        continue
+                    try:
+                        observed, _ = self._inspect_reconciled(current)
+                    except WorkspaceError:
+                        continue
+                    native = observed.get("native_state")
+                    if native == "stopped" and self._runtime_identity_matches(current, observed):
+                        projected = "stopped"
+                    elif (
+                        (native == "crashed" and self._runtime_identity_matches(current, observed))
+                        or (observed.get("state") == "absent" and self._runtime_absence_proven(current, observed))
+                        or (
+                            observed.get("state") == "partial"
+                            and observed.get("partial_state") == "volume_only"
+                            and observed.get("path_status") == "verified"
+                            and bool(observed.get("volume_id"))
+                            and observed.get("volume_name") == current.volume_name
+                            and self._runtime_identity_matches(current, observed)
+                        )
+                    ):
+                        projected = "failed"
+                    else:
+                        continue
+                    # Inspect may have advanced the broker generation and row
+                    # revision; compare against the fresh row after that write.
+                    current = self.metadata.get(current.workspace_id)
+                    if current is None or current.state != "running" or self.metadata.has_live_lease(current.workspace_id):
+                        continue
+                    if self.metadata.project_runtime_state(
+                        current.workspace_id, expected_revision=current.revision,
+                        expected_state=current.state, state=projected,
+                        now=self.clock().isoformat(timespec="seconds"),
+                    ):
+                        changed += 1
+        return changed
+
     def execute(self, principal: Any, tool: str, arguments: dict[str, Any], *, connector_id: str | None = None) -> dict[str, Any]:
         if not isinstance(arguments, dict):
             raise WorkspaceError("invalid_arguments", "arguments must be an object")
+        if tool == "workspace_open":
+            if arguments:
+                raise WorkspaceError("invalid_arguments", "workspace_open accepts no arguments")
+            return self.open(principal, connector_id=connector_id)
         if tool == "workspace_info":
-            if set(arguments) - {"idempotency_key"}:
+            if arguments:
                 raise WorkspaceError("invalid_arguments", "workspace_info accepts no arguments")
             return self.info(principal, connector_id=connector_id)
-        record = self._admit(principal, connector_id)
+        principal_id = self._principal_id(principal)
+        existing = self.metadata.get_by_principal(principal_id)
+        if existing is None:
+            raise WorkspaceError(
+                "workspace_not_open",
+                "No Workspace is open. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
+            )
         # A1 (DESIGN-12.18 §3.1): wait_ms is validated and popped here, before
         # the per-Workspace lock, on the two tools that support it.  It is
         # deliberately never added to ``clean_arguments`` for those two tools,
@@ -1290,7 +1426,8 @@ class WorkspaceManager:
         # stream to encode, so reject rather than silently ignore.
         if tool == "workspace_start_job" and wait_ms == 0 and ({"output_encoding", "strip_ansi"} & set(arguments)):
             raise WorkspaceError("invalid_arguments", "output_encoding and strip_ansi require wait_ms on workspace_start_job")
-        with self._queue(record.workspace_id):
+        with self._queue(existing.workspace_id):
+            record = self._require_running_locked(principal_id)
             operation_key = arguments.get("idempotency_key")
             strip_keys = {"idempotency_key"}
             if tool in _WAIT_CAPABLE_TOOLS:
@@ -1599,77 +1736,58 @@ class WorkspaceManager:
         # anything.  Restart the owned sandbox in place so its named volume
         # and /workspace contents remain attached.  The adapter validates the
         # persisted configuration and ownership before performing the start.
-        pid = getattr(principal, "principal_id", principal)
-        record = self.metadata.get_by_principal(str(pid))
-        if record is not None and record.state == "running" and self.runtime is not None:
-            with self._principal_queue(str(pid)):
-                current = self.metadata.get_by_principal(str(pid))
-                if current is not None and current.state == "running":
-                    try:
-                        for attempt in range(2):
-                            try:
-                                observed = self._runtime_call(current, "inspect", {})
-                                break
-                            except WorkspaceError as exc:
-                                if exc.reason == "generation_conflict" and attempt == 0:
-                                    # The broker generation advances on its own
-                                    # restart.  _runtime_call clears the stale
-                                    # expectation; reread the row and retry once
-                                    # against the broker's advertised generation.
-                                    current = self.metadata.get(current.workspace_id) or current
-                                    continue
-                                raise
-                        runtime_state = observed.get("state")
-                        if runtime_state == "running":
-                            current = self._apply_runtime_measurement(current, observed)
-                            return {"status": "success", "workspace": self._summary(current)}
-                        if runtime_state not in {"stopped", "failed"}:
-                            raise WorkspaceError(
-                                "runtime_unavailable",
-                                "Workspace runtime state cannot be restarted safely",
-                            )
-                        for attempt in range(2):
-                            try:
-                                restarted = self._runtime_call(current, "start", {})
-                                break
-                            except WorkspaceError as exc:
-                                if exc.reason == "generation_conflict" and attempt == 0:
-                                    current = self.metadata.get(current.workspace_id) or current
-                                    continue
-                                raise
-                        if restarted.get("state") != "running":
-                            raise WorkspaceError(
-                                "runtime_unavailable",
-                                "Workspace runtime did not reach running state",
-                            )
-                        # A4 (DESIGN-12.18 SS3.4): this branch is the actual
-                        # recovery -- the runtime was stopped/failed and this
-                        # call brought it back running in place. The earlier
-                        # "already running" return above takes no action and
-                        # records nothing.
-                        recovered_at = self.clock().isoformat(timespec="seconds")
-                        current = self.metadata.update(
-                            current.workspace_id,
-                            state="running", desired_state="running",
-                            stopped_at=None, last_error_code=None, last_error_at=None,
-                            last_auto_action="vm_recovered", last_auto_action_at=recovered_at,
-                        )
-                        current = self._apply_runtime_measurement(current, restarted)
-                        log.info(
-                            "Workspace runtime recovered through Admin start",
-                            extra={"event": "workspace_runtime_recovered"},
-                        )
+        pid = self._principal_id(principal)
+        with self._principal_queue(pid):
+            current = self.metadata.get_by_principal(pid)
+            if current is None:
+                record = self._ensure(pid, connector_id or getattr(principal, "surface_id", None), explicit_retry=True)
+                return {"status": "success", "workspace": self._summary(record)}
+            with self._queue(current.workspace_id):
+                current = self.metadata.get_by_principal(pid)
+                if current is None:
+                    raise WorkspaceError("path_conflict", "Workspace identity changed during start")
+                if current.state != "running" or self.runtime is None:
+                    record = self._ensure(pid, connector_id or getattr(principal, "surface_id", None), explicit_retry=True)
+                    return {"status": "success", "workspace": self._summary(record)}
+                try:
+                    observed, current = self._inspect_reconciled(current)
+                    runtime_state = observed.get("state")
+                    if runtime_state == "running":
+                        current = self._apply_runtime_measurement(current, observed)
                         return {"status": "success", "workspace": self._summary(current)}
-                    except WorkspaceError as exc:
-                        self.metadata.update(
-                            current.workspace_id,
-                            state="failed", desired_state="running",
-                            last_error_code=exc.reason,
-                            last_error_at=self.clock().isoformat(timespec="seconds"),
+                    if not (
+                        runtime_state == "stopped"
+                        or (runtime_state == "failed" and observed.get("native_state") == "crashed")
+                    ):
+                        raise WorkspaceError(
+                            "runtime_unavailable",
+                            "Workspace runtime state cannot be restarted safely",
                         )
-                        raise
-        record = self._admit(principal, connector_id, explicit_retry=True)
-        return {"status": "success", "workspace": self._summary(record)}
+                    restarted = self._runtime_call(current, "start", {})
+                    if restarted.get("state") != "running":
+                        raise WorkspaceError(
+                            "runtime_unavailable",
+                            "Workspace runtime did not reach running state",
+                        )
+                    recovered_at = self.clock().isoformat(timespec="seconds")
+                    current = self.metadata.update(
+                        current.workspace_id,
+                        state="running", desired_state="running",
+                        stopped_at=None, last_error_code=None, last_error_at=None,
+                        last_auto_action="vm_recovered", last_auto_action_at=recovered_at,
+                    )
+                    current = self._apply_runtime_measurement(current, restarted)
+                    log.info("Workspace runtime recovered through Admin start",
+                             extra={"event": "workspace_runtime_recovered"})
+                    return {"status": "success", "workspace": self._summary(current)}
+                except WorkspaceError as exc:
+                    self.metadata.update(
+                        current.workspace_id,
+                        state="failed", desired_state="running",
+                        last_error_code=exc.reason,
+                        last_error_at=self.clock().isoformat(timespec="seconds"),
+                    )
+                    raise
 
     def stop(self, principal: Any, *, connector_id: str | None = None, emergency: bool = False) -> dict[str, Any]:
         record = self.metadata.get_by_principal(str(getattr(principal, "principal_id", principal)))

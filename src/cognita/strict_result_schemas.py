@@ -548,7 +548,10 @@ def build_adapter_schemas() -> dict[str, dict[str, Any]]:
         "workspace_start_job", "workspace_cancel_job", "copy_to_workspace",
         "copy_from_workspace",
     })
-    schemas: dict[str, dict[str, Any]] = {"workspace_info": workspace_info_success}
+    schemas: dict[str, dict[str, Any]] = {
+        "workspace_info": workspace_info_success,
+        "workspace_open": workspace_info_success,
+    }
     for name in (
         "workspace_list_files", "workspace_stat", "workspace_read_file",
         "workspace_write_file", "workspace_edit_file", "workspace_make_directory",

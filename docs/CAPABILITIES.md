@@ -291,7 +291,8 @@ the connector.
 | `list_project_files` | Read | List authorized stored project files with pagination |
 | `read_project_file` | Read | Read exact stored file bytes with hash checks |
 | `workspace_info` | Workspace | This connector's Workspace, if it has one yet |
-| `workspace_list_files` | Workspace | List files (creates the Workspace on first use) |
+| `workspace_open` | Workspace | Open the authenticated identity's Workspace after an explicit user request |
+| `workspace_list_files` | Workspace | List files in an already-running Workspace |
 | `workspace_stat` | Workspace | Facts about one path |
 | `workspace_read_file` | Workspace | Read a file, by bytes or lines |
 | `workspace_write_file` | Workspace | Write a file |
@@ -305,8 +306,8 @@ the connector.
 | `workspace_get_job` | Workspace | A job's state and output |
 | `workspace_cancel_job` | Workspace | Stop a job |
 | `workspace_web_search` | Workspace | Web search through Brave |
-| `copy_to_workspace` | Workspace | Copy project files into the Workspace |
-| `copy_from_workspace` | Workspace + Write | Copy Workspace files into a project |
+| `copy_to_workspace` | Workspace | Copy project files into an already-running Workspace |
+| `copy_from_workspace` | Workspace + Write | Copy files from an already-running Workspace into a project |
 
 Each tool's own description, served to the assistant with the tool, gives every argument.
 

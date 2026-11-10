@@ -10,7 +10,7 @@ import pytest
 
 from cognita.bridge import BridgeError, BridgeService
 from cognita.connectors import PUBLIC_CONTRACT_VERSION, ConnectorDefinition
-from cognita.workspace import WorkspaceMetadataStore
+from cognita.workspace import WorkspaceError, WorkspaceMetadataStore
 
 
 class _Workspace:
@@ -19,8 +19,14 @@ class _Workspace:
         self.lock = threading.RLock()
         self.rows: dict[str, dict] = {}
         self.trees: dict[str, list[dict]] = {}
+        self.is_running = True
 
     def _admit(self, principal, connector_id=None):
+        return SimpleNamespace(workspace_id=self.workspace_id)
+
+    def require_running(self, principal, *, connector_id=None):
+        if not self.is_running:
+            raise WorkspaceError("workspace_not_open", "An open Workspace is required")
         return SimpleNamespace(workspace_id=self.workspace_id)
 
     def _queue(self, workspace_id):
@@ -244,6 +250,21 @@ async def test_bridge_rejects_retired_contract_generation(setup):
         "reason": "upgrade_required",
         "message": f"Bridge tools are available only on connector contract v{PUBLIC_CONTRACT_VERSION}.",
     }
+
+
+@pytest.mark.asyncio
+async def test_bridge_requires_an_open_workspace_before_transfer(setup):
+    docs, project, workspace, transfers, service, principal = setup
+    (docs / "source.txt").write_text("synthetic", encoding="utf-8")
+    workspace.is_running = False
+
+    with pytest.raises(BridgeError) as unopened:
+        await service.execute(
+            principal, _connector(), project, "copy_to_workspace",
+            {"project": "Project", "paths": ["source.txt"]},
+        )
+    assert unopened.value.reason == "workspace_not_open"
+    assert not transfers.manifests
 
 
 def test_transfer_admission_reconciles_stale_job_and_reports_live_job(setup):

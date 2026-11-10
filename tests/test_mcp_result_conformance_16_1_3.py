@@ -24,7 +24,7 @@ from cognita import __version__
 from cognita.auth_policy import AuthenticationPolicyStore
 from cognita.books.schemas import ALL_ADDITIVE_MUTATING_TOOLS, ALL_ADDITIVE_TOOL_NAMES
 from cognita.config import CognitaConfig
-from cognita.connectors import PUBLIC_CONTRACT_VERSION, ConnectorPolicyError, ConnectorStore
+from cognita.connectors import PUBLIC_CONTRACT_VERSION, WORKSPACE_CONTRACT_VERSION, ConnectorPolicyError, ConnectorStore
 from cognita.gateway import create_gateway_app
 from cognita.proxy import public_tool_catalog
 from cognita.registry import Project, Registry
@@ -637,7 +637,7 @@ async def test_workspace_only_self_test_results_are_validated(tmp_path):
         workspace_connector_store=workspace_connectors, credential_store=credentials,
         workspace_service=_BadWorkspaceService(),
     )
-    path = f"/mcp/workspace/{surface.slug}/mcp/v3"
+    path = f"/mcp/workspace/{surface.slug}/mcp/v{WORKSPACE_CONTRACT_VERSION}"
     headers = {"Authorization": f"Bearer {secret}"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                  base_url="https://example.test") as client:

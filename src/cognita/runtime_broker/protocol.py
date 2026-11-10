@@ -63,6 +63,7 @@ class ErrorCode(StrEnum):
     QUOTA = "quota"
     TIMEOUT = "timeout"
     UNSUPPORTED = "unsupported"
+    WORKSPACE_NOT_OPEN = "workspace_not_open"
     RUNTIME_FAILURE = "runtime_failure"
 
 

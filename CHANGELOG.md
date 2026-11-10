@@ -1,5 +1,11 @@
 # Changelog
 
+## 16.3.0 — Explicit Cognita Workspace opening and stale runtime reconciliation (2026-11-09)
+
+- Workspace file, job, bridge, and book-source operations now require an already-running Workspace. They never create or start one as a side effect. When the user explicitly asks for a Cognita Workspace, call `workspace_open`; prefer the chat's own Workspace or execution environment when available.
+- Startup and periodic maintenance project positively verified stopped or crashed runtimes out of the running-capacity count. Ambiguous or unreachable runtimes remain counted.
+- The combined connector contract is v7 and the Workspace-only contract is v4. Recreate affected Cognita connectors to load the new catalog; old versioned MCP URLs retire under the existing contract rules. See `docs/RELEASE-16.3.0.md`.
+
 ## 16.2.0 — OAuth reconnect accepts additional advertised grants (2026-11-09)
 
 - Cognita selects the authorization-code grant from the client metadata document and ignores additional advertised grants. This restores ChatGPT and Codex reconnect when OpenAI also advertises the JWT bearer grant. Callback and client signature validation still apply. See `docs/RELEASE-16.2.0.md`.

@@ -674,22 +674,12 @@ class BridgeService:
         return tuple(realized)
 
     async def _workspace_id(self, principal: Any, connector_id: str | None) -> str:
-        admit = getattr(self.workspace, "_admit", None)
-        if not callable(admit):
-            info = await _invoke(self.workspace.info(principal, connector_id=connector_id))
-            record = info.get("workspace") if isinstance(info, dict) else None
-            if not record or not record.get("workspace_id"):
-                raise BridgeError("runtime_unavailable", "Workspace runtime is unavailable")
-            return str(record["workspace_id"])
+        require_running = getattr(self.workspace, "require_running", None)
+        if not callable(require_running):
+            raise BridgeError("workspace_not_open", "An open Workspace is required for this transfer.")
         try:
-            record = await _invoke(admit(principal, connector_id))
+            record = await _invoke(require_running(principal, connector_id=connector_id))
         except WorkspaceError as exc:
-            # 13.2.6 (DESIGN-13.2 §6): admission's own reason reaches the
-            # caller. This used to fall through to bridge_tool_result's
-            # catch-all and answer `internal_error: Bridge operation failed`
-            # with a traceback at ERROR — for a generation_conflict that the
-            # next call would have cleared. Same mapping _check_workspace_
-            # transfer_ready already uses.
             raise BridgeError(exc.reason, str(exc), **exc.fields) from exc
         value = getattr(record, "workspace_id", None)
         if value is None and isinstance(record, Mapping):

@@ -19,6 +19,8 @@ class _WorkspaceService:
         del connector_id
         if tool == "workspace_info":
             return {"status": "success", "workspace": None}
+        if tool == "workspace_open":
+            return {"status": "success", "workspace": {"workspace_id": "ws-1"}}
         if tool == "workspace_write_file":
             self.write_calls += 1
             result = {
@@ -88,15 +90,16 @@ async def test_authenticated_gateway_dispatch_accepts_workspace_success_variants
         credential_store=credentials,
         workspace_service=service,
     )
-    path = f"/mcp/workspace/{surface.slug}/mcp/v3"
+    path = f"/mcp/workspace/{surface.slug}/mcp/v4"
     headers = {"Authorization": f"Bearer {secret}"}
     calls = [
         ("workspace_info", {}, 1),
-        ("workspace_write_file", {"path": "batch.txt", "text": "x"}, 2),
+        ("workspace_open", {}, 2),
         ("workspace_write_file", {"path": "batch.txt", "text": "x"}, 3),
-        ("workspace_start_job", {"argv": ["true"]}, 4),
-        ("workspace_get_job", {"job_id": "job-1"}, 5),
-        ("workspace_cancel_job", {"job_id": "job-1"}, 6),
+        ("workspace_write_file", {"path": "batch.txt", "text": "x"}, 4),
+        ("workspace_start_job", {"argv": ["true"]}, 5),
+        ("workspace_get_job", {"job_id": "job-1"}, 6),
+        ("workspace_cancel_job", {"job_id": "job-1"}, 7),
     ]
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://example.test") as client:
         responses = [
@@ -108,7 +111,8 @@ async def test_authenticated_gateway_dispatch_accepts_workspace_success_variants
     results = [response.json()["result"] for response in responses]
     assert all(result["isError"] is False for result in results)
     assert results[0]["structuredContent"] == {"status": "success", "workspace": None}
-    assert results[2]["structuredContent"]["idempotent_replay"] is True
-    assert results[3]["structuredContent"]["job"]["state"] == "running"
-    assert results[4]["structuredContent"]["job"]["state"] == "succeeded"
-    assert results[5]["structuredContent"]["job"]["state"] == "canceled"
+    assert results[1]["structuredContent"]["workspace"]["workspace_id"] == "ws-1"
+    assert results[3]["structuredContent"]["idempotent_replay"] is True
+    assert results[4]["structuredContent"]["job"]["state"] == "running"
+    assert results[5]["structuredContent"]["job"]["state"] == "succeeded"
+    assert results[6]["structuredContent"]["job"]["state"] == "canceled"

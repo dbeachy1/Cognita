@@ -451,6 +451,41 @@ class WorkspaceMetadataStore:
             raise WorkspaceError("path_unavailable", "Workspace was not found")
         return record
 
+    def project_runtime_state(
+        self, workspace_id: str, *, expected_revision: int, expected_state: str,
+        state: str, now: str,
+    ) -> bool:
+        """Project one verified terminal broker observation without changing its owner or volume."""
+        if state not in {"stopped", "failed"}:
+            raise WorkspaceError("invalid_arguments", "runtime projection state is invalid")
+        with self.transaction() as db:
+            current = db.execute(
+                "SELECT revision,state FROM workspaces WHERE workspace_id=?",
+                (workspace_id,),
+            ).fetchone()
+            if (current is None or current["revision"] != expected_revision
+                    or current["state"] != expected_state or current["state"] != "running"):
+                return False
+            lease = db.execute(
+                "SELECT 1 FROM workspace_leases WHERE workspace_id=? AND expires_at>=? LIMIT 1",
+                (workspace_id, now),
+            ).fetchone()
+            if lease is not None:
+                return False
+            if state == "stopped":
+                db.execute(
+                    "UPDATE workspaces SET state='stopped',desired_state='stopped',stopped_at=?,revision=revision+1 "
+                    "WHERE workspace_id=? AND revision=? AND state='running'",
+                    (now, workspace_id, expected_revision),
+                )
+            else:
+                db.execute(
+                    "UPDATE workspaces SET state='failed',revision=revision+1 "
+                    "WHERE workspace_id=? AND revision=? AND state='running'",
+                    (workspace_id, expected_revision),
+                )
+            return db.execute("SELECT changes()").fetchone()[0] == 1
+
     def delete_if_revision(
         self, workspace_id: str, expected_revision: int, *,
         operation_key: str | None = None, request_digest: str | None = None,

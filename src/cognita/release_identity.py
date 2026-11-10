@@ -19,7 +19,7 @@ IDENTITY_SCHEMA = 1
 # The application version — what `/healthz`, the wheel metadata, the Admin UI,
 # the `initialize` serverInfo, the self-test plan and the image tag all report.
 # Move it in the same commit as the change that ships.
-APPLICATION_VERSION = "16.2.0"
+APPLICATION_VERSION = "16.3.0"
 
 # The public combined-connector MCP generation, served at
 # `/mcp/connectors/<slug>/mcp/v<N>`. Bump ONLY for a client-visible change to
@@ -33,12 +33,12 @@ APPLICATION_VERSION = "16.2.0"
 # such a change and does not bump this. A bump retires every connector URL: a
 # client holding the old /v<N> URL must be given a new one. 16.1.3 repaired
 # results of exactly that kind and stayed on this generation.
-COMBINED_CONTRACT_VERSION = 6
+COMBINED_CONTRACT_VERSION = 7
 
 # The Workspace-only MCP generation, served at `/mcp/workspace/<slug>/mcp/v<N>`.
 # Bump ONLY for a client-visible change to the Workspace-only contract. It is
 # independent of the combined generation and of the application version.
-WORKSPACE_CONTRACT_VERSION = 3
+WORKSPACE_CONTRACT_VERSION = 4
 
 # The complete Cognita PostgreSQL schema — documents, asset catalog and OCR —
 # has ONE version, stamped once in ``public.cognita_metadata`` (13.0 §4.1).

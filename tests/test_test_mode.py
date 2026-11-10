@@ -66,6 +66,8 @@ class FakeRuntime:
 
     def call(self, workspace_id, operation, arguments, **_kwargs):
         self.calls.append((workspace_id, operation, dict(arguments)))
+        if operation in {"ensure", "start"}:
+            return {"state": "running"}
         if operation == "fs_write":
             self.files[arguments.get("path", "")] = arguments.get("text", "")
             return {"path": arguments.get("path"), "bytes_written": len(arguments.get("text", ""))}
@@ -266,7 +268,7 @@ async def test_the_key_is_401_on_every_route_in_normal_mode(normal):
         _combined(normal),
         _combined(normal, slug=normal.other_only_slug),
         f"/mcp/workspace/{normal.workspace_slug}/mcp",
-        f"/mcp/workspace/{normal.workspace_slug}/mcp/v3",
+        f"/mcp/workspace/{normal.workspace_slug}/mcp/v4",
     ]
     for path in live_routes:
         response = await _post(normal, path, _rpc("list_projects", {}), SELF_TEST_API_KEY)
@@ -453,6 +455,10 @@ async def test_both_bridge_directions_work_for_self_test(testmode):
 
 async def test_the_principals_own_workspace_executes_reads_and_writes(testmode):
     expected_id = self_test_principal_id(testmode.primary_id)
+    opened = await _post(
+        testmode, _combined(testmode), _rpc("workspace_open", {}), SELF_TEST_API_KEY,
+    )
+    assert _payload(opened)["status"] == "success"
     write = await _post(
         testmode, _combined(testmode),
         _rpc("workspace_write_file", {"path": "notes.txt", "text": "hello"}),
@@ -491,6 +497,10 @@ async def test_the_principals_own_workspace_executes_reads_and_writes(testmode):
 @pytest.mark.parametrize("tool", ["workspace_get_job", "workspace_cancel_job"])
 @pytest.mark.parametrize("handle_source", ["unknown", "other_workspace"])
 async def test_a_forged_workspace_or_job_handle_selects_nothing(testmode, tool, handle_source):
+    opened = await _post(
+        testmode, _combined(testmode), _rpc("workspace_open", {}), SELF_TEST_API_KEY,
+    )
+    assert _payload(opened)["status"] == "success"
     forged_workspace = "ffffffff-ffff-4fff-8fff-ffffffffffff"
     forged_job_id = "job-from-somewhere-else"
     if handle_source == "other_workspace":
@@ -530,6 +540,10 @@ async def test_a_forged_workspace_or_job_handle_selects_nothing(testmode, tool, 
 
 
 async def test_the_principals_own_job_can_be_canceled_and_stays_terminal(testmode):
+    opened = await _post(
+        testmode, _combined(testmode), _rpc("workspace_open", {}), SELF_TEST_API_KEY,
+    )
+    assert _payload(opened)["status"] == "success"
     started = await _post(
         testmode, _combined(testmode), _rpc("workspace_start_job", {"argv": ["true"]}),
         SELF_TEST_API_KEY,
@@ -601,7 +615,7 @@ async def test_a_disabled_connector_does_not_admit_the_key(testmode):
 
 async def test_the_key_is_still_refused_on_the_workspace_only_route_in_test_mode(testmode):
     for path in (f"/mcp/workspace/{testmode.workspace_slug}/mcp",
-                 f"/mcp/workspace/{testmode.workspace_slug}/mcp/v3"):
+                 f"/mcp/workspace/{testmode.workspace_slug}/mcp/v4"):
         response = await _post(testmode, path, _rpc("workspace_info", {}),
                                SELF_TEST_API_KEY)
         assert response.status_code == 401, path
@@ -715,6 +729,7 @@ def test_the_workspace_adapter_refuses_another_connectors_handle(tmp_path):
         manager = WorkspaceManager(metadata, FakeRuntime())
         connector_id = "11111111-1111-4111-8111-111111111111"
         principal = _self_test_principal(connector_id)
+        manager.open(principal, connector_id=connector_id)
         ok = workspace_tool_result(manager, principal, "workspace_write_file",
                                    {"path": "a.txt", "text": "x"},
                                    connector_id=connector_id)
@@ -742,10 +757,13 @@ def test_a_non_self_test_principal_still_needs_a_uuid4(tmp_path):
             surface_id = "another-connector"
 
         with pytest.raises(WorkspaceError) as refused:
+            manager.open(_Principal(), connector_id="another-connector")
+        assert refused.value.reason == "invalid_arguments"
+        with pytest.raises(WorkspaceError) as refused:
             manager.execute(_Principal(), "workspace_write_file",
                             {"path": "a.txt", "text": "x"},
                             connector_id="another-connector")
-        assert refused.value.reason == "invalid_arguments"
+        assert refused.value.reason == "workspace_not_open"
     finally:
         metadata.close()
 

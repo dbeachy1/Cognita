@@ -12,6 +12,7 @@ from cognita.connectors import (
     ConnectorDefinition,
     ConnectorStore,
     PUBLIC_CONTRACT_VERSION,
+    WORKSPACE_CONTRACT_VERSION,
     RouteResource,
     RevisionConflict,
     WorkspaceConnectorStore,
@@ -29,17 +30,19 @@ def test_route_families_accept_stable_and_exact_generation_window():
         "combined", "primary", PUBLIC_CONTRACT_VERSION,
     )
     assert parse_route_path("/mcp/workspace/tools/mcp") == RouteResource("workspace", "tools")
-    assert parse_route_path("/mcp/workspace/tools/mcp/v3") == RouteResource("workspace", "tools", 3)
+    assert parse_route_path(f"/mcp/workspace/tools/mcp/v{WORKSPACE_CONTRACT_VERSION}") == RouteResource(
+        "workspace", "tools", WORKSPACE_CONTRACT_VERSION,
+    )
     assert supported_route_versions("combined") == (PUBLIC_CONTRACT_VERSION,)
-    assert supported_route_versions("workspace") == (3,)
+    assert supported_route_versions("workspace") == (WORKSPACE_CONTRACT_VERSION,)
     assert is_supported_route(RouteResource("combined", "primary"))
     assert is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION))
     assert not is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION - 1))
     assert not is_supported_route(RouteResource("combined", "primary", PUBLIC_CONTRACT_VERSION + 1))
     assert is_supported_route(RouteResource("workspace", "tools"))
-    assert is_supported_route(RouteResource("workspace", "tools", 3))
-    assert not is_supported_route(RouteResource("workspace", "tools", 2))
-    assert not is_supported_route(RouteResource("workspace", "tools", 4))
+    assert is_supported_route(RouteResource("workspace", "tools", WORKSPACE_CONTRACT_VERSION))
+    assert not is_supported_route(RouteResource("workspace", "tools", WORKSPACE_CONTRACT_VERSION - 1))
+    assert not is_supported_route(RouteResource("workspace", "tools", WORKSPACE_CONTRACT_VERSION + 1))
 
 
 @pytest.mark.parametrize(
@@ -249,9 +252,9 @@ async def test_workspace_stable_and_v3_authenticate_and_retired_routes_fail_clos
         transport=ASGITransport(app=app), base_url="https://example.test"
     ) as client:
         stable = await client.post("/mcp/workspace/workspace/mcp", json=request, headers=headers)
-        current = await client.post("/mcp/workspace/workspace/mcp/v3", json=request, headers=headers)
-        retired = await client.post("/mcp/workspace/workspace/mcp/v2", json=request, headers=headers)
-        future = await client.post("/mcp/workspace/workspace/mcp/v4", json=request, headers=headers)
+        current = await client.post(f"/mcp/workspace/workspace/mcp/v{WORKSPACE_CONTRACT_VERSION}", json=request, headers=headers)
+        retired = await client.post(f"/mcp/workspace/workspace/mcp/v{WORKSPACE_CONTRACT_VERSION - 1}", json=request, headers=headers)
+        future = await client.post(f"/mcp/workspace/workspace/mcp/v{WORKSPACE_CONTRACT_VERSION + 1}", json=request, headers=headers)
 
     assert stable.status_code == current.status_code == 200
     assert stable.json() == current.json()

@@ -204,7 +204,7 @@ def test_w8_regex_exception_does_not_relax_other_negative_calls():
 def test_public_w1_lists_only_workspace_info_fields():
     plan = workspace_selftest_plan(server_version="12.12.0", section="W1")['plan']
     assert "record workspace:null if no Workspace exists" in plan
-    assert "If a Workspace existed before W2, require its ID to remain unchanged." in plan
+    assert "Open the authenticated fixture Workspace explicitly" in plan
     assert "Workspace ID/state, quota, measured usage, runtime generation, and effective network mode" in plan
     assert "authenticated principal" not in plan
     assert "toolbox digest" not in plan

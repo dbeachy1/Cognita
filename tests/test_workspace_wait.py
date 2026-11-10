@@ -63,6 +63,8 @@ class ScriptedRuntime:
 
     def call(self, workspace_id, operation, arguments, **kwargs):
         self.calls.append((workspace_id, operation, dict(arguments), kwargs))
+        if operation in {"ensure", "start", "inspect"}:
+            return {"state": "running"}
         if operation == "job_start":
             return {"job_id": "job-1", "state": "running"}
         if operation == "job_get":
@@ -103,6 +105,7 @@ def test_start_job_wait_ms_returns_exited_with_two_polls(tmp_path: Path):
         ])
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "3"], "wait_ms": 10000})
         assert response["wake_reason"] == "exited"
         assert response["waited_ms"] == 1000
@@ -129,6 +132,7 @@ def test_wait_ms_timeout_returns_running_state_and_job_id_is_usable(tmp_path: Pa
         ])
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "3"], "wait_ms": 1000})
         assert response["wake_reason"] == "timeout"
         assert response["waited_ms"] == 1000
@@ -164,6 +168,8 @@ def test_lock_is_free_during_wait(tmp_path: Path):
                 self.calls.append((workspace_id, operation, dict(arguments), kwargs))
                 if operation == "job_start":
                     return {"job_id": "job-1", "state": "running"}
+                if operation in {"ensure", "start", "inspect"}:
+                    return {"state": "running"}
                 if operation == "job_get":
                     entered_job_get.set()
                     block_job_get.wait(5)
@@ -187,6 +193,7 @@ def test_lock_is_free_during_wait(tmp_path: Path):
         result: dict = {}
 
         def run_wait():
+            manager.open(principal)
             result["response"] = manager.execute(
                 principal, "workspace_start_job", {"argv": ["sleep", "5"], "wait_ms": 5000},
             )
@@ -222,6 +229,8 @@ def test_workspace_deleted_mid_wait_returns_gone_state_lost(tmp_path: Path):
 
             def call(self, workspace_id, operation, arguments, **kwargs):
                 self.calls.append((workspace_id, operation, dict(arguments), kwargs))
+                if operation in {"ensure", "start", "inspect"}:
+                    return {"state": "running"}
                 if operation == "job_start":
                     return {"job_id": "job-1", "state": "running"}
                 if operation == "job_get":
@@ -237,6 +246,7 @@ def test_workspace_deleted_mid_wait_returns_gone_state_lost(tmp_path: Path):
         runtime = DeletingRuntime()
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "3"], "wait_ms": 5000})
         assert response["status"] == "success"  # no exception propagated
         assert response["wake_reason"] == "gone"
@@ -254,6 +264,7 @@ def test_get_job_default_call_is_byte_identical_to_today(tmp_path: Path):
         runtime = ScriptedRuntime([{"state": "running", "stdout": _b64(b"hi"), "stderr": _b64(b"")}])
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_get_job", {"job_id": "job-1"})
         assert response["job"] == {"job_id": "job-1", "state": "running", "stdout": _b64(b"hi"), "stderr": _b64(b"")}
         assert "waited_ms" not in response
@@ -275,6 +286,7 @@ def test_wait_ms_bad_values_are_rejected(tmp_path: Path, bad_wait):
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
         with pytest.raises(WorkspaceError) as excinfo:
+            manager.open(principal)
             manager.execute(principal, "workspace_start_job", {"argv": ["true"], "wait_ms": bad_wait})
         assert excinfo.value.reason == "invalid_arguments"
         with pytest.raises(WorkspaceError) as excinfo_get:
@@ -292,6 +304,7 @@ def test_replay_of_start_job_with_wait_ms_returns_receipt_without_waiting(tmp_pa
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
         args = {"argv": ["sleep", "3"], "wait_ms": 5000, "idempotency_key": "start-wait-1"}
+        manager.open(principal)
         first = manager.execute(principal, "workspace_start_job", dict(args))
         assert first["wake_reason"] == "exited"  # the first call genuinely waited
         assert first["job"]["state"] == "succeeded"
@@ -330,6 +343,8 @@ def test_identical_jobs_remain_broker_queryable_after_metadata_reopen(tmp_path: 
 
         def call(self, workspace_id, operation, arguments, **kwargs):
             self.calls.append((workspace_id, operation, dict(arguments), kwargs))
+            if operation in {"ensure", "start", "inspect"}:
+                return {"state": "running"}
             if operation == "job_start":
                 job_id = f"job-{len(self.jobs) + 1}"
                 self.jobs[job_id] = "running"
@@ -354,6 +369,7 @@ def test_identical_jobs_remain_broker_queryable_after_metadata_reopen(tmp_path: 
     principal = FakePrincipal()
     command = {"argv": ["printf", "same command"]}
 
+    manager.open(principal)
     first = manager.execute(
         principal, "workspace_start_job", {**command, "idempotency_key": "job-a-key"},
     )
@@ -432,6 +448,7 @@ def test_waited_job_terminal_observation_is_best_effort_cache_update(tmp_path: P
         runtime = ScriptedRuntime([{"state": "succeeded", "stdout": "", "stderr": ""}])
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
+        manager.open(principal)
         started = manager.execute(principal, "workspace_start_job", {"argv": ["true"]})
         job_id = started["job"]["job_id"]
         record = store.get_by_principal(principal.principal_id)
@@ -457,6 +474,7 @@ def test_start_job_output_encoding_without_wait_ms_is_rejected(tmp_path: Path):
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
         with pytest.raises(WorkspaceError) as excinfo:
+            manager.open(principal)
             manager.execute(principal, "workspace_start_job", {"argv": ["true"], "output_encoding": "text"})
         assert excinfo.value.reason == "invalid_arguments"
         with pytest.raises(WorkspaceError) as excinfo2:
@@ -478,6 +496,7 @@ def test_get_job_output_encoding_auto_falls_back_to_base64_only_for_the_invalid_
         runtime = ScriptedRuntime([{"state": "running", "stdout": _b64(stdout_bytes), "stderr": _b64(stderr_bytes)}])
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_get_job", {"job_id": "job-1", "output_encoding": "auto"})
         job = response["job"]
         assert job["stdout_encoding"] == "base64"
@@ -496,6 +515,7 @@ def test_get_job_output_encoding_text_replaces_invalid_bytes_and_flags_lossy(tmp
         runtime = ScriptedRuntime([{"state": "running", "stdout": _b64(stdout_bytes), "stderr": _b64(b"")}])
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_get_job", {"job_id": "job-1", "output_encoding": "text"})
         job = response["job"]
         assert job["stdout_encoding"] == "text"
@@ -512,6 +532,7 @@ def test_get_job_strip_ansi_removes_escape_sequences(tmp_path: Path):
         runtime = ScriptedRuntime([{"state": "running", "stdout": _b64(stdout_bytes), "stderr": _b64(b"")}])
         manager = WorkspaceManager(store, runtime)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(
             principal, "workspace_get_job",
             {"job_id": "job-1", "output_encoding": "text", "strip_ansi": True},
@@ -537,6 +558,7 @@ def test_generation_conflict_is_retried_once_and_then_continues_waiting(tmp_path
         ])
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
+        manager.open(principal)
         response = manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "3"], "wait_ms": 10000})
         assert response["wake_reason"] == "exited"
         assert response["job"]["state"] == "succeeded"
@@ -569,6 +591,7 @@ def test_persistent_generation_conflict_surfaces_after_one_retry(tmp_path: Path)
         manager = WorkspaceManager(store, runtime, clock=clock, sleep=clock.sleep)
         principal = FakePrincipal()
         with pytest.raises(WorkspaceError) as excinfo:
+            manager.open(principal)
             manager.execute(principal, "workspace_start_job", {"argv": ["sleep", "3"], "wait_ms": 10000})
         assert excinfo.value.reason == "generation_conflict"
         job_get_calls = [c for c in runtime.calls if c[1] == "job_get"]

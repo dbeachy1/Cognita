@@ -383,6 +383,7 @@ class SdkOperationError(RuntimeError):
 
     ALLOWED_CATEGORIES = {
         "not_found", "busy", "conflict", "quota", "timeout", "unsupported", "runtime_failure",
+        "workspace_not_open",
     }
 
     def __init__(
@@ -1436,6 +1437,7 @@ class MicrosandboxSdkAdapter:
         usage = await self._volume_usage(volume, volume_name, evidence)
         return {
             "state": state,
+            "native_state": state_text,
             "sandbox_name": name,
             "volume_name": volume_name,
             "runtime_id": str(getattr(sandbox, "id", name)),
@@ -1525,9 +1527,12 @@ class MicrosandboxSdkAdapter:
             raise SdkOperationError("runtime_failure", stage="reconcile")
         self._validate_volume(volume, workspace_id)
         cached = self._connections.get(connection_key)
+        status = self._status(raw)
+        if not start and status != "running":
+            self._connections.pop(connection_key, None)
+            raise SdkOperationError("workspace_not_open", stage="sandbox_connect_running")
         if cached is not None:
-            status = self._status(raw)
-            if not start or not any(marker in status for marker in ("stop", "fail")):
+            if status == "running":
                 return cached
             self._connections.pop(connection_key, None)
         if start:
@@ -1595,7 +1600,7 @@ class MicrosandboxSdkAdapter:
         return ExecResult(stdout.encode() if isinstance(stdout, str) else bytes(stdout or b""), stderr.encode() if isinstance(stderr, str) else bytes(stderr or b""), int(getattr(result, "exit_code", getattr(result, "returncode", 1))))
 
     async def _exec(self, workspace_id: uuid.UUID, executable: str, argv: list[str], *, cwd: str, env: dict[str, str], deadline: float) -> ExecResult:
-        handle = await self._connected(workspace_id, start=True, deadline=deadline)
+        handle = await self._connected(workspace_id, start=False, deadline=deadline)
         result = await self._call("guest_exec", handle.exec(executable, argv, cwd=cwd, env=env, timeout=max(1.0, deadline - time.monotonic())), deadline)
         return self._result(result)
 
@@ -1850,7 +1855,7 @@ class MicrosandboxSdkAdapter:
         # terminating a pathological regex worker and returning its error.
         search_timeout = min(arguments.get("timeout_seconds", 30), 25) if operation == "fs_search" else None
         deadline = self._deadline(search_timeout)
-        handle = await self._connected(workspace_id, start=True, deadline=deadline)
+        handle = await self._connected(workspace_id, start=False, deadline=deadline)
         fs, path = handle.fs, arguments.get("path")
         if operation == "fs_read":
             offset, limit = arguments.get("offset", 0), arguments.get("max_bytes", 1024 * 1024)
@@ -2137,7 +2142,7 @@ class MicrosandboxSdkAdapter:
         if not _JOB_ID.fullmatch(job_id):
             raise SdkOperationError("unsupported")
         deadline = self._deadline(arguments.get("timeout_seconds", 30) if operation == "job_start" else 30)
-        handle = await self._connected(workspace_id, start=True, deadline=deadline)
+        handle = await self._connected(workspace_id, start=False, deadline=deadline)
         directory = f"/workspace/.cognita/jobs/{job_id}"
         if operation == "job_start":
             await self._mkdir_parents(handle.fs, directory, deadline)
@@ -2252,7 +2257,7 @@ class MicrosandboxSdkAdapter:
         parent that already exists.
         """
         deadline = self._deadline()
-        handle = await self._connected(workspace_id, start=True, deadline=deadline)
+        handle = await self._connected(workspace_id, start=False, deadline=deadline)
         method = getattr(handle.fs, "copy_from_host", None)
         if not callable(method):
             raise SdkOperationError("unsupported")

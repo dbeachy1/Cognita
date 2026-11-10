@@ -351,13 +351,17 @@ def run() -> int:
         if before.get("workspace") is not None:
             raise HarnessError("credential already owns a Workspace; refusing to touch it")
 
+        opened = _require_success("workspace_open", mcp.call("workspace_open", {}))
+        state.workspace_id, _ = _workspace_id(opened)
+
         content = f"cognita live Workspace smoke {root}\n"
         write = _require_success("workspace_write_file", mcp.call("workspace_write_file", {
             "path": f"{root}/probe.txt", "text": content, "create_policy": "parents",
             "idempotency_key": f"{root.rsplit('/', 1)[-1]}-write",
         }))
         workspace_id, _ = _workspace_id(write)
-        state.workspace_id = workspace_id
+        if workspace_id != state.workspace_id:
+            raise HarnessError("workspace_open and file write returned different Workspace IDs")
 
         read = _require_success("workspace_read_file", mcp.call("workspace_read_file", {
             "path": f"{root}/probe.txt", "offset": 0, "max_bytes": 1024, "encoding": "text",

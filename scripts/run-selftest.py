@@ -157,7 +157,7 @@ class Scorecard:
 
 WORKSPACE_PUBLIC_TOOLS = frozenset(
     {
-        "workspace_info", "workspace_list_files", "workspace_stat",
+        "workspace_info", "workspace_open", "workspace_list_files", "workspace_stat",
         "workspace_read_file", "workspace_write_file", "workspace_edit_file",
         "workspace_make_directory", "workspace_copy_paths", "workspace_move_paths",
         "workspace_remove_paths", "workspace_search", "workspace_start_job",
