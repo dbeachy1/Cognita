@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, current_thread
 
 import pytest
 
@@ -107,6 +109,10 @@ def test_runtime_reconciliation_projects_only_exact_terminal_states(tmp_path: Pa
         assert manager.reconcile_running_workspaces() == 0
         assert store.get(workspace_id).state == "running"
         store.release_lease(lease_id)
+        assert manager.reconcile_running_workspaces() == 0
+        runtime.inspect_result.update(volume_id="verified-volume", volume_name="different-volume")
+        assert manager.reconcile_running_workspaces() == 0
+        runtime.inspect_result.update(volume_name=before.volume_name)
         assert manager.reconcile_running_workspaces() == 1
         crashed = store.get(workspace_id)
         assert crashed.state == "failed"
@@ -122,6 +128,92 @@ def test_runtime_reconciliation_projects_only_exact_terminal_states(tmp_path: Pa
         runtime.inspect_result = {"state": "partial", "partial_state": "volume_only", "path_status": "stale"}
         assert manager.reconcile_running_workspaces() == 0
         assert store.get(workspace_id).state == "running"
+    finally:
+        store.close()
+
+
+def test_admin_stop_observes_the_workspace_after_concurrent_open(tmp_path: Path, monkeypatch):
+    open_inspecting = Event()
+    stop_waiting = Event()
+
+    class ConcurrentRuntime(FakeRuntime):
+        def call(self, workspace_id, operation, arguments, **kwargs):
+            if operation == "inspect":
+                open_inspecting.set()
+                assert stop_waiting.wait(5)
+            return super().call(workspace_id, operation, arguments, **kwargs)
+
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = ConcurrentRuntime()
+    manager = WorkspaceManager(store, runtime)
+    principal = FakePrincipal()
+    queue = manager._queue
+
+    def watched_queue(workspace_id):
+        if current_thread().name.startswith("admin-stop"):
+            stop_waiting.set()
+        return queue(workspace_id)
+
+    try:
+        workspace_id = manager.open(principal)["workspace"]["workspace_id"]
+        store.update(workspace_id, state="stopped", desired_state="stopped")
+        runtime.inspect_result = {"state": "stopped", "native_state": "stopped"}
+        monkeypatch.setattr(manager, "_queue", watched_queue)
+        with ThreadPoolExecutor(1) as opens, ThreadPoolExecutor(1, thread_name_prefix="admin-stop") as stops:
+            opening = opens.submit(manager.open, principal)
+            assert open_inspecting.wait(5)
+            stopping = stops.submit(manager.stop, principal)
+            assert opening.result(timeout=5)["workspace"]["state"] == "running"
+            assert stopping.result(timeout=5)["workspace"]["state"] == "stopped"
+        assert [call[1] for call in runtime.calls] == ["ensure", "inspect", "start", "stop"]
+    finally:
+        store.close()
+
+
+def test_waiting_workspace_operation_does_not_follow_a_replaced_row(tmp_path: Path, monkeypatch):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    manager = WorkspaceManager(store, runtime)
+    principal = FakePrincipal()
+    queue = manager._queue
+
+    def replace_before_queue(workspace_id):
+        record = store.get(workspace_id)
+        assert store.delete_if_revision(workspace_id, record.revision)
+        replacement = store.create(
+            principal.principal_id, record.connector_id, "Replacement",
+            now=record.created_at, quota_bytes=record.quota_bytes,
+            retention_days=record.retention_days,
+        )
+        store.update(replacement.workspace_id, state="running")
+        return queue(workspace_id)
+
+    try:
+        manager.open(principal)
+        runtime.calls.clear()
+        monkeypatch.setattr(manager, "_queue", replace_before_queue)
+        with pytest.raises(WorkspaceError) as error:
+            manager.execute(principal, "workspace_list_files", {"path": "/workspace"})
+        assert error.value.reason == "workspace_not_open"
+        assert runtime.calls == []
+    finally:
+        store.close()
+
+
+def test_open_workspace_operations_preserve_the_credential_admission_check(tmp_path: Path):
+    store = WorkspaceMetadataStore(tmp_path / "workspace.sqlite3")
+    runtime = FakeRuntime()
+    active = True
+    manager = WorkspaceManager(store, runtime, credential_is_active=lambda _: active)
+    principal = FakePrincipal()
+    try:
+        manager.open(principal)
+        runtime.calls.clear()
+        active = False
+        with pytest.raises(WorkspaceError) as error:
+            manager.execute(principal, "workspace_list_files", {"path": "/workspace"})
+        assert error.value.reason == "credential_inactive"
+        assert runtime.calls == []
     finally:
         store.close()
 

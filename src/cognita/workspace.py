@@ -1071,6 +1071,16 @@ class WorkspaceManager:
             and row.workspace_id != exclude_workspace_id
         )
 
+    def _check_credential_active(self, principal_id: str) -> None:
+        if self.credential_is_active is None:
+            return
+        try:
+            active = self.credential_is_active(principal_id)
+        except Exception as exc:
+            raise WorkspaceError("runtime_unavailable", "Credential policy is unavailable") from exc
+        if active is False:
+            raise WorkspaceError("credential_inactive", "Credential is no longer admitted")
+
     def _ensure(self, principal_id: str, connector_id: str | None, label: str | None = None, *, explicit_retry: bool = False) -> WorkspaceRecord:
         # 13.0 §7.3: the built-in test principal's ID is a deterministic
         # UUIDv5 derived from the connector, so a Workspace left behind by a
@@ -1085,17 +1095,11 @@ class WorkspaceManager:
             principal_id = str(principal_id)
         else:
             principal_id = _uuid(principal_id, "principal_id")
-        if self.credential_is_active is not None:
-            try:
-                active = self.credential_is_active(principal_id)
-            except Exception as exc:
-                raise WorkspaceError("runtime_unavailable", "Credential policy is unavailable") from exc
-            if active is False:
-                raise WorkspaceError("credential_inactive", "Credential is no longer admitted")
+        self._check_credential_active(principal_id)
         record = self.metadata.get_by_principal(principal_id)
         created_now = record is None
         was_failed = bool(record is not None and record.state == "failed")
-        # A failed runtime may be repaired by the next ordinary caller only
+        # An explicit open or Admin start may repair a failed runtime only
         # after a broker inspection proves the exact owned sandbox or the
         # exact owned volume-only residual.  The adapter then performs
         # sandbox-only replacement around that verified volume.  Unknown,
@@ -1310,10 +1314,11 @@ class WorkspaceManager:
                     record = self._ensure(pid, connector_id or getattr(principal, "surface_id", None))
         return {"status": "success", "workspace": self._summary(record)}
 
-    def _require_running_locked(self, principal_id: str) -> WorkspaceRecord:
+    def _require_running_locked(self, principal_id: str, workspace_id: str) -> WorkspaceRecord:
         """Resolve and inspect one already-running Workspace under its queue."""
-        record = self.metadata.get_by_principal(principal_id)
-        if record is None or record.state != "running":
+        self._check_credential_active(principal_id)
+        record = self.metadata.get(workspace_id)
+        if record is None or record.principal_id != principal_id or record.state != "running":
             raise WorkspaceError(
                 "workspace_not_open",
                 "No Workspace is open. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
@@ -1336,13 +1341,11 @@ class WorkspaceManager:
                 "No Workspace is open. Call workspace_open only when the user explicitly requests a Cognita Workspace.",
             )
         with self._queue(record.workspace_id):
-            return self._require_running_locked(pid)
+            return self._require_running_locked(pid, record.workspace_id)
 
-    def reconcile_running_workspaces(self, *, limit: int = 32) -> int:
+    def reconcile_running_workspaces(self) -> int:
         """Project only positively verified stopped or terminal broker states."""
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 256:
-            raise WorkspaceError("invalid_arguments", "reconciliation limit is invalid")
-        candidates = [row for row in self.metadata.list() if row.state == "running"][:limit]
+        candidates = [row for row in self.metadata.list() if row.state == "running"]
         changed = 0
         for snapshot in candidates:
             with self._principal_queue(snapshot.principal_id):
@@ -1358,18 +1361,23 @@ class WorkspaceManager:
                     except WorkspaceError:
                         continue
                     native = observed.get("native_state")
-                    if native == "stopped" and self._runtime_identity_matches(current, observed):
+                    volume_matches = (
+                        bool(current.volume_name)
+                        and observed.get("volume_name") == current.volume_name
+                        and isinstance(observed.get("volume_id"), str)
+                        and bool(observed["volume_id"])
+                    )
+                    runtime_matches = volume_matches and self._runtime_identity_matches(current, observed)
+                    if native == "stopped" and observed.get("state") == "stopped" and runtime_matches:
                         projected = "stopped"
                     elif (
-                        (native == "crashed" and self._runtime_identity_matches(current, observed))
+                        (native == "crashed" and observed.get("state") == "failed" and runtime_matches)
                         or (observed.get("state") == "absent" and self._runtime_absence_proven(current, observed))
                         or (
                             observed.get("state") == "partial"
                             and observed.get("partial_state") == "volume_only"
                             and observed.get("path_status") == "verified"
-                            and bool(observed.get("volume_id"))
-                            and observed.get("volume_name") == current.volume_name
-                            and self._runtime_identity_matches(current, observed)
+                            and runtime_matches
                         )
                     ):
                         projected = "failed"
@@ -1427,7 +1435,7 @@ class WorkspaceManager:
         if tool == "workspace_start_job" and wait_ms == 0 and ({"output_encoding", "strip_ansi"} & set(arguments)):
             raise WorkspaceError("invalid_arguments", "output_encoding and strip_ansi require wait_ms on workspace_start_job")
         with self._queue(existing.workspace_id):
-            record = self._require_running_locked(principal_id)
+            record = self._require_running_locked(principal_id, existing.workspace_id)
             operation_key = arguments.get("idempotency_key")
             strip_keys = {"idempotency_key"}
             if tool in _WAIT_CAPABLE_TOOLS:
@@ -1794,6 +1802,9 @@ class WorkspaceManager:
         if record is None:
             return {"status": "success", "workspace": None}
         with self._queue(record.workspace_id):
+            record = self.metadata.get(record.workspace_id)
+            if record is None:
+                return {"status": "success", "workspace": None}
             if not emergency:
                 if self.metadata.has_live_lease(record.workspace_id):
                     raise WorkspaceError("capacity_busy", "Workspace has an active operation")

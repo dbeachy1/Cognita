@@ -550,7 +550,9 @@ def build_adapter_schemas() -> dict[str, dict[str, Any]]:
     })
     schemas: dict[str, dict[str, Any]] = {
         "workspace_info": workspace_info_success,
-        "workspace_open": workspace_info_success,
+        "workspace_open": contract(branch(
+            "success", {"workspace": {"type": "object"}}, ("workspace",),
+        )),
     }
     for name in (
         "workspace_list_files", "workspace_stat", "workspace_read_file",

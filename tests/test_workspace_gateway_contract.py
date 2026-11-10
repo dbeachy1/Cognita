@@ -3,12 +3,14 @@
 import pytest
 from argon2 import PasswordHasher
 from httpx import ASGITransport, AsyncClient
+from jsonschema import Draft202012Validator
 
 from cognita.auth_policy import CredentialPolicyStore
 from cognita.config import CognitaConfig
 from cognita.connectors import ConnectorStore, WorkspaceConnectorStore
 from cognita.gateway import create_gateway_app
 from cognita.registry import Project, Registry
+from cognita.strict_result_schemas import build_adapter_schemas
 
 
 class _WorkspaceService:
@@ -116,3 +118,10 @@ async def test_authenticated_gateway_dispatch_accepts_workspace_success_variants
     assert results[4]["structuredContent"]["job"]["state"] == "running"
     assert results[5]["structuredContent"]["job"]["state"] == "succeeded"
     assert results[6]["structuredContent"]["job"]["state"] == "canceled"
+
+
+def test_workspace_open_requires_a_non_null_success_summary():
+    schemas = build_adapter_schemas()
+    missing = {"status": "success", "workspace": None}
+    assert Draft202012Validator(schemas["workspace_info"]).is_valid(missing)
+    assert not Draft202012Validator(schemas["workspace_open"]).is_valid(missing)

@@ -869,7 +869,7 @@ async def _workspace_retention_loop(credential_store, manager, stopping: asyncio
     workspace_cursor = ""
     while not stopping.is_set():
         try:
-            await asyncio.to_thread(manager.reconcile_running_workspaces, limit=32)
+            await asyncio.to_thread(manager.reconcile_running_workspaces)
         except Exception:
             # Capacity projection is independent of credential-retention work.
             log.exception("Workspace runtime reconciliation pass deferred")
