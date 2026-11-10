@@ -42,17 +42,6 @@ MAX_JWKS_AGE_SECONDS = 3600
 MAX_JWKS_KEYS = 20
 MAX_REPLAY_ENTRIES = 4096
 
-# Claude advertises RFC 7523's JWT bearer grant alongside the authorization
-# code and refresh grants in its public CIMD document.  Cognita does not issue
-# that grant, but it is an auxiliary token grant and does not change the DOT
-# Application authorization grant represented by the row.  Keep this list
-# deliberately narrow: accepting arbitrary additional grant names would hide a
-# client/server protocol mismatch and could store an application whose actual
-# capabilities are broader than Cognita's token endpoint.
-PUBLIC_AUXILIARY_GRANT_TYPES = frozenset({
-    "urn:ietf:params:oauth:grant-type:jwt-bearer",
-})
-
 
 class AssertionRejected(ValueError):
     """A client assertion failed one stable, nonsecret validation category."""
@@ -341,29 +330,13 @@ def _fetch_metadata(client_id: str) -> tuple[dict, int]:
 
 
 def _public_application_kwargs(metadata: dict) -> dict:
-    """Build public CIMD fields while preserving one Cognita protocol exception.
-
-    DOT's public CIMD builder requires exactly one non-refresh grant.  A public
-    client may advertise RFC 7523's JWT bearer grant as an auxiliary capability
-    while still using Cognita's authorization-code flow.  Remove that one
-    bounded auxiliary value before delegating the remaining metadata checks to
-    DOT; every other unsupported grant continues to fail closed.
-    """
+    """Select the authorization-code grant and validate the remaining CIMD fields."""
     grant_types = metadata.get("grant_types", ["authorization_code"])
     if not isinstance(grant_types, list) or not all(isinstance(value, str) for value in grant_types):
         raise ValueError("CIMD grant_types must be an array of strings")
-    unsupported_auxiliary = {
-        value
-        for value in grant_types
-        if value not in {"authorization_code", "refresh_token"}
-        and value not in PUBLIC_AUXILIARY_GRANT_TYPES
-    }
-    if unsupported_auxiliary:
-        raise ValueError("CIMD metadata contains an unsupported grant type")
-    normalized = dict(metadata)
-    normalized["grant_types"] = [
-        value for value in grant_types if value not in PUBLIC_AUXILIARY_GRANT_TYPES
-    ]
+    if "authorization_code" not in grant_types:
+        raise ValueError("CIMD metadata must support authorization_code")
+    normalized = {**metadata, "grant_types": ["authorization_code"]}
     try:
         return dot_cimd._build_application_kwargs(normalized)
     except dot_cimd.CIMDError as exc:
@@ -399,7 +372,7 @@ def _application_from_metadata(client_id: str, metadata: dict, age: int):
     # public-client auth-method restriction reject this asymmetric document.
     public_metadata = dict(metadata)
     public_metadata["token_endpoint_auth_method"] = "none"
-    kwargs = dot_cimd._build_application_kwargs(public_metadata)
+    kwargs = _public_application_kwargs(public_metadata)
     Application = get_application_model()
     try:
         application = Application.objects.get(client_id=client_id)

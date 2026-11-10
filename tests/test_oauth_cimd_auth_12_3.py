@@ -187,7 +187,7 @@ def test_jwks_uri_accepts_any_https_host_but_not_unsafe_shapes():
         assert not cimd_auth._safe_https_uri(unsafe), unsafe
 
 
-def test_public_metadata_accepts_claude_auxiliary_jwt_bearer_grant():
+def test_public_metadata_selects_authorization_code_from_advertised_grants():
     metadata = {
         "client_id": "https://claude.ai/oauth/mcp-oauth-client-metadata",
         "client_name": "Claude",
@@ -197,6 +197,7 @@ def test_public_metadata_accepts_claude_auxiliary_jwt_bearer_grant():
             "authorization_code",
             "refresh_token",
             "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "client_credentials",
         ],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
@@ -209,21 +210,14 @@ def test_public_metadata_accepts_claude_auxiliary_jwt_bearer_grant():
     assert kwargs["authorization_grant_type"] == "authorization-code"
 
 
-@pytest.mark.parametrize(
-    "grant_type",
-    [
-        "urn:ietf:params:oauth:grant-type:device_code",
-        "client_credentials",
-    ],
-)
-def test_public_metadata_rejects_unadvertised_auxiliary_grants(grant_type):
+def test_public_metadata_requires_authorization_code():
     metadata = {
         "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
-        "grant_types": ["authorization_code", grant_type],
+        "grant_types": ["client_credentials", "refresh_token"],
         "token_endpoint_auth_method": "none",
     }
 
-    with pytest.raises(ValueError, match="unsupported grant"):
+    with pytest.raises(ValueError, match="must support authorization_code"):
         cimd_auth._public_application_kwargs(metadata)
 
 
@@ -645,7 +639,11 @@ with TemporaryDirectory(prefix="cognita-oauth-cimd-token-") as owned:
                 "client_id": CLIENT_ID,
                 "client_name": "ChatGPT",
                 "redirect_uris": [CALLBACK],
-                "grant_types": ["authorization_code", "refresh_token"],
+                "grant_types": [
+                    "authorization_code",
+                    "refresh_token",
+                    "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                ],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "private_key_jwt",
                 "token_endpoint_auth_signing_alg": "RS256",
@@ -697,6 +695,20 @@ with TemporaryDirectory(prefix="cognita-oauth-cimd-token-") as owned:
         return assertion.serialize(compact=True)
 
     client = Client()
+    authorize = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": CALLBACK,
+        "resource": RESOURCE,
+        "scope": "cognita:access",
+        "code_challenge": CHALLENGE,
+        "code_challenge_method": "S256",
+    }
+    assert client.get("/oauth/authorize", authorize).status_code == 302
+    invalid_redirect = client.get("/oauth/authorize", {
+        **authorize, "redirect_uri": CALLBACK + "/mismatch",
+    })
+    assert invalid_redirect.status_code == 400
     response = client.post("/oauth/token", data={
         "grant_type": "authorization_code",
         "code": "authorization-code",

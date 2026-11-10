@@ -1,5 +1,9 @@
 # Changelog
 
+## 16.2.0 — OAuth reconnect accepts additional advertised grants (2026-11-09)
+
+- Cognita selects the authorization-code grant from the client metadata document and ignores additional advertised grants. This restores ChatGPT and Codex reconnect when OpenAI also advertises the JWT bearer grant. Callback and client signature validation still apply. See `docs/RELEASE-16.2.0.md`.
+
 ## 16.1.9 — A retry with the same operation_id runs after a refusal that wrote nothing (2026-10-16)
 
 - Three refusals mean nothing was written and the cause passes: `busy` (another write, usually a reindex, held the project for more than 20 seconds), `backup_failed` (the backup taken before a write failed, for example on a full disk), and `source_unavailable` (the project folder was unmounted or being reconciled). `busy` even tells the caller to retry with an `operation_id`. But the gateway remembered these refusals under the `operation_id`, so every retry with the same id got the same refusal back for an hour and never ran. They are no longer remembered: the retry runs, and its result is what later retries replay. Other failures are still remembered, so a retry never repeats a write that may already have happened. Asset, book and project-storage tools keep their own receipts and were not affected. See `docs/RELEASE-16.1.9.md`.
