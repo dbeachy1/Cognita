@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Doug Beachy
 """Canonical MCP structured-output contracts.
 
 This module intentionally has no dependency on the engine, gateway, project
@@ -142,7 +143,8 @@ def normalize_legacy_error_payload(payload: Mapping[str, Any]) -> dict[str, Any]
     """
     result = dict(payload)
     if result.get("status") == "error":
-        result.setdefault("error_code", "INVALID_ARGUMENT")
+        default_code = "BUSY" if result.get("reason") == "busy" else "INVALID_ARGUMENT"
+        result.setdefault("error_code", default_code)
     return result
 
 

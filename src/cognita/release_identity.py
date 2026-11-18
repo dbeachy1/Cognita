@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Doug Beachy
 """The single authority for Cognita's versions and contract generations (13.0 §4).
 
 A leaf module of literals: it imports nothing from the rest of the package, so
@@ -19,7 +20,7 @@ IDENTITY_SCHEMA = 1
 # The application version — what `/healthz`, the wheel metadata, the Admin UI,
 # the `initialize` serverInfo, the self-test plan and the image tag all report.
 # Move it in the same commit as the change that ships.
-APPLICATION_VERSION = "16.4.0"
+APPLICATION_VERSION = "16.5.0"
 
 # The public combined-connector MCP generation, served at
 # `/mcp/connectors/<slug>/mcp/v<N>`. Bump ONLY for a client-visible change to

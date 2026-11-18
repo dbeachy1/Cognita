@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Doug Beachy
 """Focused conformance tests for the 10.1 structured result foundation."""
 
 import json
@@ -503,6 +504,15 @@ def test_legacy_error_normalization_preserves_diagnostics_and_is_error_flag():
         is_error=True,
     )
     assert explicit["structuredContent"]["error_code"] == "CUSTOM_CODE"
+
+
+def test_busy_legacy_error_has_a_retryable_error_code():
+    result = build_tool_result(
+        "add_document",
+        {"status": "error", "reason": "busy", "message": "retry"},
+        is_error=True,
+    )
+    assert result["structuredContent"]["error_code"] == "BUSY"
 
 
 def test_invalid_legacy_fallback_gets_error_code_but_book_error_stays_strict():

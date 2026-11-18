@@ -1,5 +1,10 @@
 # Changelog
 
+## 16.5.0 — Release canceled index walks cleanly (2026-11-18)
+
+- Canceling an index walk with a full parse queue no longer waits forever for a consumer that has stopped. Same-name replacement projects can start their empty scan and index new files.
+- Busy write refusals now use the `BUSY` error code instead of `INVALID_ARGUMENT`.
+
 ## 16.4.0 — Reconcile terminal Workspace runtimes without optional volume IDs (2026-11-09)
 
 - Reconciliation now projects exact stopped and crashed sandboxes using the broker-validated canonical volume name and sandbox identity, even when the SDK cannot report a volume ID. Broker-verified volume-only remnants are also projected when their host path is not reported. Ambiguous or mismatched identities remain counted.

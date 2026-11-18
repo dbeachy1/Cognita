@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Doug Beachy
 """The walk's parse-ahead / embed-window pipeline (DESIGN-6.0 §4.4, §6.3).
 
 `index_project` used to parse one document, embed its chunks, write it, and
@@ -24,6 +25,9 @@ import threading
 import pytest
 
 from cognita.retrieval import EMBED_WINDOW_CHUNKS, RetrievalCore
+from cognita.config import CognitaConfig
+from cognita.engine_local import LocalEngineHost
+from cognita.registry import Project, Registry
 from retrieval_fakes import HashEmbedder
 
 
@@ -611,6 +615,148 @@ async def test_a_failed_walk_does_not_leave_the_producer_running(tmp_path):
     running = [t for t in asyncio.all_tasks()
                if "_parse_ahead" in repr(t.get_coro()) and not t.done()]
     assert running == [], f"producer still alive: {running}"
+
+
+async def test_canceled_full_queue_producer_signals_waiting_consumer(tmp_path):
+    source = tmp_path / "one.md"
+    source.write_text("fixture", encoding="utf-8")
+    core = core_for(FakeStore(), RecordingEmbedder())
+    core._parse_and_chunk = lambda *_args, **_kwargs: None
+    queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+    queue.put_nowait(("pending", "prior.md", None))
+    producer = asyncio.create_task(core._parse_ahead(
+        queue, [source], tmp_path, core.policy_for("P"), {}, False, project="P",
+    ))
+
+    async def wait_until_blocked_on_queue():
+        while not queue._putters:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_until_blocked_on_queue(), timeout=5)
+    producer.cancel()
+    result = await asyncio.gather(producer, return_exceptions=True)
+
+    assert isinstance(result[0], asyncio.CancelledError)
+    assert await queue.get() is None
+
+
+async def test_detach_cancels_parent_walk_before_same_name_empty_replacement(tmp_path):
+    old_root = tmp_path / "documents"
+    old_root.mkdir()
+    write_corpus(old_root, {f"old{i:02d}.md": 2 for i in range(70)})
+    replacement_root = old_root / "dougb"
+    replacement_root.mkdir()
+
+    class Job:
+        state = "open"
+        est_chunks = 0
+        threshold = 0
+        binary_formats = 0
+        decision = "cpu"
+
+        def plan(self, **_fields):
+            pass
+
+        def done(self, **_fields):
+            pass
+
+    class WaitingScheduler:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+
+        def open_job(self, *_args, **_kwargs):
+            return Job()
+
+        async def embed(self, job, texts):
+            self.calls += 1
+            if self.calls == 1:
+                self.started.set()
+                try:
+                    await self.release.wait()
+                except asyncio.CancelledError:
+                    job.state = "canceled"
+                    raise
+            return [[0.0] * 32 for _ in texts]
+
+        async def close_job(self, job, *, outcome):
+            job.state = "canceled" if outcome == "canceled" else "completed"
+
+    store, emb, scheduler = FakeStore(), RecordingEmbedder(), WaitingScheduler()
+    core = RetrievalCore(store, emb, scheduler=scheduler)
+    producer = {}
+    original_parse_ahead = core._parse_ahead
+
+    async def capture_producer(queue, *args, **kwargs):
+        producer["task"] = asyncio.current_task()
+        producer["queue"] = queue
+        await original_parse_ahead(queue, *args, **kwargs)
+
+    core._parse_ahead = capture_producer
+    registry = Registry(tmp_path / "registry.yaml")
+    old_project = Project(name="dougb", documents_dir=old_root, data_dir=tmp_path / "data")
+    registry.add(old_project)
+    host = LocalEngineHost(
+        CognitaConfig(watch_enabled=False, pg_probe_interval_s=0), registry, core,
+    )
+    fresh_root = tmp_path / "fresh-empty"
+    fresh_root.mkdir()
+    fresh_project = Project(
+        name="fresh-empty", documents_dir=fresh_root, data_dir=tmp_path / "fresh-data",
+    )
+    registry.add(fresh_project)
+    assert host.start_background_reindex(fresh_project, "incremental")
+    fresh_task = host._reindex_tasks[fresh_project.name]
+    await asyncio.wait_for(fresh_task, timeout=5)
+    assert host._reindex_progress[fresh_project.name]["result"]["total_files"] == 0
+
+    assert host.start_background_reindex(old_project, "incremental")
+    old_walk = host._reindex_tasks[old_project.name]
+    await asyncio.wait_for(scheduler.started.wait(), timeout=5)
+
+    async def wait_for_full_queue():
+        queue = producer["queue"]
+        while not (queue.full() and queue._putters):
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait_for_full_queue(), timeout=5)
+    detach = asyncio.create_task(host.detach_project(old_project.name))
+    try:
+        await asyncio.wait_for(asyncio.shield(detach), timeout=1)
+    finally:
+        if not detach.done():
+            old_walk.cancel()
+            producer_task = producer.get("task")
+            if producer_task is not None and not producer_task.done():
+                producer_task.cancel()
+            await asyncio.gather(old_walk, return_exceptions=True)
+            await asyncio.gather(detach, return_exceptions=True)
+    assert old_walk.cancelled()
+    registry.remove(old_project.name)
+    replacement = Project(
+        name=old_project.name, documents_dir=replacement_root, data_dir=old_project.data_dir,
+    )
+    registry.add(replacement)
+
+    assert host.start_background_reindex(replacement, "incremental")
+    empty_task = host._reindex_tasks[replacement.name]
+    await asyncio.wait_for(empty_task, timeout=5)
+    assert host._reindex_progress[replacement.name]["result"]["total_files"] == 0
+
+    fresh_write = await host.call_tool(fresh_project, "add_document", {
+        "filepath": "nested/fresh.md", "content": "fresh project source",
+    })
+    assert fresh_write["status"] == "success", fresh_write
+    assert (fresh_root / "nested" / "fresh.md").is_file()
+
+    replacement_write = await host.call_tool(replacement, "add_document", {
+        "filepath": "nested/first.md", "content": "replacement source",
+    })
+    assert replacement_write["status"] == "success", replacement_write
+    assert (replacement_root / "nested" / "first.md").is_file()
+    assert set(store.docs) == {"nested/fresh.md", "nested/first.md"}
+    assert not any(source.startswith("old") for source in store.docs)
 
 
 async def test_progress_still_reports_every_file(tmp_path):

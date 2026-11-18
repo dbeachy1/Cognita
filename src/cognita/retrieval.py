@@ -1815,12 +1815,18 @@ class RetrievalCore:
                     await queue.put(("error", source, f"{filepath.name}: {exc}"))
         finally:
             # Not in the try above: a canceled producer must still release a
-            # consumer that is blocked on get(). If the queue is full the put
-            # would block forever, so this is best-effort.
+            # consumer that is blocked on get(). If cancellation finds a full
+            # queue, evict one item to make room for the sentinel; the consumer
+            # treats a canceled producer as an incomplete walk and skips removal.
+            task = asyncio.current_task()
             try:
                 queue.put_nowait(None)
             except asyncio.QueueFull:
-                await queue.put(None)
+                if task is not None and task.cancelling():
+                    queue.get_nowait()
+                    queue.put_nowait(None)
+                else:
+                    await queue.put(None)
 
     def _parse_and_chunk(
         self,
